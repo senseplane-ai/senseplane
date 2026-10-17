@@ -1,0 +1,7 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+/* Global styles. Each page imports its own stylesheet next to it. */
+@import "./tokens.css";
+@import "./fonts.css";
+@import "./base.css";
+@import "./shell.css";
+@import "./media.css";

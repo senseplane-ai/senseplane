@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/account.json",
+  "title": "Account",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "time_zone",
+    "retention_days",
+    "retention_max_days",
+    "created_at",
+    "retention_mode"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "time_zone": {
+      "type": "string",
+      "description": "IANA time zone for watch schedules and answers like \"this morning\" (default UTC)."
+    },
+    "retention_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Days mode: raw footage older than this is deleted; null keeps it until deleted."
+    },
+    "retention_max_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Maximum allowed for this account; null means no limit (self-host)."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "retention_mode": {
+      "type": "string",
+      "enum": [
+        "days",
+        "fill"
+      ],
+      "description": "days (default): keep raw footage for retention_days. fill: keep as much raw footage as retention_max_bytes (or the deployment's storage cap) holds, deleting the oldest first. Clips, snapshots and events are kept until deleted in both modes and count towards storage."
+    },
+    "retention_max_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Byte cap for fill mode; null uses the deployment's storage cap, if any."
+    },
+    "storage": {
+      "type": "object",
+      "description": "Stored bytes and recent growth.",
+      "properties": {
+        "raw_bytes": {
+          "type": "integer"
+        },
+        "clip_bytes": {
+          "type": "integer"
+        },
+        "snapshot_bytes": {
+          "type": "integer"
+        },
+        "raw_bytes_per_day": {
+          "type": "integer",
+          "description": "Average raw growth over the last 7 days"
+        },
+        "storage_cap_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "estimated_days": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "About how many days of raw footage are kept at current usage (fill mode), or retention_days (days mode)."
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "description": "Limits from the deployment's quota provider (null = unlimited). Self-host default: live view on, everything else null. Usage allowances are per month when the provider sets a monthly one, else per day.",
+      "required": [
+        "live_view",
+        "live_view_minutes",
+        "max_live_viewers",
+        "camera_minutes",
+        "storage_gb",
+        "ai_checks"
+      ],
+      "properties": {
+        "live_view": {
+          "type": "boolean",
+          "description": "Whether live view is available (ADR 0042)"
+        },
+        "live_view_minutes": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Viewer-minutes allowance"
+        },
+        "max_live_viewers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "People watching live at once across the account"
+        },
+        "camera_minutes": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Camera-minutes allowance"
+        },
+        "storage_gb": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Storage allowance in GB"
+        },
+        "ai_checks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "AI checks allowance"
+        }
+      }
+    },
+    "plan_label": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Display name of the account's plan, if the deployment has plans"
+    }
+  }
+}

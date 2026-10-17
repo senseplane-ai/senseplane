@@ -1,0 +1,13 @@
+{
+  "name": "@senseplane/docs",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.64.0",
+    "marked": "^18.1.1"
+  }
+}

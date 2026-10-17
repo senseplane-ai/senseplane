@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/event.json",
+  "title": "Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "type",
+    "source",
+    "occurred_at",
+    "summary",
+    "labels",
+    "confidence",
+    "value",
+    "media"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "watch.triggered",
+        "detection.person",
+        "detection.vehicle",
+        "detection.animal",
+        "detection.airplane",
+        "detection.train",
+        "detection.boat",
+        "detection.traffic_light",
+        "detection.fire_hydrant",
+        "detection.stop_sign",
+        "detection.parking_meter",
+        "detection.bench",
+        "detection.backpack",
+        "detection.umbrella",
+        "detection.handbag",
+        "detection.tie",
+        "detection.suitcase",
+        "detection.frisbee",
+        "detection.skis",
+        "detection.snowboard",
+        "detection.ball",
+        "detection.kite",
+        "detection.baseball_bat",
+        "detection.baseball_glove",
+        "detection.skateboard",
+        "detection.surfboard",
+        "detection.tennis_racket",
+        "detection.bottle",
+        "detection.wine_glass",
+        "detection.cup",
+        "detection.fork",
+        "detection.knife",
+        "detection.spoon",
+        "detection.bowl",
+        "detection.banana",
+        "detection.apple",
+        "detection.sandwich",
+        "detection.orange",
+        "detection.broccoli",
+        "detection.carrot",
+        "detection.hot_dog",
+        "detection.pizza",
+        "detection.donut",
+        "detection.cake",
+        "detection.chair",
+        "detection.couch",
+        "detection.plant",
+        "detection.bed",
+        "detection.table",
+        "detection.toilet",
+        "detection.tv",
+        "detection.laptop",
+        "detection.computer_mouse",
+        "detection.remote",
+        "detection.keyboard",
+        "detection.phone",
+        "detection.microwave",
+        "detection.oven",
+        "detection.toaster",
+        "detection.sink",
+        "detection.refrigerator",
+        "detection.book",
+        "detection.clock",
+        "detection.vase",
+        "detection.scissors",
+        "detection.teddy_bear",
+        "detection.hair_dryer",
+        "detection.toothbrush",
+        "sound.detected",
+        "sensor.threshold",
+        "reading.threshold",
+        "source.online",
+        "source.offline",
+        "source.view_changed"
+      ]
+    },
+    "watch_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sense"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "The source's name, so a watch on several cameras says which one fired."
+        },
+        "sense": {
+          "$ref": "sense.json"
+        },
+        "location": {
+          "type": "string"
+        }
+      }
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "verified": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "For watch.triggered: true when a vision model confirmed the watch, false when the watch has a check but no model ran (the event fired on its cheap trigger alone). Null for events without a model check."
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sense",
+            "value",
+            "unit"
+          ],
+          "properties": {
+            "sense": {
+              "$ref": "sense.json"
+            },
+            "value": {
+              "type": "number"
+            },
+            "unit": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "snapshot_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "clip_url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "description": "Signed URLs, 15-minute expiry."
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the episode ended (absent while ongoing)."
+    },
+    "zones": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Zones the subject was in."
+    },
+    "feedback": {
+      "enum": [
+        "relevant",
+        "not_relevant"
+      ]
+    }
+  }
+}

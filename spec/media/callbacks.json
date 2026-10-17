@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/media/callbacks.json",
+  "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0. Everything a media plane POSTs to the callback urls it was given (ADR 0049).",
+  "title": "Media plane callbacks",
+  "delivery": {
+    "auth": "Every callback is a POST to callback.url with `Authorization: Bearer <callback.token>`, the token the room or egress request carried. The media plane signs nothing of its own.",
+    "events": "At least once. A 2xx is delivered. A 4xx other than 408 or 429 is refused and not retried. Anything else (5xx, 408, 429, timeout, connection error) is retried with backoff: at least 4 attempts for room events, at least 5 for feed events, a few quick ones for frames batches (a stale frame is worthless, so the oldest waiting batch is dropped first). Order is not guaranteed: receivers dedupe on idempotencyKey (room.ended on roomId + event) and order on the event's own times.",
+    "requests": "op requests (upload_url, credentials) are answered with JSON in the response body, retried up to 3 times; a 4xx other than 408/429 is final.",
+    "bounds": "Queues are bounded; past the bound the oldest pending delivery is dropped and logged. Anything dropped is recoverable: GET /control/rooms/{roomId} for room state, the bucket prefix for segments."
+  },
+  "$defs": {
+    "roomEvent": {
+      "title": "Room event (room callback, for the events listed in options.events)",
+      "type": "object",
+      "required": ["roomId", "event", "at", "idempotencyKey", "data"],
+      "properties": {
+        "roomId": {"type": "string"},
+        "event": {"enum": ["participant.joined", "participant.left", "producer.added", "producer.removed"]},
+        "at": {"type": "string", "format": "date-time"},
+        "idempotencyKey": {"type": "string", "description": "participant.joined:{sessionId}, participant.left:{sessionId}, producer.added:{producerId}, producer.removed:{producerId}"},
+        "data": {
+          "oneOf": [
+            {
+              "title": "participant.joined / participant.left",
+              "type": "object",
+              "required": ["identity", "kind", "sessionId"],
+              "properties": {
+                "identity": {"type": "string"},
+                "kind": {"enum": ["human", "agent", "egress", "sip", "ingress"]},
+                "sessionId": {"type": "string", "description": "This connection (an identity reconnecting is a new sessionId)"},
+                "reason": {"type": "string", "description": "participant.left: the roomClosed reason the client was given (replaced, a removal reason) or why the socket ended (socket_closed, left, …)"}
+              }
+            },
+            {
+              "title": "producer.added / producer.removed",
+              "type": "object",
+              "required": ["identity", "producerId", "kind"],
+              "properties": {
+                "identity": {"type": "string"},
+                "producerId": {"type": "string"},
+                "kind": {"enum": ["audio", "video"]},
+                "source": {"type": "string"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "roomEnded": {
+      "title": "room.ended (room callback, always sent when a room has a callback)",
+      "type": "object",
+      "required": ["roomId", "event", "at"],
+      "properties": {
+        "roomId": {"type": "string"},
+        "event": {"const": "room.ended"},
+        "at": {"type": "string", "format": "date-time"},
+        "reason": {"type": "string", "description": "empty_timeout, control, …"}
+      }
+    },
+    "egressFailed": {
+      "title": "egress.failed (room callback): the host running an egress session stopped responding",
+      "type": "object",
+      "required": ["roomId", "sessionId", "event", "at"],
+      "properties": {
+        "roomId": {"type": "string"},
+        "sessionId": {"type": "string"},
+        "event": {"const": "egress.failed"},
+        "at": {"type": "string", "format": "date-time"},
+        "reason": {"type": "string"}
+      }
+    },
+    "egressEnded": {
+      "title": "egress.session.ended (egress callback): the session reached a terminal state",
+      "type": "object",
+      "required": ["event", "sentAt", "session"],
+      "properties": {
+        "event": {"const": "egress.session.ended"},
+        "sentAt": {"type": "string", "format": "date-time"},
+        "session": {
+          "type": "object",
+          "required": ["sessionId", "status"],
+          "properties": {
+            "sessionId": {"type": "string"},
+            "room": {"type": "string"},
+            "status": {"type": "string", "description": "finished or failed"},
+            "error": {"type": "string"}
+          }
+        }
+      }
+    },
+    "feedEvent": {
+      "title": "Feed event (egress callback of a segments/frames session)",
+      "type": "object",
+      "required": ["event", "sentAt", "sessionId", "room", "idempotencyKey", "data"],
+      "properties": {
+        "event": {"enum": ["source.online", "source.offline", "segment.written", "recording.gap", "resolution_rejected"]},
+        "sentAt": {"type": "string", "format": "date-time"},
+        "sessionId": {"type": "string"},
+        "room": {"type": "string"},
+        "idempotencyKey": {"type": "string"},
+        "data": {"type": "object", "description": "The sink's metadata (Senseplane: account_id, source_id) merged with the event's fields below"}
+      }
+    },
+    "sourceOnline": {
+      "title": "source.online data: a run started (the publisher's video is being recorded). Key source.online:{sessionId}:{run}",
+      "type": "object",
+      "required": ["at", "codecs", "producer_id"],
+      "properties": {
+        "at": {"type": "string", "format": "date-time"},
+        "codecs": {"type": "array", "items": {"type": "string"}, "description": "Lower-case codec names, e.g. h264, opus"},
+        "producer_id": {"type": "string"},
+        "identity": {"type": "string"}
+      }
+    },
+    "sourceOffline": {
+      "title": "source.offline data: a run ended. Key source.offline:{sessionId}:{run}",
+      "type": "object",
+      "required": ["at", "reason"],
+      "properties": {
+        "at": {"type": "string", "format": "date-time"},
+        "reason": {"type": "string", "description": "publisher_left, publisher_replaced, ffmpeg_exited, stopped, node_lost, max_duration"},
+        "producer_id": {"type": "string"}
+      }
+    },
+    "segmentWritten": {
+      "title": "segment.written data: an object is in the bucket. Key segment.written:{key}",
+      "type": "object",
+      "required": ["key", "init_key", "start", "duration_ms", "bytes", "codec"],
+      "properties": {
+        "key": {"type": "string", "description": "{keyPrefix}{yyyy}/{mm}/{dd}/{start_ms}.m4s, UTC day"},
+        "init_key": {"type": "string", "description": "{keyPrefix}init/{sessionId}.mp4, {sessionId}-{run}.mp4 after the first run; always uploaded before the run's first segment"},
+        "start": {"type": "string", "format": "date-time"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0},
+        "codec": {"type": "string", "description": "h264"},
+        "has_audio": {"type": "boolean"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"}
+      }
+    },
+    "recordingGap": {
+      "title": "recording.gap data: time with no recording inside one session. Key recording.gap:{sessionId}:{run} or recording.gap:{key}",
+      "type": "object",
+      "required": ["from", "to", "reason"],
+      "properties": {
+        "from": {"type": "string", "format": "date-time"},
+        "to": {"type": "string", "format": "date-time"},
+        "reason": {"type": "string", "description": "publisher_reconnected, upload_failed"}
+      }
+    },
+    "resolutionRejected": {
+      "title": "resolution_rejected data: the publisher is above maxResolution; nothing of this run was stored. The caller decides whether to remove the participant. Key resolution_rejected:{sessionId}:{run}",
+      "type": "object",
+      "required": ["at", "width", "height", "max_resolution"],
+      "properties": {
+        "at": {"type": "string", "format": "date-time"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "max_resolution": {"enum": ["720p", "1080p"]},
+        "producer_id": {"type": "string"},
+        "identity": {"type": "string"}
+      }
+    },
+    "uploadUrlRequest": {
+      "title": "op upload_url (egress callback, presign-callback destination): one per object",
+      "type": "object",
+      "required": ["op", "sessionId", "room", "key", "content_type", "bytes"],
+      "properties": {
+        "op": {"const": "upload_url"},
+        "sessionId": {"type": "string"},
+        "room": {"type": "string"},
+        "key": {"type": "string"},
+        "content_type": {"type": "string", "description": "video/mp4 (init) or video/iso.segment"},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "uploadUrlAnswer": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {"type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "description": "A presigned PUT, valid for about a minute. A credential: never logged"},
+        "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra headers to send with the PUT"}
+      }
+    },
+    "credentialsRequest": {
+      "title": "op credentials (egress callback, s3 destination): fresh credentials before expiresAt",
+      "type": "object",
+      "required": ["op", "sessionId", "room"],
+      "properties": {
+        "op": {"const": "credentials"},
+        "sessionId": {"type": "string"},
+        "room": {"type": "string"}
+      }
+    },
+    "credentialsAnswer": {
+      "type": "object",
+      "required": ["credentials"],
+      "properties": {
+        "credentials": {
+          "type": "object",
+          "required": ["accessKeyId", "secretAccessKey"],
+          "properties": {
+            "accessKeyId": {"type": "string"},
+            "secretAccessKey": {"type": "string"},
+            "sessionToken": {"type": "string"},
+            "expiresAt": {"type": "string", "format": "date-time"}
+          }
+        }
+      }
+    },
+    "framesBatch": {
+      "title": "frames batch (egress callback of a frames sink): at least every batchMs of the sink (default 1000) while frames flow, multipart/form-data",
+      "description": "Parts: `meta` (application/json, this schema), `frame0`..`frame4` (image/jpeg, 640x360, letterboxed, ≤ fps of the sink), `audio` (application/octet-stream, f32le mono 16 kHz, about 1 s). Batches are fire and forget: stale ones are dropped, not queued. The sink's batchMs (100–1000, default 1000) sets how often the frames gathered so far are sent: alerts wait on the batch, so sooner is faster. Key frames:{sessionId}:{sequence}.",
+      "type": "object",
+      "required": ["event", "sentAt", "sessionId", "room", "idempotencyKey", "data"],
+      "properties": {
+        "event": {"const": "frames"},
+        "sentAt": {"type": "string", "format": "date-time"},
+        "sessionId": {"type": "string"},
+        "room": {"type": "string"},
+        "idempotencyKey": {"type": "string"},
+        "data": {
+          "type": "object",
+          "required": ["frames"],
+          "description": "The sink's metadata merged with:",
+          "properties": {
+            "frames": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "required": ["part", "captured_at", "width", "height", "format"],
+                "properties": {
+                  "part": {"type": "string", "pattern": "^frame[0-4]$"},
+                  "captured_at": {"type": "string", "format": "date-time"},
+                  "width": {"const": 640},
+                  "height": {"const": 360},
+                  "format": {"const": "jpeg"}
+                }
+              }
+            },
+            "audio": {
+              "type": "object",
+              "required": ["part", "captured_at", "sample_rate", "samples", "format"],
+              "properties": {
+                "part": {"const": "audio"},
+                "captured_at": {"type": "string", "format": "date-time"},
+                "sample_rate": {"const": 16000},
+                "samples": {"type": "integer", "minimum": 1},
+                "format": {"const": "f32le_mono"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "whipAuthorizeRequest": {
+      "title": "WHIP authorize (POST authorize_url from the WHIP bearer, with the bearer as Authorization)",
+      "type": "object",
+      "required": ["room", "jti"],
+      "properties": {
+        "room": {"type": "string"},
+        "jti": {"type": "string"},
+        "remote_address": {"type": "string"}
+      }
+    },
+    "whipAuthorizeAnswer": {
+      "type": "object",
+      "required": ["token"],
+      "properties": {
+        "token": {"type": "string", "description": "A join token for the bearer's room (aliases accepted by media planes: joinToken, join_token)"},
+        "mediaUrl": {"type": "string", "description": "Signalling url to join with; default the media plane's own (alias media_url)"},
+        "max_resolution": {"enum": ["720p", "1080p"], "description": "Informational (alias maxResolution)"}
+      }
+    }
+  }
+}

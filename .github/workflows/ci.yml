@@ -1,0 +1,317 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Every check a change must pass, in one workflow: pull requests, pushes to
+# main, and the release workflow (release.yml calls this before it publishes
+# images). Branch protection needs only the last job, `ci-ok`.
+#
+# Jobs run in parallel on every change (no path filters: the whole run takes
+# about as long as its slowest job, and a skipped job can't hide a break).
+# The slow end-to-end suite is e2e.yml.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to test (the release workflow passes the one it publishes)
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to a pull request cancels its older run; runs on main all finish.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  # Cheap repository checks: the workflows themselves and the release version.
+  repo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # Image tags in docker-compose.yml, the bridge command and the docs name the
+      # release line of the version in package.json (docs/dev/releasing.md).
+      - name: Release version
+        run: node scripts/version.mjs check
+      # actionlint (MIT), checksum-pinned; it runs shellcheck on every run: block.
+      - name: Lint workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl -fsSL -o /tmp/actionlint.tgz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
+
+  # TypeScript packages: codegen drift, typecheck and build (docs site included),
+  # licences, then every package's tests against real Postgres, Valkey and S3.
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: senseplane
+          POSTGRES_USER: senseplane
+          POSTGRES_PASSWORD: senseplane
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U senseplane -d senseplane" --health-interval 2s --health-timeout 3s --health-retries 30
+      # Bus, balancer and grant-store tests (each package flushes its own db).
+      valkey:
+        image: valkey/valkey:8.1.4-alpine
+        ports: ["47379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 3s --health-retries 30
+      # Object storage: RustFS (Apache 2.0), as in deploy/compose.
+      s3:
+        image: rustfs/rustfs:1.0.0
+        env:
+          RUSTFS_ACCESS_KEY: senseplane
+          RUSTFS_SECRET_KEY: senseplane-secret
+          RUSTFS_VOLUMES: /data
+        ports: ["59000:9000"]
+        options: >-
+          --health-cmd "curl -fsS http://127.0.0.1:9000/health" --health-interval 2s --health-timeout 3s --health-retries 60
+    env:
+      TEST_ADMIN_DATABASE_URL: postgres://senseplane:senseplane@localhost:55432/senseplane
+      TEST_APP_USER: senseplane_app:senseplane_app
+      TEST_VALKEY_URL: redis://127.0.0.1:47379
+      TEST_S3_ENDPOINT: http://localhost:59000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # The brain's generated spec models come from its dev environment (datamodel-code-generator).
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: brain/uv.lock
+      # The media WHIP bridge test builds the bridge's Go WHIP client.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+      # FFmpeg is a test tool here; the media image builds its own LGPL FFmpeg (ADR 0015).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pnpm install --frozen-lockfile
+      - run: (cd brain && uv sync --frozen)
+      - name: Licences (production npm dependencies)
+        run: pnpm check:licenses
+      - name: Spec drift (generated code matches spec/)
+        run: pnpm check:drift
+      - name: Typecheck and build every package, docs site included
+        run: pnpm build
+      - name: Generated docs are committed
+        run: git diff --exit-code
+      - name: Database role and bucket
+        env:
+          PGHOST: localhost
+          PGPORT: "55432"
+          PGPASSWORD: senseplane
+          POSTGRES_USER: senseplane
+          POSTGRES_DB: senseplane
+          APP_DB_PASSWORD: senseplane_app
+          AWS_ACCESS_KEY_ID: senseplane
+          AWS_SECRET_ACCESS_KEY: senseplane-secret
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          sh deploy/compose/postgres/init.sh
+          aws --endpoint-url "$TEST_S3_ENDPOINT" s3api create-bucket --bucket senseplane
+      - name: Tests (every package)
+        run: pnpm test
+
+  # The brain: pytest, perception precision/recall on fixtures/ included, with the int8 detector built once and cached.
+  brain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      valkey:
+        image: valkey/valkey:8.1.4-alpine
+        ports: ["47379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 3s --health-retries 30
+    defaults:
+      run:
+        working-directory: brain
+    env:
+      TEST_VALKEY_URL: redis://127.0.0.1:47379/15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: brain/uv.lock
+      # Test tool: decodes the fixtures.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: uv sync --frozen
+      # Checksummed downloads (YOLOX, YAMNet, MiniLM) and the int8 build from 100 pinned COCO photos.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: brain/models
+          key: brain-models-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('brain/src/senseplane_brain/models.py', 'brain/src/senseplane_brain/quantize.py', 'brain/uv.lock') }}
+      - run: uv run --frozen --group quantize python scripts/fetch_models.py
+      - run: uv run --frozen pytest -q
+
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o bin/bridge ./cmd/bridge
+
+  home-assistant:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: integrations/home-assistant
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: integrations/home-assistant/uv.lock
+      - run: uv run --frozen pytest -q
+
+  # The media contract's black-box conformance suite (conformance/, ADR 0053)
+  # against the bundled media server, over the network, in headless Chrome.
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # The egress's ffmpeg (the image builds its own LGPL one, ADR 0015).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pnpm install --frozen-lockfile --filter "@senseplane/media..." --filter "@senseplane/conformance"
+      - run: pnpm --filter "@senseplane/media..." build
+      - run: node conformance/src/oss.ts
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+          CONFORMANCE_RESULTS: conformance-results.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: conformance-results
+          path: conformance-results.json
+          if-no-files-found: ignore
+
+  # Every published image builds and starts (linux/amd64 here; release.yml
+  # builds both architectures natively). Layers are cached per image and
+  # architecture, the same cache the release builds use.
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { service: api, context: ".", file: api/Dockerfile }
+          - { service: mcp, context: ".", file: mcp/Dockerfile }
+          - { service: media, context: ".", file: media/Dockerfile }
+          - { service: console, context: ".", file: console/Dockerfile }
+          - { service: brain, context: brain, file: brain/Dockerfile }
+          - { service: bridge, context: bridge, file: bridge/Dockerfile }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          load: true
+          tags: senseplane-ci/${{ matrix.service }}:test
+          build-args: VERSION=ci
+          cache-from: type=gha,scope=${{ matrix.service }}-amd64
+          # Pull requests read the cache; main and releases write it.
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,scope={0}-amd64', matrix.service) || '' }}
+      - name: Image starts
+        run: scripts/smoke-image.sh "${{ matrix.service }}" "senseplane-ci/${{ matrix.service }}:test"
+
+  # GitHub's dependency review on what a pull request adds (npm, Python, Go):
+  # known high-severity vulnerabilities and licences outside the allow-list.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          allow-licenses: MIT, BSD-2-Clause, BSD-3-Clause, ISC, Apache-2.0, MPL-2.0, 0BSD, BlueOak-1.0.0, CC0-1.0, Python-2.0, Unlicense
+          # Fonts the console bundles (SIL Open Font Licence; scripts/check-licenses.mjs has the same exception).
+          allow-dependencies-licenses: pkg:npm/@fontsource/geist-sans, pkg:npm/@fontsource/geist-mono
+
+  # The one required status check: green when every job above passed (or was
+  # skipped because it doesn't apply, like dependency review on main).
+  ci-ok:
+    if: always()
+    needs: [repo, node, brain, bridge, home-assistant, conformance, images, dependency-review]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: All jobs passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null

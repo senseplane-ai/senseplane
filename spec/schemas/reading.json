@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/reading.json",
+  "title": "Reading",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sense",
+    "value",
+    "unit"
+  ],
+  "properties": {
+    "sense": {
+      "enum": [
+        "temperature",
+        "humidity"
+      ]
+    },
+    "value": {
+      "type": "number"
+    },
+    "unit": {
+      "enum": [
+        "celsius",
+        "percent"
+      ]
+    },
+    "measured_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

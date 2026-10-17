@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/sense.json",
+  "title": "Sense",
+  "description": "One thing measured. Open enum: clients must accept unknown values.",
+  "type": "string",
+  "examples": [
+    "video",
+    "audio",
+    "temperature",
+    "humidity"
+  ],
+  "anyOf": [
+    {
+      "enum": [
+        "video",
+        "audio",
+        "temperature",
+        "humidity"
+      ]
+    },
+    {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    }
+  ]
+}

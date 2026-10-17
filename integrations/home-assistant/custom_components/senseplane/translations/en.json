@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Senseplane",
+        "description": "Paste the access token shown when you added Home Assistant sensors in Senseplane.",
+        "data": {
+          "url": "Senseplane API URL",
+          "token": "Access token"
+        },
+        "data_description": {
+          "url": "The address of your Senseplane API, for example https://senseplane.example.com",
+          "token": "Starts with sit_. It only lets Home Assistant send readings to this one sensor."
+        }
+      },
+      "entities": {
+        "title": "Choose sensors",
+        "description": "Temperature and humidity sensors to send to {name}. Every change is sent.",
+        "data": {
+          "entities": "Sensors"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update the Senseplane token",
+        "description": "Senseplane refused the token, so readings are paused. Paste the new token for this sensor.",
+        "data": {
+          "token": "Access token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Senseplane refused this token. Check it, or create a new one in Senseplane.",
+      "cannot_connect": "Cannot reach Senseplane at this address.",
+      "wrong_source": "This token belongs to a different Senseplane sensor."
+    },
+    "abort": {
+      "already_configured": "This Senseplane sensor is already set up.",
+      "reauth_successful": "The token was updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Choose sensors",
+        "description": "Temperature and humidity sensors to send to Senseplane.",
+        "data": {
+          "entities": "Sensors"
+        }
+      }
+    }
+  }
+}

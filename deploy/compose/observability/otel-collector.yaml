@@ -1,0 +1,63 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenTelemetry Collector for the `observability` compose profile (ADR 0033).
+# Traces: services → OTLP → this Collector → Jaeger.
+# Metrics: the Collector scrapes every service's Prometheus /metrics and
+# re-exposes them (plus any OTLP metrics) on :8889 for Prometheus.
+# Point the exporters at any OTLP backend instead; nothing here is required.
+
+receivers:
+  otlp:
+    protocols:
+      http: { endpoint: 0.0.0.0:4318 }
+      grpc: { endpoint: 0.0.0.0:4317 }
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: senseplane
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["api:8080"]
+              labels: { service: senseplane-api }
+            - targets: ["media:8090"]
+              labels: { service: senseplane-media }
+            - targets: ["mcp:8060"]
+              labels: { service: senseplane-mcp }
+            - targets: ["brain:8070"]
+              labels: { service: senseplane-brain }
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+  # Defence in depth for the privacy rule (no secrets in telemetry): drop
+  # attributes that could carry credentials if a library ever adds them.
+  attributes/scrub:
+    actions:
+      - { key: http.request.header.authorization, action: delete }
+      - { key: http.request.header.cookie, action: delete }
+      - { key: url.query, action: delete }
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls: { insecure: true }
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+extensions:
+  health_check: { endpoint: 0.0.0.0:13133 }
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]

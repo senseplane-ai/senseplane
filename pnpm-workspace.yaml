@@ -1,0 +1,14 @@
+packages:
+  - spec
+  - telemetry
+  - api
+  - media
+  - mcp
+  - sdk/typescript
+  - console
+  - e2e
+  - conformance
+  - docs
+onlyBuiltDependencies:
+  - mediasoup
+  - esbuild

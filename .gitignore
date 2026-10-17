@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+bridge/bin/
+spike/out/
+.DS_Store
+brain/.venv/
+*.tgz
+docs/site/
+.claude/
+# e2e suite output (pnpm e2e): logs, screenshots, results
+e2e/.artifacts/
+e2e/console-admin-shots/

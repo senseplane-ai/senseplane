@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <title>Senseplane capture</title>
+    <link rel="stylesheet" href="/src/capture/capture.css" />
+  </head>
+  <body>
+    <main class="capture">
+      <video id="preview" autoplay muted playsinline></video>
+      <header class="bar">
+        <span id="indicator" class="indicator" hidden><span class="dot"></span>Senseplane is watching</span>
+        <span id="source-name" class="name"></span>
+      </header>
+      <p id="status" class="status" role="status">Starting…</p>
+      <footer class="controls">
+        <button id="toggle" type="button" disabled>Pause</button>
+        <button id="stop" type="button" class="danger" disabled>Stop</button>
+      </footer>
+    </main>
+    <script type="module" src="/src/capture/main.ts"></script>
+  </body>
+</html>

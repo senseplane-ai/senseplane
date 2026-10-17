@@ -1,0 +1,54 @@
+Senseplane
+Copyright 2026 The Senseplane Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product depends on third-party software, including:
+
+- mediasoup (ISC License), Copyright © 2015, Iñaki Baz Castillo
+- go2rtc (MIT License), Copyright (c) 2022 Alexey Khit (used by the bridge)
+- Fastify (MIT License), Kysely (MIT License), node-postgres (MIT License)
+- pino (MIT License), prom-client (Apache License 2.0)
+- openapi-typescript and openapi-fetch (MIT License)
+- pydantic (MIT License), datamodel-code-generator (MIT License),
+  prometheus_client (Apache License 2.0)
+- Prometheus client_golang (Apache License 2.0)
+- Pion WebRTC (MIT License), Copyright (c) 2018 Pion LLC (the bridge's WHIP client)
+- sdp-transform (MIT License), Copyright (c) 2013 Eirik Albrigtsen (WHIP SDP negotiation)
+- ioredis (MIT License), Copyright (c) 2015-2022 Zihua Li (Valkey client)
+- jpeg-js (BSD 3-Clause License), Copyright (c) 2014, Eugene Ware (privacy masks on analysis frames)
+- mediasoup-client (ISC License) and puppeteer-core (Apache License 2.0), in the conformance suite
+- OpenTelemetry JavaScript and Python SDKs, API and OTLP exporters (Apache License 2.0),
+  @fastify/otel (MIT License)
+
+The self-host compose bundle runs, unmodified and as separate containers:
+RustFS (Apache License 2.0), PostgreSQL with pgvector (PostgreSQL License),
+Valkey (BSD 3-Clause License). The media image includes an LGPL build of FFmpeg
+(GNU LGPL 2.1+, https://ffmpeg.org), run as a separate process. The optional
+observability profile runs the OpenTelemetry Collector Contrib, Jaeger and
+Prometheus (all Apache License 2.0), unmodified.
+
+Models (downloaded at build time, pinned by SHA-256; see brain/src/senseplane_brain/models.py):
+- YOLOX (yolox_s / yolox_tiny ONNX), Copyright (c) 2021-2022 Megvii Inc., Apache License 2.0,
+  https://github.com/Megvii-BaseDetection/YOLOX. yolox_s_int8 is quantized from yolox_s at build
+  time with ONNX (Apache 2.0) and SymPy (BSD), calibrated on 100 COCO val2017 photos that are
+  downloaded for that step only and not distributed (brain/src/senseplane_brain/quantize.py).
+- YAMNet (TFLite) and its AudioSet class map, Copyright Google LLC, Apache License 2.0,
+  https://github.com/tensorflow/models/tree/master/research/audioset/yamnet
+The brain also uses ONNX Runtime (MIT), LiteRT / ai-edge-litert (Apache 2.0),
+OpenCV (Apache 2.0, bundles an LGPL FFmpeg), NumPy (BSD), redis-py (MIT).
+
+Test fixtures (fixtures/) include material licensed CC BY, re-encoded and trimmed:
+- "Don't Tempt a Thief with Unattended Parcels" by vpdonline, CC BY 3.0 (also used reversed),
+  https://commons.wikimedia.org/wiki/File:Don%27t_Tempt_a_Thief_with_Unattended_Parcels.ogv
+- "FSR Tarpan 239 D van (driving)" by the Museum of Municipal Engineering, CC BY 3.0,
+  https://commons.wikimedia.org/wiki/File:FSR_Tarpan_239_D_van_(driving).webm
+- "Capuccino" by Diego Torres Silvestre, CC BY 2.0,
+  https://commons.wikimedia.org/wiki/File:Capuccino_(3990980509)-video.webm
+Other fixtures are CC0 (see fixtures/README.md).
+
+Design ideas (no code) were drawn from Frigate (MIT License,
+https://github.com/blakeblackshear/frigate). Frigate is a trademark of Frigate, Inc.
+
+Full license texts for bundled dependencies ship with their packages.
+Keep this file current when adding dependencies that require attribution.

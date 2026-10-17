@@ -1,0 +1,47 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+
+/* Design tokens (ADR 0046). The console is dark only. The first block is the
+   shared set every console screen uses; keep these names stable. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0A0A0B;
+  --panel: #111113;
+  --sidebar: #0D0D0F;
+  --raise: #141417;
+  --hover: #17171A;
+  --selected: #1C1C20;
+  --line: #1F1F23;
+  --line-soft: #1A1A1E;
+  --line-2: #2E2E33;
+  --line-3: #3A3A40;
+  --text: #EDEDEF;
+  --soft: #C9C9CE;
+  --muted: #9A9AA2;
+  --dim: #7C7C85;
+  --faint: #6B6B74;
+  --live: #2DD4E8;
+  --warn: #F5B544;
+  --danger: #FF8A7D;
+  --sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+
+  /* Supporting shades from the design. */
+  --well: #18181B;        /* chips and thumbnails */
+  --frame: #151518;       /* video frames before the picture loads */
+  --edge: #232327;        /* card and tile borders */
+  --quiet: #16161A;       /* top bar rules */
+  --placeholder: #5F5F68;
+  --off: #5A5A62;         /* status dot for paused or waiting */
+  --live-soft: rgba(45, 212, 232, 0.2);
+  --live-line: rgba(45, 212, 232, 0.35);
+  --warn-line: rgba(245, 181, 68, 0.45);
+  --scrim: rgba(10, 10, 11, 0.72);
+  --on-text: #0A0A0B;     /* text on --text filled buttons */
+
+  /* Radii: controls, cards, big panels. */
+  --r-control: 8px;
+  --r-card: 10px;
+  --r-panel: 12px;
+  --r-panel-lg: 16px;
+}

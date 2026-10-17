@@ -1,0 +1,107 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+.lv-page { max-width: 1304px; padding: 24px 32px 40px; gap: 18px; }
+.lv-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
+.lv-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lv-eyebrow { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--live); }
+.lv-h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
+.lv-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lv-group { height: 36px; width: auto; min-width: 150px; background-color: var(--panel); padding-left: 10px; }
+.lv-detect { height: 36px; background: var(--panel); }
+.lv-detect[aria-pressed="true"] { background: var(--edge); }
+.lv-controls .segmented { border-color: var(--line-2); }
+.lv-controls .segmented button { width: 40px; }
+
+/* Grid tiles */
+.lv-grid { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 10px; }
+.lv-tile {
+  position: relative; display: block; padding: 0; aspect-ratio: 16 / 9; background: var(--frame);
+  border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; color: var(--text); text-align: left; min-width: 0;
+}
+.lv-tile:hover { border-color: var(--line-3); }
+.lv-tile-warn { border-color: var(--warn-line); }
+.lv-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+video.lv-media { opacity: 0; }
+video.lv-media[data-live] { opacity: 1; }
+.lv-media-contain { object-fit: contain; }
+.lv-badge { position: absolute; left: 10px; top: 10px; }
+.lv-detection {
+  position: absolute; right: 10px; top: 10px; background: var(--text); color: var(--on-text);
+  font-family: var(--mono); font-size: 10px; padding: 0 5px; white-space: nowrap; border-radius: 2px;
+}
+.lv-detection-lg { font-size: 11px; padding: 1px 6px; right: 12px; top: 12px; }
+.lv-down {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; background: var(--scrim); text-align: center; padding: 8px;
+}
+.lv-down-warn { color: var(--warn); }
+.lv-down-off { color: var(--soft); }
+.lv-down-since { font-size: 12px; color: var(--muted); }
+.lv-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px 10px; background: rgba(10, 10, 11, 0.7);
+}
+.lv-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lv-meta { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+/* Focus view */
+.lv-focus { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.lv-focus-main { flex: 4 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.lv-focus-frame {
+  position: relative; aspect-ratio: 16 / 9; background: var(--frame); border: 1px solid var(--line-2);
+  border-radius: var(--r-panel); overflow: hidden;
+}
+.lv-focus-frame:fullscreen { border-radius: 0; border: 0; background: #000; }
+.lv-focus-labels { position: absolute; left: 12px; top: 12px; display: inline-flex; align-items: center; gap: 8px; }
+.lv-focus-labels .live-badge { font-size: 11px; padding: 1px 8px; }
+.lv-focus-label { font-family: var(--mono); font-size: 11px; color: var(--text); background: rgba(10, 10, 11, 0.75); padding: 1px 8px; border-radius: 3px; }
+.lv-focus-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; }
+.lv-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.lv-actions .btn { height: 34px; }
+.lv-others { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.lv-others-title { font-size: 12px; color: var(--muted); }
+.lv-others ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.lv-other {
+  position: relative; display: block; width: 100%; padding: 0; aspect-ratio: 16 / 9; background: var(--frame);
+  border: 1px solid var(--line); border-radius: var(--r-control); overflow: hidden; color: var(--text); text-align: left;
+}
+.lv-other:hover { border-color: var(--line-3); }
+.lv-other-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+  background: rgba(10, 10, 11, 0.7); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* Allowance strip */
+.lv-allowance {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
+  background: var(--sidebar); border: 1px solid var(--line); border-radius: var(--r-card); font-size: 13px; color: var(--muted);
+}
+.lv-allowance-meters { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.lv-allowance-meters:empty { display: none; }
+.lv-num { font-family: var(--mono); color: var(--text); }
+.lv-allowance-note { font-size: 12px; color: var(--faint); }
+
+/* Locked */
+.lv-locked { position: relative; border: 1px solid var(--line); border-radius: var(--r-panel); overflow: hidden; min-height: 320px; }
+.lv-locked-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 10px; opacity: 0.25; }
+.lv-locked-grid span { aspect-ratio: 16 / 9; background: var(--selected); border-radius: var(--r-control); }
+.lv-locked-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(10, 10, 11, 0.6); }
+.lv-locked-card {
+  max-width: 440px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
+  padding: 28px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px;
+}
+.lv-locked-card h2 { font-size: 20px; font-weight: 500; }
+.lv-locked-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.lv-locked-actions .btn { height: 40px; padding: 0 16px; }
+
+@media (max-width: 860px) {
+  .lv-page { padding: 20px 16px 40px; }
+  .lv-h1 { font-size: 22px; }
+}
+@media (max-width: 600px) {
+  .lv-grid { grid-template-columns: minmax(0, 1fr); }
+  .lv-focus-main, .lv-others { flex-basis: 100%; }
+  .lv-others ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lv-locked-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lv-locked { min-height: 380px; }
+  .lv-locked-card { padding: 20px; }
+}

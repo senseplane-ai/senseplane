@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src" },
+  "include": ["src", "src/generated/*.json"],
+  "exclude": ["src/**/*.test.ts", "src/testdb.ts", "src/testkit.ts"]
+}

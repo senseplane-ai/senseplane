@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/usage.json",
+  "title": "Usage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "period",
+    "camera_minutes",
+    "camera_minutes_by_resolution",
+    "storage_gb_hours",
+    "ai_checks",
+    "ai_checks_by_kind",
+    "sources",
+    "recording_hours",
+    "storage_gb_days",
+    "frames_analysed",
+    "vlm_calls"
+  ],
+  "properties": {
+    "period": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "recording_hours": {
+      "type": "number",
+      "description": "camera_minutes / 60"
+    },
+    "storage_gb_days": {
+      "type": "number",
+      "description": "storage_gb_hours / 24"
+    },
+    "frames_analysed": {
+      "type": "integer"
+    },
+    "vlm_calls": {
+      "type": "integer",
+      "description": "Vision model calls (part of ai_checks)"
+    },
+    "quotas": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Limits from the quota provider (absent = unlimited)"
+    },
+    "camera_minutes": {
+      "type": "number",
+      "description": "Minutes of video ingested (recorded), all sources"
+    },
+    "camera_minutes_by_resolution": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Camera-minutes per recorded resolution: `720p` (up to 1280\u00d7720), `1080p` (up to 1920\u00d71080), `other`"
+    },
+    "camera_minutes_by_source": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "storage_gb_hours": {
+      "type": "number",
+      "description": "Stored GB (raw, clips, snapshots) sampled hourly; divide by 730 for GB-months"
+    },
+    "storage_gb_month": {
+      "type": "number"
+    },
+    "ai_checks": {
+      "type": "integer",
+      "description": "Model calls (vision and text)"
+    },
+    "ai_checks_by_kind": {
+      "type": "object",
+      "properties": {
+        "verify": {
+          "type": "integer"
+        },
+        "look": {
+          "type": "integer"
+        },
+        "ask": {
+          "type": "integer"
+        },
+        "summary": {
+          "type": "integer"
+        },
+        "compile": {
+          "type": "integer"
+        },
+        "chat": {
+          "type": "integer",
+          "description": "Model calls made answering conversation messages (ADR 0041)"
+        }
+      },
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "sources": {
+      "type": "object",
+      "required": [
+        "registered",
+        "active"
+      ],
+      "properties": {
+        "registered": {
+          "type": "integer"
+        },
+        "active": {
+          "type": "integer",
+          "description": "Sources streaming now"
+        },
+        "max_registered": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_active": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "by_day": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "day"
+        ],
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "camera_minutes": {
+            "type": "number"
+          },
+          "storage_gb_hours": {
+            "type": "number"
+          },
+          "ai_checks": {
+            "type": "integer"
+          },
+          "live_view_minutes": {
+            "type": "number"
+          },
+          "live_view_minutes_by_source": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "live_view_minutes": {
+      "type": "number",
+      "description": "Viewer-minutes of live view (one person watching one source for one minute), all sources"
+    },
+    "live_view_minutes_by_source": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "live_viewers_now": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "People watching live view right now across the account (sessions joined and not ended; ADR 0042)"
+    }
+  },
+  "description": "Usage meters for an account over a period (default: the current UTC month). Deployments can enforce allowances through the quota provider; the open-source default is unlimited (ADR 0025)."
+}

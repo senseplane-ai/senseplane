@@ -1,0 +1,92 @@
+{
+  "$comment": "Ground truth for perception CI. Times are seconds into each fixture. 'expect' = must fire (recall); 'allow' = may fire without counting as a false positive (e.g. a person's arm in the dog video; the courier's parcel, which YOLOX calls a backpack, on the doorstep clips). Anything else that fires is a false positive. The doorstep clip starts with 6 s of its first (empty) frame so a live pipeline is warm before the person enters.",
+  "fixtures": {
+    "doorstep-parcel-640x360.mp4": {
+      "expect": [
+        {
+          "label": "person",
+          "from": 7.8,
+          "to": 27.5
+        }
+      ],
+      "allow": [
+        "backpack"
+      ]
+    },
+    "doorstep-delivery-reversed-640x360.mp4": {
+      "expect": [
+        {
+          "label": "person",
+          "from": 7.6,
+          "to": 28.0
+        }
+      ],
+      "allow": [
+        "backpack"
+      ]
+    },
+    "van-driving-640x360.mp4": {
+      "expect": [
+        {
+          "label": "vehicle",
+          "from": 0,
+          "to": 27
+        }
+      ],
+      "allow": [
+        "person"
+      ]
+    },
+    "dog-indoors-640x480.mp4": {
+      "expect": [
+        {
+          "label": "animal",
+          "from": 0,
+          "to": 20
+        }
+      ],
+      "allow": [
+        "person"
+      ]
+    },
+    "rain-window-night-640x360.mp4": {
+      "expect": [],
+      "allow": [
+        "vehicle"
+      ]
+    },
+    "storm-rain-night-360x640.mp4": {
+      "expect": [],
+      "allow": [
+        "vehicle"
+      ]
+    },
+    "night-sky-empty-640x480.mp4": {
+      "expect": [],
+      "allow": []
+    },
+    "baby-crying-audio-640x360.mp4": {
+      "expect": [
+        {
+          "label": "sound:crying",
+          "from": 0,
+          "to": 23
+        }
+      ],
+      "allow": []
+    },
+    "testsrc-h264-640x360-20s.mp4": {
+      "expect": [],
+      "allow": []
+    }
+  },
+  "watches": {
+    "package": {
+      "instruction": "Tell me if a package is left at the front door",
+      "fire_on": [
+        "doorstep-delivery-reversed-640x360.mp4"
+      ],
+      "$comment": "The delivery clip is the parcel clip reversed: a person arrives with a box, puts it down and leaves; the box stays. The original clip (a person takes the box away) must not fire."
+    }
+  }
+}

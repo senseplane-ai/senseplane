@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/suggested-watch.json",
+  "title": "SuggestedWatch",
+  "description": "A watch an answer suggests when the question implies an ongoing need. Nothing is created until the caller sends it to POST /v1/watches.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instruction",
+    "sources"
+  ],
+  "properties": {
+    "instruction": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

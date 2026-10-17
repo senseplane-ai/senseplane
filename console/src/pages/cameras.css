@@ -1,0 +1,42 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+.cams-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.cams-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.cams-tools { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.search-box {
+  display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; min-width: 0;
+  background: var(--panel); border: 1px solid var(--edge); border-radius: var(--r-control); color: var(--dim);
+}
+.search-box:focus-within { outline: 2px solid var(--live); outline-offset: 2px; }
+.search-box input { width: 180px; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); }
+
+.cam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.cam-card { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.cam-card:hover { border-color: var(--line-3); color: var(--text); }
+.cam-card-frame { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--well); }
+.cam-card-reading {
+  aspect-ratio: 16 / 9; background: var(--raise); border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px;
+}
+.reading-value { font-size: 38px; font-weight: 500; letter-spacing: -0.02em; }
+.reading-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.cam-card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; }
+.cam-card-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cam-card-name { display: flex; align-items: center; gap: 8px; font-weight: 500; min-width: 0; }
+.cam-card-meta { font-size: 12px; color: var(--muted); }
+.cam-card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.cam-status { font-size: 12px; color: var(--soft); white-space: nowrap; }
+.cam-status-attention { color: var(--warn); }
+.cam-status-waiting, .cam-status-paused { color: var(--muted); }
+
+.cam-row-name { display: flex; flex-direction: column; font-weight: 500; }
+.cam-row-place { font-size: 12px; font-weight: 400; }
+.cam-row-status { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.cam-row-senses { font-size: 12px; color: var(--soft); }
+.cam-row-soft { color: var(--soft); }
+
+@media (max-width: 600px) {
+  .cams-tools { width: 100%; }
+  .search-box { flex: 1; }
+  .search-box input { width: 100%; }
+  .cam-grid { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@senseplane/mcp",
+  "version": "0.1.0",
+  "description": "Senseplane MCP server: 8 tools that give an agent eyes and ears (stdio and remote OAuth)",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "codegen": "node -e \"require('fs').copyFileSync('../spec/mcp/tools.json','src/generated/tools.json')\"",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "start": "node --import @senseplane/telemetry/register dist/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@senseplane/telemetry": "workspace:*",
+    "fastify": "^5.12.7",
+    "ioredis": "^5.11.1",
+    "prom-client": "^15.1.3",
+    "senseplane": "workspace:*"
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.12.0",
+    "@opentelemetry/core": "^2.12.0",
+    "@opentelemetry/sdk-trace-base": "^2.12.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "bin": {
+    "senseplane-mcp": "dist/stdio.js"
+  }
+}

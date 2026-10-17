@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/moment.json",
+  "title": "Moment",
+  "description": "A point in a source's history that an answer cites. Media links are signed, expire like event links and carry the caller's grants; they are signed afresh every time the message is read.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_id",
+    "source_name",
+    "at",
+    "label",
+    "snapshot_url"
+  ],
+  "properties": {
+    "source_id": {
+      "type": "string"
+    },
+    "source_name": {
+      "type": "string"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "label": {
+      "type": "string",
+      "description": "What happened, in one short sentence."
+    },
+    "snapshot_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri",
+      "description": "Masked snapshot; null when the moment has no picture (a sound) or the caller has no video grant for it."
+    },
+    "clip_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Signed HLS playlist around the moment."
+    },
+    "event_id": {
+      "type": "string",
+      "description": "The event this moment comes from, when it is one."
+    }
+  }
+}

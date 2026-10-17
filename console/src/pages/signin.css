@@ -1,0 +1,48 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+.signin { display: flex; flex-wrap: wrap; min-height: 100vh; background: var(--bg); }
+.signin-main {
+  flex: 1 1 480px; min-width: 0; padding: 40px 24px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.signin-col { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 28px; }
+.signin-col .logo-word { font-size: 16px; }
+.signin-head { display: flex; flex-direction: column; gap: 6px; }
+.signin-head h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+.signin-oauth { display: flex; flex-direction: column; gap: 10px; }
+.signin-oauth .btn { gap: 10px; }
+.signin-or { display: flex; align-items: center; gap: 12px; color: var(--placeholder); font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em; }
+.signin-or span { flex: 1; height: 1px; background: var(--edge); }
+.signin-form { display: flex; flex-direction: column; gap: 16px; }
+.signin-form .input-lg { background: var(--sidebar); }
+.signin-forgot { font-size: 13px; color: var(--muted); }
+.signin-switch { text-align: center; }
+/* MCP consent (ADR 0048): same column as sign-in, a little wider for the picker. */
+.signin-col:has(.consent-picker) { max-width: 460px; }
+.consent-app { display: flex; flex-direction: column; gap: 10px; }
+.consent-host { color: var(--soft); font-size: 14px; overflow-wrap: anywhere; }
+.consent-app code { font-family: var(--mono); font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.consent-verified { color: var(--live); }
+.consent-warn { color: var(--warn); font-size: 13px; }
+.consent-warn strong, .consent-warn code { color: var(--text); }
+.consent-cancel { align-self: flex-start; font-size: 13px; color: var(--muted); }
+.consent-picker { gap: 14px; }
+.consent-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.consent-actions .btn { flex: 1 1 140px; }
+.signin-legal { margin-top: 40px; font-size: 12px; color: var(--placeholder); text-align: center; }
+.signin-legal a { color: var(--soft); }
+.signin-aside {
+  flex: 1 1 480px; min-width: 0; padding: 40px; background: var(--sidebar); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; justify-content: center;
+}
+.signin-aside-col { max-width: 560px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.signin-frame { border-radius: var(--r-panel); }
+.signin-watching { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); padding: 3px 8px; left: 12px; top: 12px; }
+.signin-transcript {
+  display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; background: var(--panel);
+  border: 1px solid var(--edge); border-radius: var(--r-card); font-family: var(--mono); font-size: 13px;
+}
+.live-text { color: var(--live); }
+.signin-tagline { font-size: 15px; }
+@media (max-width: 860px) {
+  .signin-aside { display: none; }
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/delivery.json",
+  "title": "WebhookDelivery",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "webhook_id",
+    "event_id",
+    "status",
+    "attempts",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "webhook_id": {
+      "type": "string"
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "delivered",
+        "failed"
+      ]
+    },
+    "attempts": {
+      "type": "integer"
+    },
+    "last_status_code": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "last_error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "next_attempt_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "delivered_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "senseplane",
+  "version": "0.1.0",
+  "description": "Eyes and ears for your agent: TypeScript SDK for the Senseplane API",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "codegen": "openapi-typescript ../../spec/openapi.yaml -o src/generated/schema.ts && node scripts/header.mjs src/generated/schema.ts && node scripts/labels.mjs",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "browser": {
+    "./dist/webhooks.js": "./dist/webhooks.browser.js"
+  }
+}

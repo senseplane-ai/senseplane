@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/webhook.json",
+  "title": "Webhook",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "url",
+    "events",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^whk_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "secret": {
+      "type": "string",
+      "description": "Signing secret (whsec_\u2026), returned only on creation. Deliveries carry Senseplane-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, t + '.' + body)>."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

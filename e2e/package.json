@@ -1,0 +1,28 @@
+{
+  "name": "@senseplane/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "End-to-end checks against the compose stack (not run in unit CI)",
+  "scripts": {
+    "all": "node run.ts",
+    "m1": "node m1-check.ts",
+    "whip": "node whip-check.ts",
+    "media": "node media-check.ts",
+    "team": "node team-check.ts",
+    "chat": "node chat-check.ts",
+    "live": "node live-check.ts",
+    "destinations": "node watch-destinations-check.ts",
+    "journey": "node journey.ts"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "playwright-core": "^1.64.1",
+    "puppeteer-core": "^25.14.0"
+  }
+}

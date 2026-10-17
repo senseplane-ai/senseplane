@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/watch.json",
+  "title": "Watch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "instruction",
+    "sources",
+    "mode",
+    "compiled",
+    "estimate",
+    "status",
+    "warnings",
+    "notify",
+    "active_hours",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^wat_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 500
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "alert"
+      ],
+      "description": "Only alert in v1; more modes are added without breaking changes."
+    },
+    "compiled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trigger",
+        "cooldown_s",
+        "active_hours"
+      ],
+      "properties": {
+        "trigger": {
+          "$ref": "trigger.json"
+        },
+        "verify": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "prompt",
+            "min_confidence"
+          ],
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "min_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "cooldown_s": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_hours": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "days",
+                  "from",
+                  "to"
+                ],
+                "properties": {
+                  "days": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "mon",
+                        "tue",
+                        "wed",
+                        "thu",
+                        "fri",
+                        "sat",
+                        "sun"
+                      ]
+                    }
+                  },
+                  "from": {
+                    "type": "string",
+                    "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+                  },
+                  "to": {
+                    "type": "string",
+                    "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vlm_calls_per_day"
+      ],
+      "properties": {
+        "vlm_calls_per_day": {
+          "type": "string"
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "needs_zone",
+        "expired"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "description": "When the watch stops by itself (from `duration_minutes` or `expires_at` at creation); null means never. An expired watch has status `expired`."
+    },
+    "notify": {
+      "type": "array",
+      "items": {
+        "$ref": "destination.json"
+      },
+      "maxItems": 20,
+      "description": "Where watch.triggered events go (ADR 0043). Empty: every webhook subscribed to watch.triggered. Otherwise only these webhooks and agent inboxes. The Events feed always has every event."
+    },
+    "active_hours": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "watch-schedule.json"
+        }
+      ],
+      "description": "When the watch may fire, in a time zone; null means always (ADR 0043). Applies on top of `compiled.active_hours`."
+    }
+  }
+}

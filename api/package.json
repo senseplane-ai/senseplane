@@ -1,0 +1,58 @@
+{
+  "name": "@senseplane/api",
+  "version": "0.1.0",
+  "description": "Senseplane public REST API with createApi extension points",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "migrate": "node dist/migrate.js",
+    "start": "node --import @senseplane/telemetry/register dist/server.js",
+    "db:types": "kysely-codegen --url $MIGRATION_DATABASE_URL --out-file src/data/generated.ts",
+    "admin": "node dist/cli.js",
+    "codegen": "node -e \"const fs=require('fs');fs.mkdirSync('src/generated',{recursive:true});for(const f of ['trigger','watch','destination','watch-schedule'])fs.copyFileSync('../spec/schemas/'+f+'.json','src/generated/'+f+'.schema.json')\""
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@aws-sdk/s3-request-presigner": "^3.1152.0",
+    "@fastify/cors": "^11.3.1",
+    "@senseplane/telemetry": "workspace:*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "fastify": "^5.12.7",
+    "ioredis": "^5.11.1",
+    "jose": "^6.2.12",
+    "jpeg-js": "^0.4.4",
+    "kysely": "^0.29.6",
+    "pg": "^8.23.1",
+    "prom-client": "^15.1.3",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.12.0",
+    "@opentelemetry/core": "^2.12.0",
+    "@opentelemetry/sdk-trace-base": "^2.12.0",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
+    "kysely-codegen": "^0.20.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "bin": {
+    "senseplane-admin": "dist/cli.js"
+  }
+}

@@ -1,0 +1,2314 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+
+openapi: 3.1.0
+info:
+  title: Senseplane API
+  version: 0.1.0
+  description: Eyes and ears for your agent. Public REST API, base path /v1.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: "{baseUrl}"
+    description: Your Senseplane API. The self-host default is http://localhost:8080/v1.
+    variables:
+      baseUrl:
+        default: http://localhost:8080/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: sources
+  - name: clips
+  - name: watches
+  - name: events
+  - name: memory
+  - name: webhooks
+  - name: agents
+    description: Agent keys. An agent sees only what its grants allow (ADR 0024).
+  - name: grants
+  - name: audit
+  - name: usage
+  - name: account
+  - name: team
+    description: >-
+      Members, roles and invites for console users (ADR 0044). Roles apply to console
+      sessions: viewer reads; member also creates watches, clips and conversations;
+      admin does everything except deleting the workspace and changing owners; owner
+      does everything. API keys keep their own rules (account keys: full access;
+      agent keys: their grants). A refused role answers 403 `forbidden_role`.
+  - name: demo
+  - name: conversations
+    description: Ask about what your sources saw and heard (ADR 0041).
+  - name: inbox
+    description: Events routed to an agent by watches (ADR 0043).
+  - name: bridge
+    description: The bridge's own API, authenticated with a bridge token (ADR 0045).
+paths:
+  /sources:
+    post:
+      operationId: createSource
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      description: >-
+        Fails with 409 `source_limit_reached` when the account already has the
+        quota provider's `max_registered_sources` (no limit by default; ADR 0025).
+      summary: Add a source; returns its capture URL and token
+      tags: [sources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SourceCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listSources
+      summary: List sources
+      tags: [sources]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Source'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}:
+    get:
+      operationId: getSource
+      summary: Get a source
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: updateSource
+      summary: Update name, location, zones, privacy masks or audio recording
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SourceUpdate'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteSource
+      summary: Remove a source and schedule deletion of its data
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/capture-link:
+    post:
+      operationId: rotateCaptureLink
+      summary: Issue a new capture link for a source and invalidate every earlier one
+      description: >-
+        Owner keys only. The new link is unbound until a device first joins
+        with it (within 10 minutes). Use this when a capture link or QR code
+        may have been seen by someone else, or to move the camera to a new
+        device (ADR 0038).
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: 'schemas/source.json'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/now:
+    get:
+      operationId: getSourceNow
+      summary: Latest snapshot or sensor values
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SourceNow'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/ask:
+    post:
+      operationId: askSource
+      summary: Ask a question about the current scene
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AskRequest'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AskResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/playback:
+    get:
+      operationId: getPlayback
+      summary: Signed HLS URL for a range within the source's retention (up to 24 h per playlist)
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+        - name: from
+          in: query
+          required: true
+          description: Range start (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          required: true
+          description: Range end (RFC 3339)
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlaybackResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/timeline:
+    get:
+      operationId: getTimeline
+      summary: Recorded ranges and gaps for a time window (for the console timeline)
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+        - {name: from, in: query, required: false, description: Range start (default 24 h ago), schema: {type: string, format: date-time}}
+        - {name: to, in: query, required: false, description: Range end (default now), schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TimelineResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/history:
+    get:
+      operationId: getHistory
+      summary: Sensor time series
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+        - name: from
+          in: query
+          required: false
+          description: Range start (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          required: false
+          description: Range end (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: sense
+          in: query
+          required: false
+          description: Sensor sense
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HistoryResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/readings:
+    post:
+      operationId: postReadings
+      summary: Push temperature or humidity readings
+      description: >-
+        Takes an account API key or the sensor's integration token (`sit_…`,
+        returned when the sensor source is created; ADR 0045). Readings of a sense
+        the sensor doesn't have are refused. Sensor watches that hold long enough
+        fire `reading.threshold`; `sensor_thresholds` fire `sensor.threshold`.
+      security:
+        - bearerAuth: []
+        - integrationToken: []
+      tags: [sources]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReadingsRequest'}
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, events]
+                properties:
+                  accepted: {type: integer}
+                  events: {type: array, items: {type: string}, description: IDs of events these readings fired}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/ingest-token:
+    post:
+      operationId: rotateIngestToken
+      summary: Rotate a source's ingest token (WHIP, bridge or sensor integration)
+      description: >-
+        Issues a new token and revokes the previous one. `whip` sources: a new
+        WHIP bearer token; a publisher still connected with the old one is
+        disconnected. `rtsp` sources: a new token for the camera's bridge (every
+        camera on that bridge is re-keyed and disconnected until the bridge
+        restarts with it). `sensor` sources: a new integration token. Other
+        types: 400 `validation_failed`. Audited.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token: {type: string, description: Shown only once}
+                  whip_url: {type: string, format: uri, description: whip sources}
+                  bridge_token: {type: string, description: rtsp sources (same as token)}
+                  bridge_id: {type: string, description: rtsp sources}
+                  docker_command: {type: string, description: rtsp sources}
+                  integration_token: {type: string, description: sensor sources (same as token)}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: revokeIngestToken
+      summary: Revoke a source's ingest token
+      description: >-
+        Revokes the source's WHIP, bridge or integration token and disconnects
+        live publishers (for `rtsp`, every camera on the bridge). Publishing
+        fails with 401 until a new token is rotated in. Audited.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '204': {description: Revoked}
+        default: {$ref: '#/components/responses/Error'}
+  # --- Pause and resume (ADR 0045 addendum) --------------------------------------
+  /sources/{id}/pause:
+    post:
+      operationId: pauseSource
+      summary: Pause a camera; it records and analyses nothing until resumed
+      description: >-
+        Sets `status` to `paused` and ends the camera's live session. While
+        paused, pushes (WHIP, bridge, capture link) are refused with 409
+        `conflict` (`details.reason: paused`) and bridges drop the camera from
+        their config. Sensors can't be paused (409). Idempotent. Audited.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: The source, now paused
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/resume:
+    post:
+      operationId: resumeSource
+      summary: Resume a paused camera
+      description: >-
+        Sets `status` to `offline` until its publisher connects again (a bridge
+        picks the camera up within a minute; a phone opens its capture link
+        again). Idempotent. Audited.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: The source
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+  # --- end Pause and resume ------------------------------------------------------
+  # --- Live view (ADR 0042) -------------------------------------------------
+  /sources/{id}/live:
+    post:
+      operationId: startLiveView
+      summary: Start watching a source live
+      description: >-
+        Returns a single-use media token and the signalling URL. The browser
+        joins with the token over the media signalling protocol (v1) and
+        consumes the camera's video, and its audio only when `audio` is true,
+        the caller has an audio grant for the source and the source records
+        audio. Nothing is transcoded; privacy masks don't apply (they apply to
+        analysis frames, snapshots and model inputs). Viewers with no
+        keepalive (`POST /live/{session_id}/keepalive`, sent on user activity)
+        for `idle_timeout_seconds` are closed. Needs a video grant
+        (agent keys). Errors: 403 `feature_not_available` when the deployment's
+        quota provider turns live view off; 429 `limit_reached` when the
+        account's live view minutes are used up or too many people are
+        watching at once (`details.limit` names the limit); 409 `conflict`
+        when the source isn't streaming. Each start is written to the audit
+        log. Viewing time is metered as `live_view_minutes` in `GET /usage`.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LiveViewRequest'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LiveViewSession'}
+        default: {$ref: '#/components/responses/Error'}
+  /live/{session_id}/keepalive:
+    post:
+      operationId: keepLiveViewAlive
+      summary: Tell the API someone is still watching
+      description: >-
+        Sent by the viewer on user activity (pointer, keys, touch, the tab
+        becoming visible), at most every 30 s, never on a timer alone. A live
+        session with no keepalive for `idle_timeout_seconds` is ended with
+        `roomClosed` reason `idle` (ADR 0042, 0049). 404 when the session has
+        ended.
+      tags: [sources]
+      parameters:
+        - {name: session_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [idle_timeout_seconds]
+                properties:
+                  idle_timeout_seconds: {type: integer}
+        default: {$ref: '#/components/responses/Error'}
+  # --- end live view --------------------------------------------------------
+  # --- Ingest: bridge and integrations (ADR 0045) -----------------------------
+  /bridge/config:
+    get:
+      operationId: getBridgeConfig
+      summary: The cameras this bridge should relay
+      description: >-
+        Called by the bridge every `poll_seconds`. Cameras without an RTSP URL
+        yet are left out until the bridge claims them with POST /bridge/cameras.
+        The bridge pushes each camera to its `whip_url` with the camera's
+        `whip_token` (a WHIP bearer; rotating the bridge token retires them).
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeConfig'}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/cameras:
+    post:
+      operationId: claimBridgeCamera
+      summary: Claim or add a camera by RTSP URL (the bridge's `--rtsp`)
+      description: >-
+        The same URL again returns that camera (200). Otherwise the oldest camera
+        on this bridge still waiting for a URL takes it (200), or a new `rtsp`
+        source is added to the bridge (201; `source_limit_reached` applies).
+        The URL is stored encrypted. Audited.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [rtsp_url]
+              properties:
+                rtsp_url: {type: string, pattern: '^rtsps?://', maxLength: 2048}
+                name: {type: string, minLength: 1, maxLength: 120}
+      responses:
+        '200':
+          description: Existing camera
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeCamera'}
+        '201':
+          description: Camera added
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeCamera'}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/health:
+    post:
+      operationId: postBridgeHealth
+      summary: Heartbeat and per-camera state
+      description: >-
+        Sent every `heartbeat_seconds` and whenever a camera's state changes.
+        `reconnecting` and `offline` set the source's status; `online` sets it
+        online (the media plane confirms). A bridge silent for three heartbeats
+        has its cameras marked offline.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BridgeHealth'}
+      responses:
+        '204': {description: Recorded}
+        default: {$ref: '#/components/responses/Error'}
+  /integration:
+    get:
+      operationId: getIntegration
+      summary: The sensor source an integration token feeds
+      description: Lets an integration (Home Assistant) check its token and learn its source ID.
+      tags: [sources]
+      security:
+        - integrationToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source]
+                properties:
+                  source: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+  # --- end ingest --------------------------------------------------------------
+  /capture/join:
+    post:
+      operationId: captureJoin
+      summary: Exchange a capture ticket (from capture_url) for a short-lived media join token
+      description: >-
+        Used by the capture page. Authenticated by the ticket, not an API key.
+        Fails with 409 `source_limit_reached` when `max_active_sources` of the
+        account's sources are already streaming (ADR 0025); the media plane
+        enforces the same limit on `produce`. A capture link is bound to the
+        first device that joins with it (`device`), and must be first used
+        within 10 minutes of being issued; after that only the bound device
+        can rejoin with it. Rotating the link (`POST /sources/{id}/capture-link`)
+        invalidates every earlier link (ADR 0038).
+      tags: [sources]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ticket]
+              properties:
+                ticket: {type: string}
+                device:
+                  type: string
+                  minLength: 16
+                  maxLength: 128
+                  description: A random key the capture page generates once and keeps on the device. Required to bind the link; without it, the link only works during its first 10 minutes.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, url, expires_at]
+                properties:
+                  token: {type: string, description: Join token for the media signalling `join` frame}
+                  url: {type: string, format: uri, description: WebSocket signalling URL}
+                  expires_at: {type: string, format: date-time}
+                  max_resolution: {type: string, enum: [720p, 1080p], description: "The account's maximum recording resolution: request this size from the camera (ADR 0022)"}
+        default: {$ref: '#/components/responses/Error'}
+  /demo/sessions:
+    post:
+      operationId: createDemoSession
+      summary: "Start a live demo (no sign-up): a temporary account, one phone source and a package/person watch"
+      description: >-
+        Rate-limited per IP per day; video only; the session lasts at most 10
+        minutes and everything it created is deleted 1 hour after it ends.
+        Browser CORS is limited to the website origins.
+      tags: [demo]
+      security: []
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DemoSession'}
+        default: {$ref: '#/components/responses/Error'}
+  /demo/sessions/{id}:
+    delete:
+      operationId: endDemoSession
+      summary: End a demo session now (its data is deleted 1 hour later)
+      tags: [demo]
+      security: [{demoToken: []}]
+      parameters:
+        - {name: id, in: path, required: true, description: Demo session ID, schema: {type: string}}
+      responses:
+        '204': {description: Ended}
+        default: {$ref: '#/components/responses/Error'}
+  /demo/sessions/{id}/events:
+    get:
+      operationId: streamDemoEvents
+      summary: Live stream (Server-Sent Events) of the session's events, camera status and snapshots
+      description: >-
+        text/event-stream. Event names: `status` ({camera: pending|online|offline}),
+        `event` (an Event), `snapshot` ({url, captured_at}), `ended` ({reason}).
+        Authenticate with the session token in the Authorization header.
+      tags: [demo]
+      security: [{demoToken: []}]
+      parameters:
+        - {name: id, in: path, required: true, description: Demo session ID, schema: {type: string}}
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Error'}
+  /demo/sessions/{id}/ask:
+    post:
+      operationId: askDemo
+      summary: "Ask about the camera, live or from what it has seen"
+      tags: [demo]
+      security: [{demoToken: []}]
+      parameters:
+        - {name: id, in: path, required: true, description: Demo session ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AskRequest'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [answer, from]
+                properties:
+                  answer: {type: string}
+                  from: {type: string, enum: [live, memory]}
+                  confidence: {type: number}
+                  snapshot_url: {type: string, format: uri}
+                  event: {$ref: '#/components/schemas/Event'}
+        default: {$ref: '#/components/responses/Error'}
+  /clips:
+    post:
+      operationId: createClip
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      summary: Save a time range as a permanent clip
+      tags: [clips]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClipCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Clip'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listClips
+      summary: List clips
+      tags: [clips]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Clip'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /clips/{id}:
+    get:
+      operationId: getClip
+      summary: Get a clip with a fresh signed playback URL
+      tags: [clips]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Clip'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteClip
+      summary: Delete a clip
+      tags: [clips]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /watches:
+    post:
+      operationId: createWatch
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      summary: Create a plain-language watch; returns the compiled form
+      tags: [watches]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WatchCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Watch'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listWatches
+      summary: List watches
+      tags: [watches]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Watch'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /watches/{id}:
+    get:
+      operationId: getWatch
+      summary: Get a watch
+      tags: [watches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Watch'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: updateWatch
+      summary: Edit, pause or resume a watch
+      tags: [watches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WatchUpdate'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Watch'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteWatch
+      summary: Delete a watch
+      tags: [watches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  # --- watch destinations (ADR 0043): backtest and agent inboxes -------------
+  /watches/test:
+    post:
+      operationId: testWatch
+      summary: Backtest a watch over recorded history
+      description: >-
+        Replays the watch's cheap trigger over the detections, sounds and
+        readings stored for the range, then runs its model check (if it has one)
+        on at most `max_checks` candidate snapshots. Each check is an AI check.
+        Give an `instruction` (compiled first), a `compiled` watch, or a
+        `watch_id`. Without a vision model, candidates come back unverified.
+      tags: [watches]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WatchTestRequest'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WatchTestResult'}
+        default: {$ref: '#/components/responses/Error'}
+  /inbox:
+    get:
+      operationId: listInbox
+      summary: An agent's inbox of events routed to it by watches
+      description: >-
+        An agent key reads its own inbox; an account key names the agent.
+        Newest first. Items are filtered by the agent's current grants.
+      tags: [inbox]
+      parameters:
+        - name: agent
+          in: query
+          required: false
+          description: Agent id (required with an account key)
+          schema: {type: string}
+        - name: unseen
+          in: query
+          required: false
+          description: Only items not yet marked seen
+          schema: {type: boolean}
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agent_id, data, next_cursor]
+                properties:
+                  agent_id: {type: string}
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/InboxItem'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /inbox/seen:
+    post:
+      operationId: markInboxSeen
+      summary: Mark inbox items seen
+      tags: [inbox]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InboxSeenRequest'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marked]
+                properties:
+                  marked: {type: integer}
+        default: {$ref: '#/components/responses/Error'}
+  # --- end watch destinations -------------------------------------------------
+  /events:
+    get:
+      operationId: listEvents
+      summary: Query events by source, type and time
+      tags: [events]
+      parameters:
+        - name: source
+          in: query
+          required: false
+          description: Filter by source ID
+          schema: {type: string}
+        - name: type
+          in: query
+          required: false
+          description: 'Filter by event type: an exact type (detection.cup) or a prefix wildcard (detection.* for every detection)'
+          schema: {type: string}
+        - name: from
+          in: query
+          required: false
+          description: Range start (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          required: false
+          description: Range end (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Event'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /events/{id}:
+    get:
+      operationId: getEvent
+      summary: Get one event with fresh signed snapshot and clip URLs
+      tags: [events]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Event'}
+        default: {$ref: '#/components/responses/Error'}
+  /events/{id}/feedback:
+    post:
+      operationId: postFeedback
+      summary: Mark an event relevant or not relevant
+      tags: [events]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FeedbackRequest'}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /memory/search:
+    get:
+      operationId: searchMemory
+      summary: Natural-language search over history
+      tags: [memory]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Natural-language question
+          schema: {type: string}
+        - name: from
+          in: query
+          required: false
+          description: Range start (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          required: false
+          description: Range end (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MemorySearchResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  /webhooks:
+    post:
+      operationId: createWebhook
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      summary: Subscribe to event types
+      tags: [webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WebhookCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Webhook'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listWebhooks
+      summary: List webhooks
+      tags: [webhooks]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Webhook'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /webhooks/{id}:
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      tags: [webhooks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /webhooks/{id}/deliveries:
+    get:
+      operationId: listDeliveries
+      summary: Delivery log for a webhook (newest first)
+      tags: [webhooks]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+        - {name: limit, in: query, required: false, description: Page size (1–100, default 20), schema: {type: integer}}
+        - {name: cursor, in: query, required: false, description: Cursor from a previous page, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Delivery'}}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /webhooks/{id}/deliveries/{deliveryId}/redeliver:
+    post:
+      operationId: redeliver
+      summary: Queue a delivery again now
+      tags: [webhooks]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+        - {name: deliveryId, in: path, required: true, description: Delivery ID, schema: {type: string}}
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Delivery'}
+        default: {$ref: '#/components/responses/Error'}
+  /agents:
+    post:
+      operationId: createAgent
+      summary: Create an agent and its API key (shown once)
+      tags: [agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentCreated'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listAgents
+      summary: List agents
+      tags: [agents]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Agent'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /agents/connect:
+    post:
+      operationId: connectAgent
+      summary: Approve an app (an MCP client) from the consent page
+      description: >-
+        Used by the console's MCP consent page (ADR 0048). Creates an agent of kind `app`
+        named after the client, or reuses the live app with the same `client_name` and
+        redirect host (port ignored, loopback as `localhost`), replacing its grants with this
+        access. Returns a single-use connect code (2 minutes) that the MCP service redeems,
+        with the nonce behind `binding`, for the app's key at `POST /auth/connect/redeem`.
+        The key is never returned here. Admins and owners only (`forbidden_role`).
+      tags: [agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentConnect'}
+      responses:
+        '201':
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agent, code, expires_at, reused]
+                properties:
+                  agent: {$ref: '#/components/schemas/Agent'}
+                  code: {type: string, description: 'Connect code (cc_…), for the MCP service only'}
+                  expires_at: {type: string, format: date-time}
+                  reused: {type: boolean, description: True when an existing app was reconnected}
+        default: {$ref: '#/components/responses/Error'}
+  /agents/{id}:
+    delete:
+      operationId: deleteAgent
+      summary: Revoke an agent, its keys and its grants (effective on the next request)
+      tags: [agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /grants:
+    post:
+      operationId: createGrant
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      summary: Give an agent scoped access
+      tags: [grants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GrantCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Grant'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listGrants
+      summary: List grants
+      tags: [grants]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Grant'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /grants/{id}:
+    delete:
+      operationId: deleteGrant
+      summary: Revoke a grant
+      tags: [grants]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /audit:
+    get:
+      operationId: listAudit
+      summary: Who accessed what, when
+      tags: [audit]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: Range start (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          required: false
+          description: Range end (RFC 3339)
+          schema: {type: string, format: date-time}
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/AuditEntry'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /usage:
+    get:
+      operationId: getUsage
+      summary: Usage meters for a period, with source counts against limits
+      tags: [usage]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: Period start (RFC 3339; default the start of the current UTC month)
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          required: false
+          description: Period end (RFC 3339; default now)
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Usage'}
+        default: {$ref: '#/components/responses/Error'}
+  /account:
+    get:
+      operationId: getAccount
+      summary: Get the account, including raw retention settings
+      tags: [account]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: updateAccount
+      summary: Update the account name or raw retention (may be limited by the deployment's quota provider)
+      tags: [account]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccountUpdate'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteAccount
+      summary: Delete the account and all its data within 24 hours
+      tags: [account]
+      responses:
+        '202':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /account/export:
+    post:
+      operationId: exportAccount
+      summary: Start a full account export (JSON plus signed media links)
+      tags: [account]
+      responses:
+        '202':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExportResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  /account/export/{id}:
+    get:
+      operationId: getAccountExport
+      summary: An export's status and its signed download link
+      tags: [account]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Export ID
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExportResponse'}
+        default: {$ref: '#/components/responses/Error'}
+  # --- team and workspace (ADR 0044) -------------------------------------------
+  /me:
+    get:
+      operationId: getMe
+      summary: The signed-in console user, their role here and every workspace they belong to
+      description: An API key (not a console session) gets `user` null and acts as an owner.
+      tags: [team]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: updateMe
+      summary: Change your display name (console sessions only)
+      tags: [team]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MeUpdate'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        default: {$ref: '#/components/responses/Error'}
+  /me/switch:
+    post:
+      operationId: switchWorkspace
+      summary: Swap this console session for one in another workspace you belong to
+      description: The current session ends; use the returned one. Sign-in opens the last workspace used.
+      tags: [team]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkspaceSwitch'}
+      responses:
+        '200':
+          description: A session in the other workspace
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConsoleSession'}
+        default: {$ref: '#/components/responses/Error'}
+  /members:
+    get:
+      operationId: listMembers
+      summary: People in this workspace and their roles
+      tags: [team]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Member'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /members/{id}:
+    patch:
+      operationId: updateMember
+      summary: Change a member's role (admin; only an owner changes owners)
+      description: Demoting the last owner answers 409 `conflict` with `details.reason` `last_owner`.
+      tags: [team]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MemberUpdate'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Member'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: removeMember
+      summary: Remove someone from the workspace (admin), or leave it (yourself)
+      description: Their sessions here end at once. The last owner can't leave (409 `conflict`).
+      tags: [team]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /invites:
+    post:
+      operationId: createInvite
+      summary: Invite someone by email (admin; only an owner invites an owner)
+      description: >-
+        Returns a single-use link to copy and send (no email is sent). Inviting the same
+        address again replaces the earlier link. The invited person may sign up even when
+        sign-up is closed. Rate limited per workspace.
+      tags: [team]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InviteCreate'}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InviteCreated'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listInvites
+      summary: Invites not yet accepted or withdrawn (admin)
+      tags: [team]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Invite'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /invites/{id}:
+    delete:
+      operationId: revokeInvite
+      summary: Withdraw an invite; its link stops working
+      tags: [team]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Invite ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  # --- Conversations (Ask; ADR 0041) -------------------------------------------
+  /conversations:
+    post:
+      operationId: createConversation
+      summary: Start a conversation
+      tags: [conversations]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConversationCreate'}
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Conversation'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listConversations
+      summary: Recent conversations, newest first
+      tags: [conversations]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–100, default 20)
+          schema: {type: integer}
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor from a previous page
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Conversation'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /conversations/{id}:
+    get:
+      operationId: getConversation
+      summary: A conversation with all its messages
+      tags: [conversations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Conversation'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteConversation
+      summary: Delete a conversation and its messages
+      tags: [conversations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema: {type: string}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /conversations/{id}/messages:
+    post:
+      operationId: sendMessage
+      summary: Ask a question; the answer cites moments from history or a live look
+      description: >-
+        The brain searches history, lists events, looks at cameras now and may
+        suggest a watch, using only the sources and senses the key is granted.
+        Every model call counts as an AI check (`ai_checks`, detail `chat`).
+        With `Accept: text/event-stream` the answer streams as Server-Sent
+        Events: `status` `{text}` while it works, `delta` `{text}` as it writes,
+        `moment` (a Moment) when it first cites one, `suggested_watch`
+        `{instruction, sources}`, then `done` `{message}` with the stored
+        assistant Message, or `error` `{error}` (the error envelope's body).
+        Otherwise the response is the assistant Message as JSON.
+      tags: [conversations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MessageCreate'}
+      responses:
+        '200':
+          description: The assistant message (JSON), or the event stream
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Message'}
+            text/event-stream:
+              schema: {$ref: '#/components/schemas/ConversationStreamEvent'}
+        default: {$ref: '#/components/responses/Error'}
+  /conversations/{id}/messages/{mid}/feedback:
+    post:
+      operationId: giveAnswerFeedback
+      summary: Mark an answer helpful or not (null clears it)
+      tags: [conversations]
+      parameters:
+        - {name: id, in: path, required: true, description: Conversation ID, schema: {type: string}}
+        - {name: mid, in: path, required: true, description: Assistant message ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [value]
+              properties:
+                value: {type: [string, 'null'], enum: [helpful, not_helpful, null]}
+      responses:
+        '200':
+          description: The answer with its feedback
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Message'}
+        default: {$ref: '#/components/responses/Error'}
+  # --- end Conversations -------------------------------------------------------
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: An account API key (full access) or an agent API key (limited to its grants).
+    demoToken:
+      type: http
+      scheme: bearer
+      description: Token returned by POST /v1/demo/sessions.
+    bridgeToken:
+      type: http
+      scheme: bearer
+      description: A bridge token (`brg_…`), returned when an rtsp source is created with a new bridge (ADR 0045).
+    integrationToken:
+      type: http
+      scheme: bearer
+      description: A sensor integration token (`sit_…`); it can only push readings to its own source (ADR 0045).
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        Makes a create safe to retry. A repeat with the same key and the same body
+        within 24 hours returns the first response (with `Idempotent-Replayed: true`)
+        instead of creating again; the same key with a different body is refused with
+        `idempotency_key_reused`. Keys are scoped to the account.
+      schema: {type: string, maxLength: 255}
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Sense: {$ref: './schemas/sense.json'}
+    Source: {$ref: './schemas/source.json'}
+    Trigger: {$ref: './schemas/trigger.json'}
+    Watch: {$ref: './schemas/watch.json'}
+    Event: {$ref: './schemas/event.json'}
+    Clip: {$ref: './schemas/clip.json'}
+    Grant: {$ref: './schemas/grant.json'}
+    Webhook: {$ref: './schemas/webhook.json'}
+    Usage: {$ref: './schemas/usage.json'}
+    Reading: {$ref: './schemas/reading.json'}
+    Error: {$ref: './schemas/error.json'}
+    Account: {$ref: './schemas/account.json'}
+    Delivery: {$ref: './schemas/delivery.json'}
+    DemoSession: {$ref: './schemas/demo-session.json'}
+    AccountUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        time_zone: {type: string, maxLength: 64, description: "IANA time zone, e.g. Europe/Berlin (watch schedules, answers like \"this morning\")"}
+        retention_days: {type: [integer, 'null'], minimum: 1, description: "Days mode; null keeps raw footage until deleted"}
+        retention_mode: {type: string, enum: [days, fill]}
+        retention_max_bytes: {type: [integer, 'null'], minimum: 1, description: "Fill mode byte cap; null uses the deployment's storage cap"}
+    SourceCreate:
+      type: object
+      additionalProperties: false
+      required: [name, type]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        location: {type: string, maxLength: 120}
+        type: {type: string, enum: [browser, sensor, whip, rtsp], description: 'browser sources get a capture link; whip sources get a WHIP URL and bearer token (OBS, encoders); rtsp sources are IP cameras relayed by a bridge and get a bridge token and docker command; sensor sources get an integration token for pushing readings'}
+        record_audio: {type: boolean, default: false, description: Ignored for rtsp and sensor sources (bridge cameras are video only)}
+        senses:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [temperature, humidity]}
+          description: Sensor sources only; default both.
+        rtsp_url: {type: string, pattern: '^rtsps?://', maxLength: 2048, description: 'rtsp sources: the camera URL (stored encrypted). Without it the bridge claims the camera with --rtsp.'}
+        bridge_id: {type: string, description: 'rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued)'}
+    SourceUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        location: {type: string, maxLength: 120}
+        record_audio: {type: boolean}
+        sensor_thresholds:
+          type: [object, 'null']
+          properties:
+            temperature: {type: object, properties: {above: {type: number}, below: {type: number}}}
+            humidity: {type: object, properties: {above: {type: number}, below: {type: number}}}
+        retention_days:
+          type: [integer, 'null']
+          minimum: 1
+          description: Raw retention override in days; null uses the account value.
+        retention_mode:
+          type: [string, 'null']
+          enum: [days, fill, null]
+          description: Overrides the account's retention mode; null follows the account.
+        retention_max_bytes:
+          type: [integer, 'null']
+          minimum: 1
+          description: Fill mode byte cap for this source alone; null shares the account's cap.
+        zones:
+          type: array
+          items:
+            type: object
+            required: [name, polygon]
+            properties:
+              name: {type: string}
+              polygon: {type: array, items: {type: array, items: {type: number}}}
+        privacy_masks: {type: array, items: {type: array, items: {type: array, items: {type: number}}}}
+    SourceNow:
+      type: object
+      required: [source_id, captured_at]
+      properties:
+        source_id: {type: string}
+        captured_at: {type: string, format: date-time}
+        snapshot_url: {type: string, format: uri}
+        readings: {type: array, items: {$ref: '#/components/schemas/Reading'}}
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question: {type: string, minLength: 3, maxLength: 500}
+    AskResponse:
+      type: object
+      required: [answer, confidence, snapshot_url]
+      properties:
+        answer: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        snapshot_url: {type: string, format: uri}
+    PlaybackResponse:
+      type: object
+      description: >-
+        `url` is a signed HLS playlist (fMP4, EXT-X-DISCONTINUITY at gaps and
+        recorder restarts) valid for 15 minutes. Ranges up to 24 h; anything
+        older than the source's retention is gone.
+      required: [url, expires_at]
+      properties:
+        url: {type: string, format: uri}
+        expires_at: {type: string, format: date-time}
+        gaps:
+          type: array
+          items:
+            type: object
+            properties:
+              from: {type: string, format: date-time}
+              to: {type: string, format: date-time}
+    TimeRange:
+      type: object
+      required: [from, to]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+    TimelineResponse:
+      type: object
+      required: [from, to, recorded, gaps, retention_days]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        recorded: {type: array, items: {$ref: '#/components/schemas/TimeRange'}, description: Continuous recorded ranges (segments closer than 1.5 s are merged)}
+        gaps: {type: array, items: {$ref: '#/components/schemas/TimeRange'}, description: Unrecorded spans between the first and last recording in the window}
+        retention_days: {type: integer, description: Effective raw retention for this source}
+    HistoryResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/Reading'}
+    ReadingsRequest:
+      type: object
+      required: [readings]
+      properties:
+        readings:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: {$ref: '#/components/schemas/ReadingInput'}
+    ReadingInput:
+      type: object
+      additionalProperties: false
+      required: [sense, value, unit]
+      properties:
+        sense: {type: string, enum: [temperature, humidity]}
+        value: {type: number}
+        unit: {type: string, enum: [celsius, percent]}
+        measured_at: {type: string, format: date-time, description: Defaults to now}
+        at: {type: string, format: date-time, description: Alias of measured_at}
+    BridgeCamera:
+      type: object
+      required: [source_id, name, rtsp_url, whip_url, whip_token]
+      properties:
+        source_id: {type: string}
+        name: {type: string}
+        rtsp_url: {type: string, description: The camera URL, credentials included (only ever sent to the bridge)}
+        whip_url: {type: string, format: uri, description: Push here with whip_token}
+        whip_token: {type: string, description: "This camera's WHIP bearer (spec/media/whip.md): a JWT the media plane verifies"}
+    BridgeConfig:
+      type: object
+      required: [bridge_id, name, heartbeat_seconds, poll_seconds, cameras]
+      properties:
+        bridge_id: {type: string}
+        name: {type: string}
+        heartbeat_seconds: {type: integer}
+        poll_seconds: {type: integer}
+        cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}}
+    BridgeHealth:
+      type: object
+      additionalProperties: false
+      required: [cameras]
+      properties:
+        version: {type: string, maxLength: 64}
+        cameras:
+          type: array
+          maxItems: 256
+          items:
+            type: object
+            additionalProperties: false
+            required: [source_id, state]
+            properties:
+              source_id: {type: string}
+              state: {type: string, enum: [connecting, online, reconnecting, offline]}
+              detail: {type: string, maxLength: 500, description: Why, for reconnecting or offline}
+    ClipCreate:
+      type: object
+      required: [source, from, to]
+      properties:
+        source: {type: string}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        title: {type: string, maxLength: 200}
+    WatchCreate:
+      type: object
+      required: [instruction, sources]
+      properties:
+        instruction: {type: string, minLength: 3, maxLength: 500}
+        sources: {type: array, minItems: 1, items: {type: string}, description: 'Source ids or names (case-insensitive). Several cameras are watched independently; events name the camera.'}
+        duration_minutes: {type: integer, minimum: 1, maximum: 525600, description: 'Stop watching after this long (sets `expires_at`)'}
+        notify: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Destination'}, description: 'Where watch.triggered goes (ADR 0043); absent or empty: every subscribed webhook. An agent key may list only itself.'}
+        active_hours:
+          oneOf: [{type: 'null'}, {$ref: '#/components/schemas/WatchSchedule'}]
+    WatchUpdate:
+      type: object
+      properties:
+        instruction: {type: string}
+        status: {type: string, enum: [active, paused]}
+        compiled: {type: object}
+        notify: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Destination'}, description: 'Replaces the destinations; [] goes back to every subscribed webhook.'}
+        active_hours:
+          oneOf: [{type: 'null'}, {$ref: '#/components/schemas/WatchSchedule'}]
+          description: null removes the schedule.
+    FeedbackRequest:
+      type: object
+      required: [feedback]
+      properties:
+        feedback: {type: string, enum: [relevant, not_relevant]}
+    MemorySearchResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [event, score]
+            properties:
+              event: {$ref: '#/components/schemas/Event'}
+              score: {type: number}
+    WebhookCreate:
+      type: object
+      required: [url, events]
+      properties:
+        url: {type: string, format: uri}
+        events: {type: array, minItems: 1, items: {type: string}, description: 'Event types to deliver: exact types (detection.person, detection.laptop), "*" for everything, or a prefix wildcard such as "detection.*"'}
+    GrantCreate:
+      type: object
+      required: [agent_id, source_ids, senses]
+      properties:
+        agent_id: {type: string}
+        source_ids: {type: array, minItems: 1, items: {type: string}}
+        senses: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Sense'}}
+        abilities: {type: array, items: {type: string, enum: [watch, history]}, description: 'Default both (ADR 0048)'}
+        window:
+          type: object
+          properties:
+            from: {type: string, format: date-time}
+            to: {type: string, format: date-time}
+    AgentConnect:
+      type: object
+      required: [client_name, redirect_host, binding, source_ids, senses]
+      additionalProperties: false
+      properties:
+        client_name: {type: string, minLength: 1, maxLength: 100, description: The name the MCP client registered with}
+        redirect_host: {type: string, minLength: 1, maxLength: 255, description: Where the MCP service sends the authorization code}
+        binding: {type: string, pattern: '^[A-Za-z0-9_-]{43}$', description: From the MCP service's authorization request (base64url SHA-256 of its nonce)}
+        source_ids: {type: array, minItems: 1, items: {type: string}}
+        senses: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Sense'}}
+        abilities: {type: array, items: {type: string, enum: [watch, history]}}
+        window:
+          type: object
+          properties:
+            from: {type: string, format: date-time}
+            to: {type: string, format: date-time}
+    AuditEntry:
+      type: object
+      required: [id, actor, action, target, occurred_at]
+      properties:
+        id: {type: string}
+        actor: {type: string, description: '`owner:<key prefix>` or `agent:<agent id>`'}
+        status: {type: integer, description: HTTP status of the request}
+        action: {type: string}
+        target: {type: string}
+        occurred_at: {type: string, format: date-time}
+    ExportResponse:
+      type: object
+      required: [export_id, status]
+      properties:
+        export_id: {type: string}
+        status: {type: string, enum: [pending, ready]}
+        url: {type: string, format: uri, description: 'Signed link to the JSON export (media as signed links inside), valid 1 hour'}
+        expires_at: {type: string, format: date-time}
+    AgentCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+    Agent:
+      type: object
+      required: [id, name, kind, last_active_at, created_at]
+      properties:
+        id: {type: string, pattern: '^agt_[0-9A-HJKMNP-TV-Z]{26}$'}
+        name: {type: string}
+        kind: {type: string, enum: [key, app], description: '`key`: created with an API key for code; `app`: an MCP client connected on the consent page (ADR 0048)'}
+        key_prefix: {type: string, description: Prefix of its newest live key}
+        client_name: {type: string, description: Apps only}
+        redirect_host: {type: string, description: 'Apps only: the redirect host, without port (loopback as `localhost`)'}
+        connected_at: {type: string, format: date-time, description: 'Apps only: last approved'}
+        last_active_at: {type: [string, 'null'], format: date-time, description: Its last API request}
+        created_at: {type: string, format: date-time}
+    # --- Live view (ADR 0042) -----------------------------------------------
+    LiveViewRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        audio: {type: boolean, description: "Also receive the source's audio (default false). Needs an audio grant and a source that records audio."}
+    LiveViewSession:
+      type: object
+      required: [session_id, media_url, token, expires_at, idle_timeout_seconds]
+      properties:
+        session_id: {type: string, description: 'Live session id (lv_...)'}
+        media_url: {type: string, format: uri, description: WebSocket signalling URL (ws:// or wss://)}
+        token: {type: string, description: Single-use media token for the signalling `join` frame}
+        expires_at: {type: string, format: date-time, description: Join with the token before this time}
+        idle_timeout_seconds: {type: integer, description: "The viewer is closed after this long without a keepalive (POST /live/{session_id}/keepalive)"}
+        audio: {type: boolean, description: Whether this session includes audio}
+    # --- end live view ------------------------------------------------------
+    AgentCreated:
+      allOf:
+        - {$ref: '#/components/schemas/Agent'}
+        - type: object
+          required: [api_key]
+          properties:
+            api_key: {type: string, description: 'Shown once. Use it as a Bearer token: REST API, SDK, or SENSEPLANE_API_KEY for the stdio MCP server.'}
+    # --- team and workspace (ADR 0044) -----------------------------------------
+    Role:
+      type: string
+      enum: [owner, admin, member, viewer]
+    User:
+      type: object
+      required: [id, email, name]
+      properties:
+        id: {type: string}
+        email: {type: string, format: email}
+        name: {type: [string, 'null']}
+    Me:
+      type: object
+      required: [user, role, account, memberships]
+      properties:
+        user:
+          oneOf:
+            - {$ref: '#/components/schemas/User'}
+            - {type: 'null'}
+        role: {$ref: '#/components/schemas/Role'}
+        account:
+          type: object
+          required: [id, name, time_zone]
+          properties:
+            id: {type: string}
+            name: {type: string}
+            time_zone: {type: string}
+        memberships:
+          type: array
+          description: Every workspace the user belongs to (empty for API keys)
+          items:
+            type: object
+            required: [account, role]
+            properties:
+              account:
+                type: object
+                required: [id, name]
+                properties:
+                  id: {type: string}
+                  name: {type: string}
+              role: {$ref: '#/components/schemas/Role'}
+    MeUpdate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: {type: [string, 'null'], maxLength: 100}
+    WorkspaceSwitch:
+      type: object
+      required: [account_id]
+      additionalProperties: false
+      properties:
+        account_id: {type: string}
+    ConsoleSession:
+      type: object
+      required: [session, expires_at, account_id]
+      properties:
+        session: {type: string, description: An expiring API key (sk_…) for console use}
+        expires_at: {type: string, format: date-time}
+        account_id: {type: string}
+    Member:
+      type: object
+      required: [id, email, name, role, joined_at]
+      properties:
+        id: {type: string, description: User ID}
+        email: {type: string, format: email}
+        name: {type: [string, 'null']}
+        role: {$ref: '#/components/schemas/Role'}
+        joined_at: {type: string, format: date-time}
+    MemberUpdate:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role: {$ref: '#/components/schemas/Role'}
+    InviteCreate:
+      type: object
+      required: [email, role]
+      additionalProperties: false
+      properties:
+        email: {type: string, format: email, maxLength: 254}
+        role: {$ref: '#/components/schemas/Role'}
+    Invite:
+      type: object
+      required: [id, email, role, status, invited_by, created_at, expires_at]
+      properties:
+        id: {type: string}
+        email: {type: string, format: email}
+        role: {$ref: '#/components/schemas/Role'}
+        status: {type: string, enum: [pending, expired, accepted, revoked]}
+        invited_by: {type: string, description: "The inviter's email, or \"API key\""}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    InviteCreated:
+      allOf:
+        - {$ref: '#/components/schemas/Invite'}
+        - type: object
+          required: [invite_url]
+          properties:
+            invite_url: {type: string, format: uri, description: "Single-use link to the console (`<console>/#invite=<token>`). Shown once."}
+    # --- Conversations (Ask; ADR 0041) -----------------------------------------
+    Conversation: {$ref: './schemas/conversation.json'}
+    Message: {$ref: './schemas/message.json'}
+    Moment: {$ref: './schemas/moment.json'}
+    SuggestedWatch: {$ref: './schemas/suggested-watch.json'}
+    ConversationCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+    MessageCreate:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content: {type: string, minLength: 1, maxLength: 2000}
+        sources: {type: array, minItems: 1, maxItems: 50, items: {type: string}, description: 'Sources to consider; default every source the key can see'}
+        from: {type: string, format: date-time, description: 'Only history from this time (default 7 days ago)'}
+        to: {type: string, format: date-time, description: 'Only history before this time (default now)'}
+        time_zone: {type: string, maxLength: 64, description: 'IANA time zone the answer should use for times (default UTC)'}
+    ConversationStreamEvent:
+      description: 'One Server-Sent Event: `event:` is the name below and `data:` its JSON.'
+      oneOf:
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: status}
+            data: {type: object, required: [text], properties: {text: {type: string}}}
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: delta}
+            data: {type: object, required: [text], properties: {text: {type: string}}}
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: moment}
+            data: {$ref: '#/components/schemas/Moment'}
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: suggested_watch}
+            data: {$ref: '#/components/schemas/SuggestedWatch'}
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: done}
+            data: {type: object, required: [message], properties: {message: {$ref: '#/components/schemas/Message'}}}
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: error}
+            data: {$ref: '#/components/schemas/Error'}
+    # --- end Conversations -----------------------------------------------------
+    # --- watch destinations (ADR 0043) -----------------------------------------
+    Destination: {$ref: './schemas/destination.json'}
+    WatchSchedule: {$ref: './schemas/watch-schedule.json'}
+    WatchTestRequest:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        instruction: {type: string, minLength: 3, maxLength: 500, description: Compiled first (like creating a watch)}
+        compiled: {type: object, description: A compiled watch (Watch.compiled) to test as is}
+        watch_id: {type: string, description: Test an existing watch (its compiled form, sources and schedule unless given)}
+        sources: {type: array, minItems: 1, maxItems: 50, items: {type: string}, description: Source ids or names}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time, description: At most 7 days after from}
+        active_hours:
+          oneOf: [{type: 'null'}, {$ref: '#/components/schemas/WatchSchedule'}]
+        max_checks: {type: integer, minimum: 0, maximum: 50, default: 10, description: Most model checks to run (each is an AI check)}
+    WatchTestMatch:
+      type: object
+      required: [source_id, source_name, at, summary, verified]
+      properties:
+        source_id: {type: string}
+        source_name: {type: string}
+        at: {type: string, format: date-time}
+        summary: {type: string}
+        snapshot_url: {type: string, format: uri, description: Signed, 15-minute expiry; absent without a snapshot or a video grant}
+        event_id: {type: string, description: The stored detection the match came from}
+        verified: {type: [boolean, 'null'], description: 'true: the model check said yes; false: the watch has a check but no model ran; null: the watch has no check'}
+        confidence: {type: [number, 'null']}
+    WatchTestResult:
+      type: object
+      required: [matches, checks_used, candidates, unchecked, compiled]
+      properties:
+        matches: {type: array, items: {$ref: '#/components/schemas/WatchTestMatch'}}
+        checks_used: {type: integer, description: Model checks run (metered as AI checks)}
+        candidates: {type: integer, description: Times the cheap trigger fired in the range}
+        unchecked: {type: integer, description: Candidates the model check did not reach (over max_checks, or no snapshot)}
+        compiled: {type: object, description: The compiled watch that was tested}
+    InboxItem:
+      type: object
+      required: [id, created_at, seen_at, event]
+      properties:
+        id: {type: string}
+        watch_id: {type: string}
+        created_at: {type: string, format: date-time}
+        seen_at: {type: [string, 'null'], format: date-time}
+        event: {$ref: '#/components/schemas/Event'}
+    InboxSeenRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        agent_id: {type: string, description: Required with an account key}
+        ids: {type: array, maxItems: 500, items: {type: string}}
+        all: {type: boolean, description: Mark every unseen item}
+    # --- end watch destinations ---------------------------------------------------

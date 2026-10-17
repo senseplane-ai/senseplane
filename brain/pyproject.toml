@@ -1,0 +1,41 @@
+[project]
+name = "senseplane-brain"
+version = "0.1.0"
+description = "Senseplane brain: signal, perception, episodes, watches, memory"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "pydantic>=2.11",
+  "prometheus-client>=0.22",
+  "numpy>=2.5.4",
+  "onnxruntime>=1.31.0",
+  "opencv-python-headless>=5.0.0.93",
+  "ai-edge-litert>=2.3.0",
+  "openai>=3.31.0",
+  "tokenizers>=0.23.3",
+  "opentelemetry-api>=1.45",
+  "opentelemetry-sdk>=1.45",
+  "opentelemetry-exporter-otlp-proto-http>=1.45",
+  "redis>=6.4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "datamodel-code-generator>=0.33",
+]
+quantize = [
+    "onnx>=1.23.2",
+    "sympy>=1.14.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/senseplane_brain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,197 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+openapi: 3.1.0
+info:
+  title: Senseplane console sign-in
+  version: 0.1.0
+  description: >-
+    Sign-in for the console (ADR 0031), served next to the /v1 API under /auth.
+    A session is an API key that expires; send it as `Authorization: Bearer` to /v1.
+    Sign-up is open in development and closed in production unless the instance sets
+    AUTH_SIGNUP (open, closed, or first: open until the first user exists), and a deployment's modules may refuse a sign-up
+    (`signup_refused`). Someone with an invite may always sign up: they join the
+    inviting workspace instead of creating one (ADR 0044).
+servers:
+  - url: "{baseUrl}"
+    variables:
+      baseUrl: {default: http://localhost:8080/auth}
+paths:
+  /providers:
+    get:
+      operationId: authProviders
+      responses:
+        '200':
+          description: What this instance offers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [password, google, github, signup, challenge]
+                properties:
+                  password: {type: boolean}
+                  google: {type: boolean}
+                  github: {type: boolean}
+                  signup: {type: boolean}
+                  challenge:
+                    oneOf:
+                      - type: "null"
+                      - type: object
+                        properties: {provider: {type: string}, site_key: {type: string}}
+                  mcp_url: {type: [string, "null"], description: "This instance's public MCP base URL (MCP_PUBLIC_URL), for connect instructions and the consent page"}
+  /signup:
+    post:
+      operationId: authSignup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Credentials'}
+      responses:
+        '201': {description: Signed up, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
+        '403': {description: "`signup_refused`"}
+        '409': {description: Email already registered}
+        '429': {description: "`rate_limited`"}
+  /login:
+    post:
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Credentials'}
+      responses:
+        '200': {description: Signed in, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
+        '401': {description: Wrong email or password}
+        '429': {description: "`rate_limited`"}
+  /logout:
+    post:
+      operationId: authLogout
+      description: "Revokes the console session sent as `Authorization: Bearer`."
+      responses:
+        '204': {description: Signed out}
+  /oauth/{provider}/start:
+    get:
+      operationId: authOAuthStart
+      parameters:
+        - {name: provider, in: path, required: true, schema: {enum: [google, github]}}
+        - {name: return_to, in: query, schema: {type: string}, description: One of the configured console URLs}
+        - {name: device_token, in: query, schema: {type: string}}
+        - {name: invite, in: query, schema: {type: string}, description: "An invite token: the provider's verified email must be the invited address; the callback joins that workspace"}
+      responses:
+        '302': {description: Redirect to the provider}
+  /invites/{token}:
+    get:
+      operationId: authInvite
+      description: What an invite link offers, for the accept page. Unknown, used, withdrawn or expired links answer `invite_invalid` with `details.reason`.
+      parameters:
+        - {name: token, in: path, required: true, schema: {type: string}, description: "The `invite` value from the link's fragment"}
+      responses:
+        '200':
+          description: A pending invite
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workspace, email, role, expires_at, existing_user, has_password]
+                properties:
+                  workspace: {type: object, required: [name], properties: {name: {type: string}}}
+                  email: {type: string, format: email}
+                  role: {enum: [owner, admin, member, viewer]}
+                  expires_at: {type: string, format: date-time}
+                  existing_user: {type: boolean, description: "True: ask for the existing password (or a provider). False: choose a password."}
+                  has_password: {type: boolean}
+        '404': {description: "`invite_invalid` (not_found)"}
+        '410': {description: "`invite_invalid` (accepted, revoked or expired)"}
+        '429': {description: "`rate_limited`"}
+  /invites/{token}/accept:
+    post:
+      operationId: authAcceptInvite
+      description: >-
+        Joins the invite's workspace and returns a session in it. With
+        `Authorization: Bearer <session>`, the signed-in user (who must have the invited
+        email) joins. Otherwise the password signs in the existing user with the invited
+        email, or signs up a new one (at least 10 characters), even when sign-up is closed.
+        Single use. Another email answers 403 `forbidden` with `details.reason` `wrong_email`.
+      parameters:
+        - {name: token, in: path, required: true, schema: {type: string}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                email: {type: string, description: Optional; must be the invited address}
+                password: {type: string}
+                name: {type: string, description: Your name (new users)}
+      responses:
+        '200': {description: Joined, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
+        '401': {description: Wrong password}
+        '403': {description: "`forbidden` (another email)"}
+        '410': {description: "`invite_invalid`"}
+        '429': {description: "`rate_limited`"}
+  /connect/redeem:
+    post:
+      operationId: authConnectRedeem
+      description: >-
+        For the MCP service (ADR 0048): exchanges a connect code from `POST /v1/agents/connect`
+        for the connected app's agent key. Single use (spent even when the checks fail), 2 minutes.
+        `nonce` must hash to the code's `binding`, and `client_name` and `redirect_host` must match
+        what was approved. Each redeem issues a new key; an app keeps its five newest keys.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, nonce, client_name, redirect_host]
+              additionalProperties: false
+              properties:
+                code: {type: string}
+                nonce: {type: string}
+                client_name: {type: string}
+                redirect_host: {type: string}
+      responses:
+        '200':
+          description: The app's key
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_key, agent_id]
+                properties:
+                  api_key: {type: string}
+                  agent_id: {type: string}
+        '400': {description: "`validation_failed` with `details.reason`: `code_invalid` or `mismatch`"}
+        '404': {description: The app was disconnected}
+        '429': {description: "`rate_limited`"}
+  /oauth/{provider}/callback:
+    get:
+      operationId: authOAuthCallback
+      description: >-
+        Redirects to the console with `#session=…&expires_at=…&account_id=…`, or
+        `#auth_error=<code>&message=…`.
+      parameters:
+        - {name: provider, in: path, required: true, schema: {enum: [google, github]}}
+        - {name: code, in: query, schema: {type: string}}
+        - {name: state, in: query, schema: {type: string}}
+      responses:
+        '302': {description: Back to the console}
+components:
+  schemas:
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string, minLength: 10, description: "At least 10 characters for sign-up"}
+        name: {type: string, description: Account name (sign-up)}
+        device_token: {type: string, description: First-party random browser token}
+        challenge_token: {type: string, description: Token from the sign-up challenge widget, if configured}
+    Session:
+      type: object
+      required: [session, expires_at, account_id]
+      properties:
+        session: {type: string, description: An expiring API key (sk_…)}
+        expires_at: {type: string, format: date-time}
+        account_id: {type: string}

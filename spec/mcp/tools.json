@@ -1,0 +1,232 @@
+{
+  "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0",
+  "version": "0.3.0",
+  "tools": [
+    {
+      "name": "list_senses",
+      "description": "List the sources and senses this agent is granted.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "output": "Sources with their granted senses."
+    },
+    {
+      "name": "look",
+      "description": "See what a camera shows now. Returns the image itself; with a question, also the answer and a confidence.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Source id or name"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "output": "An image content block, its signed URL and capture time; with a question, the answer and confidence."
+    },
+    {
+      "name": "listen",
+      "description": "Listen to a source for a few seconds. Returns the sounds it detects (for example crying, barking, glass breaking, alarms); never transcribes speech.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Source id or name"
+          },
+          "seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60,
+            "default": 10
+          }
+        }
+      },
+      "output": "Detected sound classes with confidence and time."
+    },
+    {
+      "name": "read_environment",
+      "description": "Read temperature and humidity for a source or room, with the recent trend.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Source id or name"
+          },
+          "room": {
+            "type": "string"
+          }
+        }
+      },
+      "output": "Latest values per granted sense, with trend."
+    },
+    {
+      "name": "watch_for",
+      "description": "Start watching one or more cameras for something described in plain language. People, vehicles, animals and 64 everyday objects (a cup or mug, laptop, phone, backpack or bag, chair, book, bottle, suitcase and more) are spotted on the camera itself, so \"tell me when a mug is left on the desk\" or \"alert me if someone takes the laptop\" is cheap; a vision model then checks the specific thing. Each camera is watched on its own and events name the camera. Events come to your inbox (what_happened returns new ones first; clients that accept notifications are told at once) unless notify_me is false.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "condition",
+          "sources"
+        ],
+        "properties": {
+          "condition": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Source ids or names; several cameras are fine"
+          },
+          "duration_minutes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "notify_me": {
+            "type": "boolean",
+            "default": true,
+            "description": "Send this watch's events to your inbox only (true, the default for agent keys), or to the account's webhooks (false)"
+          },
+          "active_hours": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "from",
+              "to"
+            ],
+            "description": "Only watch at these times, e.g. {from: \"18:00\", to: \"06:00\", time_zone: \"Europe/London\"}",
+            "properties": {
+              "days": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri",
+                    "sat",
+                    "sun"
+                  ]
+                }
+              },
+              "from": {
+                "type": "string",
+                "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+              },
+              "to": {
+                "type": "string",
+                "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "IANA time zone; default UTC"
+              }
+            }
+          }
+        }
+      },
+      "output": "The watch id, its compiled trigger, any warnings, where events go and when it expires."
+    },
+    {
+      "name": "what_happened",
+      "description": "Ask what happened, in plain language, over a time range (people, vehicles, animals, everyday objects such as a laptop or a backpack, sounds and watch alerts). New events from your watches (your inbox) come first and are then marked seen.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source id or name"
+          }
+        }
+      },
+      "output": "New inbox events from your watches, then matching events with summaries, snapshots and clips."
+    },
+    {
+      "name": "replay",
+      "description": "Get a playback URL for a time range, optionally saving it as a permanent clip.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Source id or name"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "save": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output": "A signed HLS URL, and the clip id when saved."
+    },
+    {
+      "name": "stop_watching",
+      "description": "Stop a watch.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "watch_id"
+        ],
+        "properties": {
+          "watch_id": {
+            "type": "string"
+          }
+        }
+      },
+      "output": "Confirmation."
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+# WHIP ingest (RFC 9725) on the media plane's public listener, and the
+# authorize callback a WHIP bearer names. See whip.md.
+openapi: 3.1.0
+info:
+  title: Senseplane WHIP ingest
+  version: 1.0.0
+paths:
+  /whip:
+    options:
+      operationId: whipOptions
+      security: []
+      responses:
+        '204':
+          description: 'CORS preflight; Accept-Post is application/sdp.'
+    post:
+      operationId: whipPublish
+      description: >-
+        Starts publishing (also accepted on any path below /whip, e.g.
+        /whip/{source_id}). The body is a complete SDP offer. H.264 video is
+        required; Opus audio is accepted when the join token may publish
+        audio, otherwise rejected in the answer (port 0). A newer session of
+        the same identity replaces the older one.
+      security:
+        - whipBearer: []
+        - queryToken: []
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: {type: string, maxLength: 65536}
+      responses:
+        '201':
+          description: SDP answer; `Location` is the session resource.
+          headers:
+            Location: {schema: {type: string}, description: '/whip/{session}'}
+          content:
+            application/sdp:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '415': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+        '502': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /whip/{session}:
+    parameters:
+      - {name: session, in: path, required: true, schema: {type: string}}
+    delete:
+      operationId: whipStop
+      security:
+        - whipBearer: []
+        - queryToken: []
+      responses:
+        '200': {description: Session ended}
+        '404': {description: 'No such session, or not this bearer''s'}
+    patch:
+      operationId: whipPatch
+      responses:
+        '405': {description: Trickle ICE and ICE restart are not supported; POST a new offer.}
+    options:
+      operationId: whipSessionOptions
+      security: []
+      responses:
+        '204': {description: CORS preflight}
+  /internal/media/whip-authorize:
+    post:
+      operationId: whipAuthorize
+      description: >-
+        Senseplane's authorize_url (any URL a bearer names works the same
+        way). Called by the WHIP ingress with the bearer as its credential;
+        answers a 10-minute join token for the bearer's room.
+      security:
+        - whipBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: 'callbacks.json#/$defs/whipAuthorizeRequest'}
+      responses:
+        '200':
+          description: Authorised
+          content:
+            application/json:
+              schema: {$ref: 'callbacks.json#/$defs/whipAuthorizeAnswer'}
+        '401': {description: Unknown, revoked or invalid bearer}
+        '403': {description: Not allowed}
+        '409': {description: 'Paused, or source_limit_reached'}
+        '429': {description: 'quota_exceeded: the account is over its ingest allowance'}
+components:
+  responses:
+    Error:
+      description: '`{"error": "<code>"}` (whip.md)'
+      content:
+        application/json:
+          schema: {type: object, required: [error], properties: {error: {type: string}}}
+  securitySchemes:
+    whipBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'The WHIP bearer (tokens.md, aud "whip").'
+    queryToken:
+      type: apiKey
+      in: query
+      name: access_token
+      description: Fallback for clients that cannot set an Authorization header (RFC 6750 §2.3). Prefer the header.

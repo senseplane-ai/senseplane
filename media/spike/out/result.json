@@ -1,0 +1,14 @@
+{
+  "recordedSeconds": 60,
+  "firstProduceMs": 832,
+  "segments": 10,
+  "segmentSecondsMin": "4.30",
+  "segmentSecondsMax": "7.95",
+  "segmentSecondsTotal": "60.25",
+  "avgSegmentKB": 193,
+  "codec": "h264 Constrained Baseline 1280x720",
+  "frameRate": "20/1",
+  "playableSeconds": "60.30",
+  "streamCopy": true,
+  "ffmpegCpuPercentAvg": "0.0"
+}

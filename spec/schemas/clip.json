@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/clip.json",
+  "title": "Clip",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "source_id",
+    "from",
+    "to",
+    "duration_ms",
+    "bytes",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^clp_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "source_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "from": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "to": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "playback_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Signed HLS URL, 15-minute expiry."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "playback_expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

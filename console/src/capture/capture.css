@@ -1,0 +1,19 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+:root { color-scheme: dark; --bg: #0b0d10; --fg: #f2f4f7; --muted: #9aa3ad; --rec: #ff3b30; --btn: #1f242b; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, -apple-system, sans-serif; }
+.capture { position: relative; height: 100dvh; display: grid; grid-template-rows: auto 1fr auto; }
+#preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+.bar, .controls, .status { position: relative; z-index: 1; }
+.bar { display: flex; justify-content: space-between; gap: 12px; padding: max(16px, env(safe-area-inset-top)) 16px 16px; background: linear-gradient(#000c, #0000); }
+.indicator { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+.name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status { align-self: end; margin: 0 16px 12px; padding: 8px 12px; border-radius: 8px; background: #000a; justify-self: start; }
+.controls { display: flex; gap: 12px; padding: 16px 16px max(16px, env(safe-area-inset-bottom)); background: linear-gradient(#0000, #000c); }
+button { flex: 1; min-height: 48px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; color: var(--fg); background: var(--btn); }
+button.danger { background: #4a1714; }
+button:disabled { opacity: .5; }
+button:focus-visible { outline: 3px solid #7cb7ff; outline-offset: 2px; }

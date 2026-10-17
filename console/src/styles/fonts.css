@@ -1,0 +1,9 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+
+/* Geist and Geist Mono (SIL Open Font License 1.1), self-hosted from the
+   @fontsource packages so the console makes no third-party font requests. */
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 400; font-display: swap; src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 500; font-display: swap; src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 600; font-display: swap; src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("../../node_modules/@fontsource/geist-mono/files/geist-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("../../node_modules/@fontsource/geist-mono/files/geist-mono-latin-500-normal.woff2") format("woff2"); }

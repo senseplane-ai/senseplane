@@ -1,0 +1,6 @@
+# The image builds its own environment and models (Dockerfile): keep local ones out of the context.
+.venv
+models
+tests
+**/__pycache__
+.pytest_cache

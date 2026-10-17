@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 -->
+<!-- Dev-only page for the live view e2e check (e2e/live-check.ts); not part of the build.
+     Open /live-test.html#a=<api url>&k=<api key>&s=<source id>[&audio=1] on the Vite dev server. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live view test</title>
+  </head>
+  <body style="margin:0;background:#0a0a0b;color:#ededef;font:14px ui-monospace,monospace">
+    <video id="video" autoplay playsinline muted style="width:100%;max-height:80vh;background:#000"></video>
+    <pre id="status">starting…</pre>
+    <script type="module" src="/src/live/test-page.ts"></script>
+  </body>
+</html>

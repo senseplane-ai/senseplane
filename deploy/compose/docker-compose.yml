@@ -1,0 +1,251 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# `docker compose up` starts the infrastructure (Postgres + pgvector, Valkey,
+# S3-compatible storage). Senseplane services start with
+# `docker compose --profile app up`: api, brain, mcp and media (ADR 0049-0051).
+#
+# Security defaults (ADR 0035):
+# - Infrastructure ports (Postgres, Valkey, object storage) are published on
+#   127.0.0.1 only. Set SP_INFRA_BIND to change that; never 0.0.0.0 on a server.
+# - Run ./init-secrets.sh once to create .env with random credentials. Without
+#   it, development defaults are used (including a development media signing
+#   key, kid dev-1), and production mode refuses to start with them.
+# Host ports are offset (5xxxx) to avoid clashing with other local stacks.
+name: senseplane
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: senseplane
+      POSTGRES_USER: senseplane
+      POSTGRES_PASSWORD: ${SP_PG_PASSWORD:-senseplane}
+      APP_DB_PASSWORD: ${SP_APP_DB_PASSWORD:-senseplane_app}
+    ports: ["${SP_INFRA_BIND:-127.0.0.1}:${SP_PG_PORT:-55432}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U senseplane -d senseplane"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Valkey (BSD-3-Clause, ADR 0051) between the API, its brains and MCP: frames,
+  # brain events, requests, shared config and the brain balancer. AOF on.
+  valkey:
+    image: valkey/valkey:8.1.4-alpine
+    command: ["sh", "-c", "exec valkey-server --appendonly yes --appendfsync everysec --requirepass \"$$VALKEY_PASSWORD\""]
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:-dev-valkey}
+    ports: ["${SP_INFRA_BIND:-127.0.0.1}:${SP_VALKEY_PORT:-56379}:6379"]
+    volumes: [valkeydata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a \"$$VALKEY_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # S3-compatible object storage: RustFS (Apache 2.0). See ADR 0013.
+  s3:
+    image: rustfs/rustfs:1.0.0
+    environment:
+      RUSTFS_ACCESS_KEY: ${SP_S3_ACCESS_KEY:-senseplane}
+      RUSTFS_SECRET_KEY: ${SP_S3_SECRET_KEY:-senseplane-secret}
+      RUSTFS_VOLUMES: /data
+    ports: ["${SP_INFRA_BIND:-127.0.0.1}:${SP_S3_PORT:-59000}:9000", "${SP_INFRA_BIND:-127.0.0.1}:${SP_S3_CONSOLE_PORT:-59001}:9001"]
+    volumes: [s3data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  s3-setup:
+    image: amazon/aws-cli:2.27.50
+    depends_on: { s3: { condition: service_healthy } }
+    environment:
+      AWS_ACCESS_KEY_ID: ${SP_S3_ACCESS_KEY:-senseplane}
+      AWS_SECRET_ACCESS_KEY: ${SP_S3_SECRET_KEY:-senseplane-secret}
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT: http://s3:9000
+      S3_BUCKET: senseplane
+      RAW_RETENTION_MAX_DAYS: ${RAW_RETENTION_MAX_DAYS:-}
+    volumes: [./s3/setup.sh:/setup.sh:ro]
+    entrypoint: ["sh", "/setup.sh"]
+    restart: "no"
+
+  api:
+    profiles: [app]
+    build: { context: ../.., dockerfile: api/Dockerfile }
+    environment:
+      DATABASE_URL: postgres://senseplane_app:${SP_APP_DB_PASSWORD:-senseplane_app}@postgres:5432/senseplane
+      MIGRATION_DATABASE_URL: postgres://senseplane:${SP_PG_PASSWORD:-senseplane}@postgres:5432/senseplane
+      VALKEY_URL: redis://:${VALKEY_PASSWORD:-dev-valkey}@valkey:6379
+      PORT: "8080"
+      # Tracing is off unless set, e.g. http://otel-collector:4318 with --profile observability (docs/observability.md).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: senseplane-api
+      # The media plane (spec/media, ADR 0049): its control API, the key the API signs
+      # tokens with (the media plane trusts its public half), and the issuer it expects.
+      # An external media plane: MEDIA_CONTROL_URL=https://<media plane> (docs/external-media-plane.md).
+      MEDIA_CONTROL_URL: ${MEDIA_CONTROL_URL:-http://media:8090}
+      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:-dev-1:LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVndCQ0lFSUJCc2ZjT2MxNGRaNW00VzErOVdWMFVaNFFid0VuR3h2T0ZjU0VCc3ZhYXMKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=}
+      MEDIA_ISSUER: ${MEDIA_ISSUER:-senseplane}
+      # Where the media plane calls back (room and feed events, presigns, frames, WHIP authorize).
+      API_CALLBACK_URL: ${API_CALLBACK_URL:-http://api:8080}
+      # Feeds of cameras offline this long are stopped; the next token starts them again.
+      FEED_IDLE_STOP_SECONDS: ${FEED_IDLE_STOP_SECONDS:-600}
+      MEDIA_MAX_VIEWERS_PER_SOURCE: ${MEDIA_MAX_VIEWERS_PER_SOURCE:-50}
+      PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET:-}
+      # Where phones open the capture page (the console). Use your HTTPS LAN URL for a real phone.
+      CAPTURE_URL: ${CAPTURE_URL:-http://localhost:5173/capture.html}
+      CORS_ORIGINS: ${CONSOLE_ORIGIN:-http://localhost:5173}
+      # Console sign-in (ADR 0031, 0044): where sign-in returns and invite links open.
+      CONSOLE_URL: ${CONSOLE_URL:-${CONSOLE_ORIGIN:-http://localhost:5173}}
+      # Unset: sign-up is open for development and closed in production mode
+      # (SENSEPLANE_MODE=production). Set AUTH_SIGNUP=open or closed to choose.
+      AUTH_SIGNUP: ${AUTH_SIGNUP:-}
+      SENSEPLANE_MODE: ${SENSEPLANE_MODE:-}
+      # The MCP server's public URL, which the console shows for connecting apps (ADR 0048).
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:${SP_MCP_PORT:-58060}}
+      # How the capture page reaches this API (exchanges its ticket for a join token).
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:${SP_API_PORT:-58080}}
+      # The media plane's public address: WHIP sources get <this>/whip/<source> (ADR 0034).
+      MEDIA_PUBLIC_URL: ${MEDIA_PUBLIC_URL:-http://localhost:${SP_MEDIA_PORT:-58090}}
+      RAW_RETENTION_DAYS: ${RAW_RETENTION_DAYS:-7}
+      RAW_RETENTION_MAX_DAYS: ${RAW_RETENTION_MAX_DAYS:-}
+      # Playback, clips and the retention sweeper (ADR 0016). Without
+      # S3_PUBLIC_ENDPOINT, segments stream through the API; set it to a
+      # browser-reachable S3 URL to redirect to presigned URLs instead.
+      S3_ENDPOINT: http://s3:9000
+      S3_BUCKET: senseplane
+      S3_ACCESS_KEY_ID: ${SP_S3_ACCESS_KEY:-senseplane}
+      S3_SECRET_ACCESS_KEY: ${SP_S3_SECRET_KEY:-senseplane-secret}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      # Where the media plane PUTs segments (presigned per object); empty = S3_ENDPOINT,
+      # which the media service reaches on this network. A remote media plane needs an internet-reachable one.
+      S3_UPLOAD_ENDPOINT: ${S3_UPLOAD_ENDPOINT:-}
+      RETENTION_SWEEP_SECONDS: ${RETENTION_SWEEP_SECONDS:-600}
+      QUOTA_MAX_SOURCES: ${QUOTA_MAX_SOURCES:-}  # empty = unlimited (self-host default)
+      QUOTA_MAX_RESOLUTION: ${QUOTA_MAX_RESOLUTION:-720p}
+      # Webhook egress (ADR 0035): private/internal destinations are refused
+      # unless allowed here. The e2e checks set WEBHOOK_ALLOW_PRIVATE=1.
+      WEBHOOK_ALLOW_PRIVATE: ${WEBHOOK_ALLOW_PRIVATE:-0}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+      # Rate limits per API key and per IP (ADR 0040); 0 turns a bucket off.
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
+      # Behind a reverse proxy, list its addresses (CIDRs) so client IPs are taken from X-Forwarded-For.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      # Live demo (ADR 0021): the website origins allowed to call /v1/demo/*, and its /try page.
+      DEMO_ORIGINS: ${DEMO_ORIGINS:-http://127.0.0.1:3002}
+      DEMO_CAPTURE_URL: ${DEMO_CAPTURE_URL:-http://127.0.0.1:3002/try}
+      # Live view (ADR 0042): viewers idle this long are closed; QUOTA_LIVE_VIEW=0 turns it off, QUOTA_MAX_LIVE_VIEWERS caps viewers per account.
+      LIVE_IDLE_TIMEOUT_SECONDS: ${LIVE_IDLE_TIMEOUT_SECONDS:-600}
+      LIVE_SWEEP_SECONDS: ${LIVE_SWEEP_SECONDS:-10}
+      QUOTA_LIVE_VIEW: ${QUOTA_LIVE_VIEW:-1}
+      QUOTA_MAX_LIVE_VIEWERS: ${QUOTA_MAX_LIVE_VIEWERS:-}
+    ports: ["${SP_API_PORT:-58080}:8080"]
+    # The bucket exists before the API starts (and `up --wait` treats the finished setup job as done, not failed).
+    depends_on: { postgres: { condition: service_healthy }, valkey: { condition: service_healthy }, s3-setup: { condition: service_completed_successfully } }
+
+  # A separate deployment: the API reaches it only through the media contract.
+  media:
+    profiles: [app]
+    build: { context: ../.., dockerfile: media/Dockerfile }
+    environment:
+      PORT: "8090"
+      # Tracing is off unless set, e.g. http://otel-collector:4318 with --profile observability (docs/observability.md).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: senseplane-media
+      SENSEPLANE_TRACE_FRAMES_RATIO: ${SENSEPLANE_TRACE_FRAMES_RATIO:-0.01}
+      # Ingress and egress in one process (ADR 0050); MEDIA_ROLES splits them.
+      MEDIA_ROLES: ${MEDIA_ROLES:-ingress,egress}
+      # The public half of the API's MEDIA_SIGNING_KEY, and the issuer tokens must carry.
+      MEDIA_TOKEN_PUBLIC_KEYS: ${MEDIA_TOKEN_PUBLIC_KEYS:-dev-1:LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUNvd0JRWURLMlZ3QXlFQXhzell4NlZESzJLSldMamxtejNCeWVNMFNqem1wdWI3SmxIZHJRdE44bGs9Ci0tLS0tRU5EIFBVQkxJQyBLRVktLS0tLQo=}
+      MEDIA_INSTANCE_ID: ${MEDIA_ISSUER:-senseplane}
+      # Where browsers open signalling (returned as signal_url): wss://… behind TLS.
+      MEDIA_URL: ${MEDIA_URL:-ws://localhost:${SP_MEDIA_PORT:-58090}/}
+      MEDIA_WORKERS: "1"
+      MEDIA_RTC_PORT: "${SP_MEDIA_RTC_PORT:-40000}"
+      # The address browsers use for WebRTC: 127.0.0.1 for this machine, your LAN IP for a phone.
+      MEDIA_ANNOUNCED_ADDRESS: ${MEDIA_ANNOUNCED_ADDRESS:-127.0.0.1}
+      # Also offer the container's own address, for a bridge on this Docker network (ADR 0045).
+      MEDIA_INTERNAL_ADDRESS: ${MEDIA_INTERNAL_ADDRESS:-auto}
+      WHIP_CORS_ORIGINS: ${WHIP_CORS_ORIGINS:-}
+      MEDIA_DEV_REPLAY: ${MEDIA_DEV_REPLAY:-0}
+    ports:
+      - "${SP_MEDIA_PORT:-58090}:8090"
+      - "${SP_MEDIA_RTC_PORT:-40000}:${SP_MEDIA_RTC_PORT:-40000}/udp"
+      - "${SP_MEDIA_RTC_PORT:-40000}:${SP_MEDIA_RTC_PORT:-40000}/tcp"
+
+  brain:
+    profiles: [app]
+    build: { context: ../../brain }
+    # AI_BASE_URL and AI_API_KEY come from the git-ignored .env at the repo root (optional).
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      VALKEY_URL: redis://:${VALKEY_PASSWORD:-dev-valkey}@valkey:6379
+      PORT: "8070"
+      # Tracing is off unless set, e.g. http://otel-collector:4318 with --profile observability (docs/observability.md).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: senseplane-brain
+      # The int8 build looks at every frame; yolox_s confirms anything new before an event (ADR 0055).
+      DETECTOR_MODEL: ${DETECTOR_MODEL:-yolox_s_int8}
+      DETECTOR_CONFIRM_MODEL: ${DETECTOR_CONFIRM_MODEL:-yolox_s}
+      # ONNX Runtime threads for detection; raise on bigger CPUs (docs/self-host.md).
+      DETECTOR_THREADS: ${DETECTOR_THREADS:-4}
+      AI_MODEL_VISION: ${AI_MODEL_VISION:-anthropic/claude-haiku-5.5}
+      AI_MODEL_TEXT: ${AI_MODEL_TEXT:-anthropic/claude-sonnet-5.5}
+    depends_on: { valkey: { condition: service_healthy } }
+
+  mcp:
+    profiles: [app]
+    build: { context: ../.., dockerfile: mcp/Dockerfile }
+    environment:
+      SENSEPLANE_API_URL: http://api:8080/v1
+      SENSEPLANE_PUBLIC_API_URL: http://localhost:${SP_API_PORT:-58080}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:${SP_MCP_PORT:-58060}}
+      MCP_TOKEN_SECRET: ${MCP_TOKEN_SECRET:-dev-only-change-me}
+      # Where people approve an app (the console's /connect page, ADR 0048).
+      MCP_CONSOLE_URL: ${MCP_CONSOLE_URL:-${CONSOLE_URL:-${CONSOLE_ORIGIN:-http://localhost:5173}}}
+      # Redirect hosts the consent page shows as verified (comma-separated, e.g. claude.ai).
+      MCP_TRUSTED_REDIRECT_HOSTS: ${MCP_TRUSTED_REDIRECT_HOSTS:-}
+      VALKEY_URL: redis://:${VALKEY_PASSWORD:-dev-valkey}@valkey:6379
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
+      PORT: "8060"
+      # Tracing is off unless set, e.g. http://otel-collector:4318 with --profile observability (docs/observability.md).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: senseplane-mcp
+    ports: ["${SP_MCP_PORT:-58060}:8060"]
+
+  # Optional observability stack: docker compose --profile observability up.
+  # Collector (Apache-2.0), Jaeger (Apache-2.0) and Prometheus (Apache-2.0); no Grafana
+  # is bundled, any OTLP- or Prometheus-compatible backend works (docs/observability.md).
+  otel-collector:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: [./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro]
+    ports: ["${SP_OTLP_HTTP_PORT:-54318}:4318", "${SP_OTLP_GRPC_PORT:-54317}:4317"]
+    depends_on: [jaeger]
+
+  jaeger:
+    profiles: [observability]
+    image: jaegertracing/jaeger:2.21.0
+    ports: ["${SP_JAEGER_UI_PORT:-56686}:16686"]
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.13.4
+    volumes: [./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    ports: ["${SP_PROMETHEUS_PORT:-59090}:9090"]
+    depends_on: [otel-collector]
+
+volumes:
+  pgdata:
+  valkeydata:
+  s3data:

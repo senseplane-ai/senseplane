@@ -1,0 +1,783 @@
+{
+  "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0. The single list of what the fast detector (YOLOX, COCO 80) reports. person, vehicle and animal group COCO classes; every other COCO class is its own label. Each label is an `objects` trigger label and the event type `detection.<label>`. `name` is what people read; `words` are what the rule-based watch compiler matches (the name when absent); `min_score` (else default_min_score) is the score a track needs before it posts an event; `events: false` labels (fixtures and furniture) work in watches but never post detection events. After editing run `pnpm codegen` (it syncs the schema enums), then commit.",
+  "default_min_score": 0.55,
+  "labels": [
+    {
+      "label": "person",
+      "name": "Person",
+      "coco": [
+        0
+      ],
+      "min_score": 0.5,
+      "group": true
+    },
+    {
+      "label": "vehicle",
+      "name": "Vehicle",
+      "coco": [
+        1,
+        2,
+        3,
+        5,
+        7
+      ],
+      "min_score": 0.5,
+      "group": true
+    },
+    {
+      "label": "animal",
+      "name": "Animal",
+      "coco": [
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23
+      ],
+      "min_score": 0.6,
+      "group": true
+    },
+    {
+      "label": "airplane",
+      "name": "Airplane",
+      "coco": [
+        4
+      ],
+      "words": [
+        "airplane",
+        "aeroplane",
+        "plane",
+        "aircraft"
+      ]
+    },
+    {
+      "label": "train",
+      "name": "Train",
+      "coco": [
+        6
+      ],
+      "words": [
+        "train",
+        "tram"
+      ]
+    },
+    {
+      "label": "boat",
+      "name": "Boat",
+      "coco": [
+        8
+      ],
+      "words": [
+        "boat",
+        "ship",
+        "yacht",
+        "canoe",
+        "kayak"
+      ]
+    },
+    {
+      "label": "traffic_light",
+      "name": "Traffic light",
+      "coco": [
+        9
+      ],
+      "words": [
+        "traffic light"
+      ],
+      "events": false
+    },
+    {
+      "label": "fire_hydrant",
+      "name": "Fire hydrant",
+      "coco": [
+        10
+      ],
+      "words": [
+        "fire hydrant",
+        "hydrant"
+      ],
+      "events": false
+    },
+    {
+      "label": "stop_sign",
+      "name": "Stop sign",
+      "coco": [
+        11
+      ],
+      "words": [
+        "stop sign"
+      ],
+      "events": false
+    },
+    {
+      "label": "parking_meter",
+      "name": "Parking meter",
+      "coco": [
+        12
+      ],
+      "words": [
+        "parking meter"
+      ],
+      "events": false
+    },
+    {
+      "label": "bench",
+      "name": "Bench",
+      "coco": [
+        13
+      ],
+      "words": [
+        "bench",
+        "benches"
+      ],
+      "events": false
+    },
+    {
+      "label": "backpack",
+      "name": "Backpack",
+      "coco": [
+        24
+      ],
+      "words": [
+        "backpack",
+        "rucksack",
+        "school bag",
+        "bag"
+      ]
+    },
+    {
+      "label": "umbrella",
+      "name": "Umbrella",
+      "coco": [
+        25
+      ],
+      "words": [
+        "umbrella",
+        "brolly"
+      ]
+    },
+    {
+      "label": "handbag",
+      "name": "Handbag",
+      "coco": [
+        26
+      ],
+      "words": [
+        "handbag",
+        "purse",
+        "shopping bag",
+        "tote bag",
+        "tote"
+      ]
+    },
+    {
+      "label": "tie",
+      "name": "Tie",
+      "coco": [
+        27
+      ],
+      "words": [
+        "necktie",
+        "tie"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "suitcase",
+      "name": "Suitcase",
+      "coco": [
+        28
+      ],
+      "words": [
+        "suitcase",
+        "luggage",
+        "travel bag"
+      ]
+    },
+    {
+      "label": "frisbee",
+      "name": "Frisbee",
+      "coco": [
+        29
+      ],
+      "words": [
+        "frisbee"
+      ]
+    },
+    {
+      "label": "skis",
+      "name": "Skis",
+      "coco": [
+        30
+      ],
+      "words": [
+        "skis",
+        "ski"
+      ]
+    },
+    {
+      "label": "snowboard",
+      "name": "Snowboard",
+      "coco": [
+        31
+      ],
+      "words": [
+        "snowboard"
+      ]
+    },
+    {
+      "label": "ball",
+      "name": "Ball",
+      "coco": [
+        32
+      ],
+      "words": [
+        "sports ball",
+        "soccer ball",
+        "football",
+        "basketball",
+        "ball"
+      ]
+    },
+    {
+      "label": "kite",
+      "name": "Kite",
+      "coco": [
+        33
+      ],
+      "words": [
+        "kite"
+      ]
+    },
+    {
+      "label": "baseball_bat",
+      "name": "Baseball bat",
+      "coco": [
+        34
+      ],
+      "words": [
+        "baseball bat",
+        "bat"
+      ]
+    },
+    {
+      "label": "baseball_glove",
+      "name": "Baseball glove",
+      "coco": [
+        35
+      ],
+      "words": [
+        "baseball glove",
+        "baseball mitt"
+      ]
+    },
+    {
+      "label": "skateboard",
+      "name": "Skateboard",
+      "coco": [
+        36
+      ],
+      "words": [
+        "skateboard"
+      ]
+    },
+    {
+      "label": "surfboard",
+      "name": "Surfboard",
+      "coco": [
+        37
+      ],
+      "words": [
+        "surfboard"
+      ]
+    },
+    {
+      "label": "tennis_racket",
+      "name": "Tennis racket",
+      "coco": [
+        38
+      ],
+      "words": [
+        "tennis racket",
+        "racket",
+        "racquet"
+      ]
+    },
+    {
+      "label": "bottle",
+      "name": "Bottle",
+      "coco": [
+        39
+      ],
+      "words": [
+        "water bottle",
+        "bottle"
+      ]
+    },
+    {
+      "label": "wine_glass",
+      "name": "Wine glass",
+      "coco": [
+        40
+      ],
+      "words": [
+        "wine glass",
+        "wineglass",
+        "glass of wine"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "cup",
+      "name": "Cup",
+      "coco": [
+        41
+      ],
+      "words": [
+        "coffee cup",
+        "teacup",
+        "cup",
+        "mug"
+      ]
+    },
+    {
+      "label": "fork",
+      "name": "Fork",
+      "coco": [
+        42
+      ],
+      "words": [
+        "fork"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "knife",
+      "name": "Knife",
+      "coco": [
+        43
+      ],
+      "words": [
+        "knife",
+        "knives"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "spoon",
+      "name": "Spoon",
+      "coco": [
+        44
+      ],
+      "words": [
+        "spoon"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "bowl",
+      "name": "Bowl",
+      "coco": [
+        45
+      ],
+      "words": [
+        "bowl"
+      ]
+    },
+    {
+      "label": "banana",
+      "name": "Banana",
+      "coco": [
+        46
+      ],
+      "words": [
+        "banana"
+      ]
+    },
+    {
+      "label": "apple",
+      "name": "Apple",
+      "coco": [
+        47
+      ],
+      "words": [
+        "apple"
+      ]
+    },
+    {
+      "label": "sandwich",
+      "name": "Sandwich",
+      "coco": [
+        48
+      ],
+      "words": [
+        "sandwich"
+      ]
+    },
+    {
+      "label": "orange",
+      "name": "Orange",
+      "coco": [
+        49
+      ],
+      "words": [
+        "oranges"
+      ]
+    },
+    {
+      "label": "broccoli",
+      "name": "Broccoli",
+      "coco": [
+        50
+      ],
+      "words": [
+        "broccoli"
+      ]
+    },
+    {
+      "label": "carrot",
+      "name": "Carrot",
+      "coco": [
+        51
+      ],
+      "words": [
+        "carrot"
+      ]
+    },
+    {
+      "label": "hot_dog",
+      "name": "Hot dog",
+      "coco": [
+        52
+      ],
+      "words": [
+        "hot dog",
+        "hotdog"
+      ]
+    },
+    {
+      "label": "pizza",
+      "name": "Pizza",
+      "coco": [
+        53
+      ],
+      "words": [
+        "pizza"
+      ]
+    },
+    {
+      "label": "donut",
+      "name": "Donut",
+      "coco": [
+        54
+      ],
+      "words": [
+        "donut",
+        "doughnut"
+      ]
+    },
+    {
+      "label": "cake",
+      "name": "Cake",
+      "coco": [
+        55
+      ],
+      "words": [
+        "cake"
+      ]
+    },
+    {
+      "label": "chair",
+      "name": "Chair",
+      "coco": [
+        56
+      ],
+      "words": [
+        "armchair",
+        "chair",
+        "stool"
+      ]
+    },
+    {
+      "label": "couch",
+      "name": "Couch",
+      "coco": [
+        57
+      ],
+      "words": [
+        "couch",
+        "sofa",
+        "settee"
+      ],
+      "events": false
+    },
+    {
+      "label": "plant",
+      "name": "Plant",
+      "coco": [
+        58
+      ],
+      "words": [
+        "potted plant",
+        "houseplant",
+        "plant pot",
+        "plant"
+      ]
+    },
+    {
+      "label": "bed",
+      "name": "Bed",
+      "coco": [
+        59
+      ],
+      "words": [
+        "bed"
+      ],
+      "events": false
+    },
+    {
+      "label": "table",
+      "name": "Table",
+      "coco": [
+        60
+      ],
+      "words": [
+        "dining table",
+        "kitchen table",
+        "table"
+      ],
+      "events": false
+    },
+    {
+      "label": "toilet",
+      "name": "Toilet",
+      "coco": [
+        61
+      ],
+      "words": [
+        "toilet"
+      ],
+      "events": false
+    },
+    {
+      "label": "tv",
+      "name": "TV",
+      "coco": [
+        62
+      ],
+      "words": [
+        "television",
+        "tv set",
+        "telly",
+        "tv"
+      ],
+      "events": false
+    },
+    {
+      "label": "laptop",
+      "name": "Laptop",
+      "coco": [
+        63
+      ],
+      "words": [
+        "laptop",
+        "notebook computer",
+        "macbook",
+        "computer"
+      ]
+    },
+    {
+      "label": "computer_mouse",
+      "name": "Computer mouse",
+      "coco": [
+        64
+      ],
+      "words": [
+        "computer mouse"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "remote",
+      "name": "Remote",
+      "coco": [
+        65
+      ],
+      "words": [
+        "remote control",
+        "tv remote",
+        "remote"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "keyboard",
+      "name": "Keyboard",
+      "coco": [
+        66
+      ],
+      "words": [
+        "keyboard"
+      ]
+    },
+    {
+      "label": "phone",
+      "name": "Phone",
+      "coco": [
+        67
+      ],
+      "words": [
+        "cell phone",
+        "cellphone",
+        "mobile phone",
+        "smartphone",
+        "iphone",
+        "mobile",
+        "phone"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "microwave",
+      "name": "Microwave",
+      "coco": [
+        68
+      ],
+      "words": [
+        "microwave"
+      ],
+      "events": false
+    },
+    {
+      "label": "oven",
+      "name": "Oven",
+      "coco": [
+        69
+      ],
+      "words": [
+        "oven",
+        "stove",
+        "cooker"
+      ],
+      "events": false
+    },
+    {
+      "label": "toaster",
+      "name": "Toaster",
+      "coco": [
+        70
+      ],
+      "words": [
+        "toaster"
+      ],
+      "events": false
+    },
+    {
+      "label": "sink",
+      "name": "Sink",
+      "coco": [
+        71
+      ],
+      "words": [
+        "sink"
+      ],
+      "events": false
+    },
+    {
+      "label": "refrigerator",
+      "name": "Refrigerator",
+      "coco": [
+        72
+      ],
+      "words": [
+        "refrigerator",
+        "fridge"
+      ],
+      "events": false
+    },
+    {
+      "label": "book",
+      "name": "Book",
+      "coco": [
+        73
+      ],
+      "words": [
+        "book"
+      ]
+    },
+    {
+      "label": "clock",
+      "name": "Clock",
+      "coco": [
+        74
+      ],
+      "words": [
+        "clock"
+      ],
+      "events": false
+    },
+    {
+      "label": "vase",
+      "name": "Vase",
+      "coco": [
+        75
+      ],
+      "words": [
+        "vase"
+      ]
+    },
+    {
+      "label": "scissors",
+      "name": "Scissors",
+      "coco": [
+        76
+      ],
+      "words": [
+        "scissors"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "teddy_bear",
+      "name": "Teddy bear",
+      "coco": [
+        77
+      ],
+      "words": [
+        "teddy bear",
+        "teddy",
+        "soft toy",
+        "stuffed animal"
+      ]
+    },
+    {
+      "label": "hair_dryer",
+      "name": "Hair dryer",
+      "coco": [
+        78
+      ],
+      "words": [
+        "hair dryer",
+        "hairdryer",
+        "hair drier"
+      ],
+      "min_score": 0.6
+    },
+    {
+      "label": "toothbrush",
+      "name": "Toothbrush",
+      "coco": [
+        79
+      ],
+      "words": [
+        "toothbrush"
+      ],
+      "min_score": 0.6
+    }
+  ]
+}

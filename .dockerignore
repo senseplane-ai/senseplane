@@ -1,0 +1,13 @@
+# Build contexts at the repo root (api, media, mcp, console images): only sources.
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+.git
+.env
+.env.*
+.claude
+e2e/.artifacts
+e2e/console-admin-shots
+docs/site
+bridge/bin

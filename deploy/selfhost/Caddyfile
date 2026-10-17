@@ -1,0 +1,72 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The single front door of the self-host compose file (docker-compose.yml at
+# the repo root): HTTPS for SENSEPLANE_DOMAIN, the console, and every service
+# on the same origin. Baked into the console image; the values come from
+# /secrets/caddy.env, which the compose file's init step writes.
+#
+#   /                      the console (static; capture.html, play.html, SPA fallback)
+#   /api/*                 the API, prefix stripped (the console's default API base)
+#   /v1 /auth /playback    the API (API_PUBLIC_URL is the bare origin)
+#   /media/<token>/…       the API's signed snapshot and export links
+#   /mcp /oauth /.well-known/*  the MCP server and its OAuth metadata
+#   /whip                  the media plane's WHIP ingest
+#   /signal/               the media plane's signalling WebSocket (prefix stripped)
+#   /healthz, /healthz/mcp, /healthz/media
+#
+# WebRTC itself doesn't pass through here: browsers reach the media plane's
+# RTC port (40000 UDP and TCP) directly.
+{
+	{$CADDY_ACME_EMAIL}
+	skip_install_trust
+	admin off
+}
+
+{$SENSEPLANE_DOMAIN} {
+	{$CADDY_TLS}
+	header -Server
+
+	route {
+		# Internal endpoints never leave the Docker network.
+		@internal path /internal/* /api/internal/* /signal/control/* /control/* /metrics /api/metrics /signal/metrics
+		respond @internal 404
+
+		handle /healthz/mcp {
+			rewrite * /healthz
+			reverse_proxy mcp:8060
+		}
+		handle /healthz/media {
+			rewrite * /healthz
+			reverse_proxy media:8090
+		}
+		handle_path /api/* {
+			reverse_proxy api:8080
+		}
+		@api path /healthz /v1 /v1/* /auth/* /playback/* /media/* /.well-known/senseplane-ingest-jwks.json
+		handle @api {
+			reverse_proxy api:8080
+		}
+		@mcp path /mcp /mcp/* /oauth/* /.well-known/*
+		handle @mcp {
+			reverse_proxy mcp:8060
+		}
+		@whip path /whip /whip/*
+		handle @whip {
+			reverse_proxy media:8090
+		}
+		handle_path /signal/* {
+			reverse_proxy media:8090
+		}
+		handle {
+			root * /srv
+			@assets path /assets/*
+			header @assets Cache-Control "public, max-age=31536000, immutable"
+			@pages path / /index.html /capture.html /play.html
+			header @pages Cache-Control "no-cache"
+			encode zstd gzip
+			try_files {path} /index.html
+			file_server
+		}
+	}
+}

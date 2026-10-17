@@ -1,0 +1,19 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Overrides for the e2e suite's stack (`pnpm e2e`, e2e/run.ts), on top of
+# deploy/compose/docker-compose.yml. Everything else is set through the
+# generated env file (ports, dev replay, short live-view timeouts…).
+services:
+  api:
+    # Webhooks to the checks' receivers on the host (Linux needs the mapping; Docker Desktop has it).
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  media:
+    # The checks name fixtures by their path on this machine: mount them at the same path.
+    volumes: ["${E2E_FIXTURES:?}:${E2E_FIXTURES:?}:ro"]
+  brain:
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      # Model calls go through the suite's record/replay proxy (e2e/model-proxy.ts).
+      AI_BASE_URL: http://host.docker.internal:${E2E_MODEL_PORT:-38999}/v1
+      AI_API_KEY: e2e-model-proxy

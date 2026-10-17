@@ -1,0 +1,240 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Senseplane on one machine, over HTTPS on your domain: docs/self-host-vm.md.
+#
+#   1. Edit the settings below (nothing else in this file needs editing).
+#   2. chmod 600 docker-compose.yml        (it holds your model key)
+#   3. docker compose up -d
+#   4. Open https://<your domain> and create your account: the first person to
+#      sign up owns the workspace, then sign-up closes (invites still work).
+#
+# Passwords are in the settings below. Signing and encryption keys (playback
+# links, MCP tokens, stored webhook secrets, the media signing key) are
+# generated on first start into the `secrets` volume, unique to this install,
+# and kept across restarts and upgrades. Back that volume up with the others.
+#
+# Contributors: the development stack is deploy/compose/docker-compose.yml.
+
+x-settings: &settings
+  # The DNS name of this machine: an A record pointing at its public IP.
+  # Leave it as localhost to try Senseplane on your own computer.
+  SENSEPLANE_DOMAIN: localhost
+  # A contact address for the Let's Encrypt certificate (optional).
+  SENSEPLANE_EMAIL: ""
+  # An OpenAI-compatible model endpoint and its key (OpenRouter, or a local
+  # server such as Ollama, where any key works). Watches and questions need
+  # it; detection and recording work without.
+  AI_BASE_URL: https://openrouter.ai/api/v1
+  AI_API_KEY: ""
+  # Optional: the models (names as your endpoint knows them), and how many
+  # days raw footage is kept by default.
+  AI_MODEL_VISION: anthropic/claude-haiku-5.5
+  AI_MODEL_TEXT: anthropic/claude-sonnet-5.5
+  RAW_RETENTION_DAYS: "7"
+  # Optional: the public IP browsers send video to. By default it is what
+  # SENSEPLANE_DOMAIN resolves to; set it if that isn't this machine's address.
+  MEDIA_ANNOUNCED_ADDRESS: ""
+  # Optional: "Sign in with GitHub / Google". Create an OAuth app with the
+  # callback https://<your domain>/auth/oauth/github/callback (or /google/),
+  # then paste its client ID and secret. Empty: email and password only.
+  AUTH_GITHUB_CLIENT_ID: ""
+  AUTH_GITHUB_CLIENT_SECRET: ""
+  AUTH_GOOGLE_CLIENT_ID: ""
+  AUTH_GOOGLE_CLIENT_SECRET: ""
+  # Passwords for the database, Valkey and object storage. Change them before
+  # you put real footage here. These services never leave this machine (no
+  # ports are published), and a change takes effect on the next
+  # docker compose up -d. At least 12 characters (the storage access key: 3),
+  # no spaces, quotes or backslashes. Empty: a random one is generated and kept.
+  POSTGRES_PASSWORD: senseplane-db-password
+  VALKEY_PASSWORD: senseplane-valkey-password
+  S3_ACCESS_KEY: senseplane
+  S3_SECRET_KEY: senseplane-storage-secret
+
+# ----------------------------------------------------------------------------
+# Nothing below needs editing.
+
+name: senseplane-server
+
+x-service: &service
+  restart: unless-stopped
+  depends_on:
+    init: { condition: service_completed_successfully, restart: true }
+  volumes: ["secrets:/secrets:ro"]
+  logging: { driver: json-file, options: { max-size: 20m, max-file: "5" } }
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 3s
+  retries: 60
+
+# Each service reads its own env file from the secrets volume, then starts as usual.
+services:
+  # One-shot: secrets (created once, never rotated), public URLs from the domain,
+  # the media plane's public address, one env file per service.
+  init:
+    # The api image, running its one-off setup step.
+    image: ghcr.io/senseplane-ai/api:0.1
+    user: "0:0"
+    entrypoint: ["node", "dist/selfhost.js", "/secrets"]
+    environment:
+      <<: *settings
+      # Local testing only: other host ports (set them in a .env file next to this one).
+      SENSEPLANE_HTTPS_PORT: ${SENSEPLANE_HTTPS_PORT:-443}
+      SENSEPLANE_RTC_PORT: ${SENSEPLANE_RTC_PORT:-40000}
+    volumes: ["secrets:/secrets"]
+    restart: "no"
+
+  caddy:
+    <<: *service
+    image: ghcr.io/senseplane-ai/console:0.1
+    entrypoint: ["/bin/sh", "-c", "set -a && . /secrets/caddy.env && set +a && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
+    ports:
+      - "${SENSEPLANE_HTTP_PORT:-80}:80"
+      - "${SENSEPLANE_HTTPS_PORT:-443}:443"
+      - "${SENSEPLANE_HTTPS_PORT:-443}:443/udp"
+    volumes: ["secrets:/secrets:ro", "caddy-data:/data", "caddy-config:/config"]
+
+  api:
+    <<: *service
+    image: ghcr.io/senseplane-ai/api:0.1
+    entrypoint: ["/bin/sh", "-c", "set -a && . /secrets/api.env && set +a && exec node --import @senseplane/telemetry/register dist/server.js"]
+    depends_on:
+      init: { condition: service_completed_successfully, restart: true }
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      s3-setup: { condition: service_completed_successfully }
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  mcp:
+    <<: *service
+    image: ghcr.io/senseplane-ai/mcp:0.1
+    entrypoint: ["/bin/sh", "-c", "set -a && . /secrets/mcp.env && set +a && exec node --import @senseplane/telemetry/register dist/server.js"]
+    depends_on:
+      init: { condition: service_completed_successfully, restart: true }
+      valkey: { condition: service_healthy }
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8060/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  # The bundled open-source media plane (spec/media). WebRTC goes to its RTC port directly.
+  media:
+    <<: *service
+    image: ghcr.io/senseplane-ai/media:0.1
+    entrypoint: ["/bin/sh", "-c", "set -a && . /secrets/media.env && set +a && exec node --import @senseplane/telemetry/register dist/server.js"]
+    ports:
+      - "${SENSEPLANE_RTC_PORT:-40000}:${SENSEPLANE_RTC_PORT:-40000}/udp"
+      - "${SENSEPLANE_RTC_PORT:-40000}:${SENSEPLANE_RTC_PORT:-40000}/tcp"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+  brain:
+    <<: *service
+    image: ghcr.io/senseplane-ai/brain:0.1
+    entrypoint: ["/bin/sh", "-c", "set -a && . /secrets/brain.env && set +a && exec /app/.venv/bin/python -m senseplane_brain"]
+    depends_on:
+      init: { condition: service_completed_successfully, restart: true }
+      valkey: { condition: service_healthy }
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8070/healthz', timeout=2)"]
+
+  postgres:
+    <<: *service
+    image: pgvector/pgvector:pg17
+    entrypoint: ["/bin/sh", "/usr/local/bin/senseplane-postgres.sh"]
+    environment: { POSTGRES_DB: senseplane, POSTGRES_USER: senseplane }
+    volumes:
+      - secrets:/secrets:ro
+      - pgdata:/var/lib/postgresql/data
+    configs:
+      - { source: postgres-init, target: /docker-entrypoint-initdb.d/01-init.sh, mode: 0555 }
+      - { source: postgres-start, target: /usr/local/bin/senseplane-postgres.sh, mode: 0555 }
+    healthcheck:
+      <<: *healthcheck
+      # Healthy once the passwords in the secrets volume are the database's.
+      test: ["CMD-SHELL", "test -f /tmp/senseplane-passwords && pg_isready -U senseplane -d senseplane"]
+
+  # Valkey (BSD-3-Clause): the bus and shared state between the API, brains and MCP.
+  valkey:
+    <<: *service
+    image: valkey/valkey:8.1.4-alpine
+    command: ["valkey-server", "/secrets/valkey.conf"]
+    volumes: ["secrets:/secrets:ro", "valkeydata:/data"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", ". /secrets/valkey.env && REDISCLI_AUTH=\"$$VALKEY_PASSWORD\" valkey-cli ping | grep -q PONG"]
+
+  # S3-compatible object storage: RustFS (Apache 2.0).
+  s3:
+    <<: *service
+    image: rustfs/rustfs:1.0.0
+    entrypoint: ["/bin/sh", "-c", "set -a && . /secrets/s3.env && set +a && exec /entrypoint.sh rustfs"]
+    environment: { RUSTFS_VOLUMES: /data }
+    volumes: ["secrets:/secrets:ro", "s3data:/data"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null"]
+
+  # One-shot: creates the bucket if it isn't there.
+  s3-setup:
+    image: rustfs/rustfs:1.0.0
+    depends_on: { s3: { condition: service_healthy } }
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        . /secrets/s3.env
+        s3() { printf 'user = "%s:%s"\n' "$$RUSTFS_ACCESS_KEY" "$$RUSTFS_SECRET_KEY" | curl -fsS -K - --aws-sigv4 aws:amz:us-east-1:s3 "$$@"; }
+        s3 -o /dev/null -I http://s3:9000/senseplane 2>/dev/null || s3 -o /dev/null -X PUT http://s3:9000/senseplane
+        echo "bucket senseplane ready"
+    volumes: ["secrets:/secrets:ro"]
+    restart: "no"
+
+configs:
+  # Runs once, when the database is first created: the pgvector extension and
+  # the non-superuser role the API connects as, so row-level security applies.
+  postgres-init:
+    content: |
+      #!/bin/sh
+      psql -v ON_ERROR_STOP=1 -v app_pw="$$APP_DB_PASSWORD" --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" <<'SQL'
+      CREATE EXTENSION IF NOT EXISTS vector;
+      SELECT format('CREATE ROLE senseplane_app LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS', :'app_pw')
+      WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'senseplane_app') \gexec
+      GRANT CONNECT ON DATABASE senseplane TO senseplane_app;
+      GRANT USAGE ON SCHEMA public TO senseplane_app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO senseplane_app;
+      SQL
+
+  # Every start: Postgres reads its password only when the database is first
+  # created, so this sets both roles' passwords to the ones in the secrets
+  # volume (over the local socket), then marks the service ready.
+  postgres-start:
+    content: |
+      #!/bin/sh
+      set -a && . /secrets/postgres.env && set +a
+      rm -f /tmp/senseplane-passwords
+      docker-entrypoint.sh postgres &
+      pid=$$!
+      trap 'kill -TERM $$pid' TERM INT
+      # Wait for the real server (the first-start setup runs a temporary one without TCP).
+      until pg_isready -h 127.0.0.1 -U senseplane -d senseplane -q; do kill -0 $$pid 2>/dev/null || exit 1; sleep 1; done
+      psql -v ON_ERROR_STOP=1 -q -U senseplane -d senseplane -v pg_pw="$$POSTGRES_PASSWORD" -v app_pw="$$APP_DB_PASSWORD" <<'SQL'
+      SELECT format('ALTER ROLE senseplane PASSWORD %L', :'pg_pw') \gexec
+      SELECT format('ALTER ROLE senseplane_app PASSWORD %L', :'app_pw') WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'senseplane_app') \gexec
+      SQL
+      touch /tmp/senseplane-passwords
+      wait $$pid
+
+volumes:
+  secrets:
+  pgdata:
+  valkeydata:
+  s3data:
+  caddy-data:
+  caddy-config:

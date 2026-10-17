@@ -1,0 +1,435 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+# The media control API (ADR 0049). Public: every call but healthz carries a
+# single-use Ed25519 control token, so the network is not the authentication.
+openapi: 3.1.0
+info:
+  title: Senseplane media control API
+  version: 1.0.0
+  description: >-
+    Rooms, participants and egress on a media plane. Called by the Senseplane
+    API with a fresh control token per call (`tokens.md`). Errors are
+    `{ "error": "<short text>", "detail"?: "<text>" }`; a client must not
+    branch on the text. Unknown response fields must be ignored.
+security:
+  - controlToken: []
+paths:
+  /control/healthz:
+    get:
+      operationId: healthz
+      security: []
+      description: Whether this listener and the store it coordinates through answer. Says nothing about rooms.
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema: {type: object, required: [ok], properties: {ok: {const: true}}}
+        '503':
+          description: Coordination unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+
+  /control/rooms:
+    post:
+      operationId: createRoom
+      description: >-
+        Creates a room, or returns the existing one unchanged (idempotent; a
+        room that has ended is created again). A bad value cannot be fixed by
+        retrying: delete the room first. Joins into a room that was never
+        created fail with `no_such_room`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roomId]
+              properties:
+                roomId: {type: string, minLength: 1, maxLength: 200}
+                emptyTimeoutSeconds:
+                  type: integer
+                  minimum: 1
+                  description: How long the room lives with nobody who keeps it alive in it (default 300).
+                maxParticipants:
+                  type: integer
+                  minimum: 1
+                  description: Joins beyond this fail with `capacity`. A participant replacing its own identity does not count twice.
+                metadata: {type: object, additionalProperties: {type: string}}
+                callback: {$ref: '#/components/schemas/Callback'}
+                options: {$ref: '#/components/schemas/RoomOptions'}
+      responses:
+        '200':
+          description: The room (new or existing)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roomId, createdAt, signal_url]
+                properties:
+                  roomId: {type: string}
+                  createdAt: {type: string, format: date-time}
+                  signal_url: {type: string, description: 'Where clients open their signalling WebSocket (ws:// or wss://)'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /control/rooms/{roomId}:
+    parameters:
+      - {name: roomId, in: path, required: true, schema: {type: string}, description: URL-encoded}
+    get:
+      operationId: getRoom
+      responses:
+        '200':
+          description: The room as seen from outside. No nodes, no transports.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roomId, status, createdAt, participantCount, participants]
+                properties:
+                  roomId: {type: string}
+                  status: {enum: [live, ended]}
+                  createdAt: {type: string, format: date-time}
+                  endedAt: {type: string, format: date-time}
+                  endedReason: {type: string}
+                  participantCount: {type: integer, minimum: 0}
+                  participants:
+                    type: array
+                    items:
+                      type: object
+                      required: [identity, kind, joinedAt, publishing]
+                      properties:
+                        identity: {type: string}
+                        name: {type: string}
+                        kind: {enum: [human, agent, egress, sip, ingress]}
+                        joinedAt: {type: string, format: date-time}
+                        publishing:
+                          type: array
+                          items:
+                            type: object
+                            required: [producerId, kind, paused]
+                            properties:
+                              producerId: {type: string}
+                              kind: {enum: [audio, video]}
+                              paused: {type: boolean}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      operationId: deleteRoom
+      description: Ends the room for everyone (they get `roomClosed` with reason `room_closed`). Idempotent.
+      responses:
+        '204': {description: Ended, or there was no such room}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /control/rooms/{roomId}/participants/{identity}:
+    parameters:
+      - {name: roomId, in: path, required: true, schema: {type: string}}
+      - {name: identity, in: path, required: true, schema: {type: string}}
+    delete:
+      operationId: removeParticipant
+      description: >-
+        Ends the participant's session wherever it is served. The client gets
+        `roomClosed` with `reason` (default `room_closed`) and a 1008 close.
+        The removal time is recorded: a join token for this identity issued
+        before it (`iat` earlier) is refused with `unauthorized`. Idempotent,
+        204 whether or not the participant was there.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  pattern: '^[a-z][a-z0-9_]{0,63}$'
+                  description: >-
+                    Passed through as `roomClosed.reason`. Senseplane uses
+                    expired, allowance_exhausted, resolution_not_in_plan,
+                    idle, source_offline, revoked, ended.
+      responses:
+        '204': {description: Removed (or was not there)}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /control/egress:
+    post:
+      operationId: startEgress
+      description: >-
+        Starts an egress session for a room, or returns the session already
+        running under this `sessionId` (idempotent: 200 with its snapshot).
+        The room must exist (404 otherwise). A camera feed has exactly one
+        `segments` and/or one `frames` sink, nothing else, and a `callback`.
+        The egress joins the room with `joinToken` (`kind: "egress"`,
+        `transport: "pipe"`), waits for a publisher's video, and follows
+        every new publisher of the room for as long as it runs: a camera that
+        drops and comes back is a new run of the same session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, room, joinToken, sinks]
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  pattern: '^[A-Za-z0-9._-]+$'
+                  description: The caller's id for the session; letters, digits, '.', '_' and '-'; not '.' or '..'
+                room: {type: string, minLength: 1, maxLength: 200}
+                joinToken: {type: string, minLength: 1, description: Forwarded to the egress unread}
+                sinks:
+                  type: array
+                  minItems: 1
+                  maxItems: 8
+                  items: {oneOf: [{$ref: '#/components/schemas/SegmentsSink'}, {$ref: '#/components/schemas/FramesSink'}]}
+                select:
+                  type: object
+                  properties:
+                    identities: {type: array, items: {type: string}, maxItems: 500}
+                    kinds: {type: array, items: {type: string}, maxItems: 8}
+                callback: {$ref: '#/components/schemas/Callback'}
+                maxDurationSeconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 31622400
+                  description: Feeds have no 24 h ceiling; omit to run until stopped.
+      responses:
+        '200':
+          description: Already running under this sessionId
+          content: {application/json: {schema: {$ref: '#/components/schemas/EgressSnapshot'}}}
+        '201':
+          description: Started (a media plane may answer 202 instead)
+          content: {application/json: {schema: {$ref: '#/components/schemas/EgressSnapshot'}}}
+        '202':
+          description: Accepted and starting
+          content: {application/json: {schema: {$ref: '#/components/schemas/EgressSnapshot'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {description: The sessionId is claimed by an egress that is gone; retry later or use a new id}
+        '503': {description: No egress has capacity}
+    get:
+      operationId: listEgress
+      parameters:
+        - {name: room, in: query, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: The room's egress sessions
+          content:
+            application/json:
+              schema: {type: object, required: [sessions], properties: {sessions: {type: array, items: {$ref: '#/components/schemas/EgressSnapshot'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /control/egress/{sessionId}:
+    parameters:
+      - {name: sessionId, in: path, required: true, schema: {type: string}}
+    get:
+      operationId: getEgress
+      responses:
+        '200':
+          description: The session (terminal sessions are remembered for a while)
+          content: {application/json: {schema: {$ref: '#/components/schemas/EgressSnapshot'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      operationId: stopEgress
+      description: >-
+        Stops the session: the open segment is closed and uploaded, then
+        `source.offline` and `egress.session.ended` are sent. Idempotent: a
+        terminal session answers its terminal snapshot.
+      responses:
+        '200':
+          description: Stopped (or already terminal)
+          content: {application/json: {schema: {$ref: '#/components/schemas/EgressSnapshot'}}}
+        '202':
+          description: Stopping
+          content: {application/json: {schema: {$ref: '#/components/schemas/EgressSnapshot'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /control/usage:
+    get:
+      operationId: usage
+      description: >-
+        Point-in-time totals for the whole media plane. Not metered: callers
+        count minutes from the callbacks they receive. `from`/`to` are echoed.
+      parameters:
+        - {name: from, in: query, schema: {type: string}}
+        - {name: to, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: Live totals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [at, metered, live]
+                properties:
+                  at: {type: string, format: date-time}
+                  metered: {const: false}
+                  from: {type: [string, 'null']}
+                  to: {type: [string, 'null']}
+                  live:
+                    type: object
+                    required: [rooms, participants, producers, consumers]
+                    properties:
+                      rooms: {type: integer, minimum: 0}
+                      participants: {type: integer, minimum: 0}
+                      producers: {type: integer, minimum: 0}
+                      consumers: {type: integer, minimum: 0}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+components:
+  securitySchemes:
+    controlToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'A control token (tokens.md): EdDSA, aud "control", our iss, at most 60 s as minted, single use.'
+  responses:
+    Unauthorized:
+      description: 'Missing, invalid, expired or replayed control token. Body `{"error":"unauthorized"}`; never says why.'
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    BadRequest:
+      description: The body did not match this contract
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NotFound:
+      description: No such room or session here
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+        detail: {type: string}
+    Callback:
+      type: object
+      required: [url, token]
+      description: Where callbacks go and the bearer they carry (callbacks.json). The token is the caller's own; it is echoed, never interpreted.
+      properties:
+        url: {type: string, format: uri, pattern: '^https?://'}
+        token: {type: string, minLength: 1}
+    RoomOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        liveness:
+          enum: [humans, any]
+          description: '"any": the room stays alive while any participant other than an egress is in it (a camera pushed through WHIP is kind ingress). Default "humans" (human, sip).'
+        codecs:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {enum: [opus, vp8, h264]}
+          description: The room's codec families. "h264" brings H.264 Constrained Baseline (42e01f) and Main (4d001f). A produce of a family not listed fails.
+        onDuplicateIdentity:
+          const: replace
+          description: What every room does (signalling.md); accepted so a caller can state it.
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {enum: [participant.joined, participant.left, producer.added, producer.removed]}
+          description: Room events POSTed to `callback` (callbacks.json). Needs a callback.
+    SegmentsSink:
+      type: object
+      required: [kind, keyPrefix, destination]
+      additionalProperties: false
+      properties:
+        kind: {const: segments}
+        keyPrefix:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: 'Used verbatim: raw/{account_id}/{source_id}/. No leading "/" and no ".." segment.'
+        segmentSeconds: {type: integer, minimum: 1, maximum: 30, default: 6}
+        maxResolution:
+          enum: [720p, 1080p]
+          description: Checked on the init segment before anything is stored. Above it, the run is cut, nothing is uploaded and resolution_rejected is sent.
+        destination: {$ref: '#/components/schemas/Destination'}
+        audio: {type: boolean, default: true, description: Mux the publisher's audio producer when there is one}
+        metadata:
+          type: object
+          maxProperties: 16
+          additionalProperties: {type: string, maxLength: 200}
+          description: Echoed into every feed event's data (Senseplane sends account_id and source_id)
+    FramesSink:
+      type: object
+      required: [kind]
+      additionalProperties: false
+      properties:
+        kind: {const: frames}
+        fps: {type: integer, minimum: 1, maximum: 5, default: 5}
+        batchMs:
+          type: integer
+          minimum: 100
+          maximum: 1000
+          default: 1000
+          description: Send the frames gathered so far at least this often. Alerts wait on the batch, so a shorter interval means faster alerts (Senseplane asks for 200). Audio still goes about once a second, as each second fills.
+        audio: {type: boolean, default: true, description: Include 1 s of 16 kHz mono f32le PCM per batch}
+        metadata:
+          type: object
+          maxProperties: 16
+          additionalProperties: {type: string, maxLength: 200}
+    Destination:
+      oneOf:
+        - type: object
+          required: [type]
+          additionalProperties: false
+          properties:
+            type: {const: presign-callback}
+          description: 'Preferred. For each object the egress asks the session callback {op: "upload_url"} and PUTs the bytes to the answer. No credential reaches the media plane.'
+        - type: object
+          required: [type, bucket, endpoint, region, credentials]
+          additionalProperties: false
+          properties:
+            type: {const: s3}
+            bucket: {type: string, minLength: 1, maxLength: 255}
+            endpoint: {type: string, format: uri}
+            region: {type: string, minLength: 1, maxLength: 64}
+            credentials:
+              type: object
+              required: [accessKeyId, secretAccessKey]
+              properties:
+                accessKeyId: {type: string}
+                secretAccessKey: {type: string}
+                sessionToken: {type: string}
+                expiresAt: {type: string, format: date-time, description: 'Refreshed through {op: "credentials"} about a minute before'}
+          description: Short-lived, prefix-scoped credentials, held in memory only and never logged or returned.
+    EgressSnapshot:
+      type: object
+      required: [sessionId, room, status, startedAt]
+      description: Unknown fields must be ignored. Credentials and upload URLs never appear here.
+      properties:
+        sessionId: {type: string}
+        room: {type: string}
+        status: {enum: [starting, waiting, recording, stopping, finished, failed]}
+        startedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        error: {type: string}
+        streams:
+          type: array
+          items:
+            type: object
+            properties:
+              producerId: {type: string}
+              identity: {type: string}
+              kind: {enum: [audio, video]}
+        artifacts: {type: array, description: Always empty for a feed (segments are announced one by one)}
+        feed:
+          type: object
+          properties:
+            runs: {type: integer}
+            segmentsWritten: {type: integer}
+            lastSegmentAt: {type: string, format: date-time}
+            rejected:
+              type: object
+              properties:
+                width: {type: integer}
+                height: {type: integer}
+                maxResolution: {enum: [720p, 1080p]}

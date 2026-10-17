@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/conversation.json",
+  "title": "Conversation",
+  "description": "A chat about what the sources saw and heard. An account key sees the account's conversations; an agent key sees only its own.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^cnv_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Given on create, or taken from the first question."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "messages": {
+      "type": "array",
+      "description": "Only on GET /v1/conversations/{id}: every message, oldest first.",
+      "items": {
+        "$ref": "message.json"
+      }
+    }
+  }
+}

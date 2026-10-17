@@ -1,0 +1,22 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build the images from this checkout instead of pulling them (contributors,
+# or trying a change on a VM):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+
+services:
+  init:
+    # The api image built below, not the published one.
+    pull_policy: never
+  caddy:
+    build: { context: ., dockerfile: console/Dockerfile }
+  api:
+    build: { context: ., dockerfile: api/Dockerfile }
+  mcp:
+    build: { context: ., dockerfile: mcp/Dockerfile }
+  media:
+    build: { context: ., dockerfile: media/Dockerfile }
+  brain:
+    build: { context: brain }

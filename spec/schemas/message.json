@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/message.json",
+  "title": "Message",
+  "description": "One turn of a conversation. Assistant content cites moments as [1], [2], \u2026 in the order of `moments`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "role",
+    "content",
+    "moments",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^msg_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "role": {
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "content": {
+      "type": "string"
+    },
+    "moments": {
+      "type": "array",
+      "items": {
+        "$ref": "moment.json"
+      }
+    },
+    "suggested_watch": {
+      "$ref": "suggested-watch.json"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "feedback": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "helpful",
+        "not_helpful",
+        null
+      ],
+      "description": "Assistant messages: the reader's feedback on the answer (POST .../messages/{mid}/feedback), null until given."
+    }
+  }
+}

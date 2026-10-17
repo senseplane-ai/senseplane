@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/source.json",
+  "title": "Source",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "type",
+    "senses",
+    "status",
+    "record_audio",
+    "zones",
+    "privacy_masks",
+    "created_at",
+    "retention_days"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^src_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "location": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "browser",
+        "sensor",
+        "whip",
+        "rtsp",
+        "rtmp",
+        "bridge_camera"
+      ],
+      "description": "rtsp: an IP camera relayed by a bridge (ADR 0045). rtmp and bridge_camera are reserved."
+    },
+    "senses": {
+      "type": "array",
+      "items": {
+        "$ref": "sense.json"
+      },
+      "uniqueItems": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "online",
+        "reconnecting",
+        "offline",
+        "paused"
+      ],
+      "description": "reconnecting: a bridge camera whose bridge is trying to reach it again (ADR 0045). paused: recording and analysis stopped until resumed (POST /v1/sources/{id}/resume)."
+    },
+    "record_audio": {
+      "type": "boolean"
+    },
+    "zones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "polygon"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,40}$"
+          },
+          "polygon": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[x, y] normalised to 0\u20131"
+            },
+            "minItems": 3
+          }
+        }
+      }
+    },
+    "privacy_masks": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] normalised to 0\u20131"
+        },
+        "minItems": 3
+      }
+    },
+    "ingest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token"
+      ],
+      "properties": {
+        "capture_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Browser sources: the capture page link (the ticket rides in the URL fragment)."
+        },
+        "whip_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "WHIP sources: the WHIP endpoint (RFC 9725). POST an SDP offer with `Authorization: Bearer <token>`."
+        },
+        "token": {
+          "type": "string",
+          "description": "Browser sources: the capture ticket. WHIP sources: the per-source bearer token. rtsp sources: the bridge token (same as bridge_token). Sensor sources: the integration token (same as integration_token). Shown only here; WHIP, bridge and integration tokens stay valid until rotated or revoked."
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "When the ticket expires; null for WHIP tokens, which don't expire."
+        },
+        "bridge_id": {
+          "type": "string",
+          "description": "rtsp sources: the bridge carrying this camera."
+        },
+        "bridge_token": {
+          "type": "string",
+          "description": "rtsp sources: the bridge's bearer token (`brg_\u2026`). One bridge can carry several cameras."
+        },
+        "docker_command": {
+          "type": "string",
+          "description": "rtsp sources: a `docker run` line that starts the bridge with this token. Its `--rtsp` URL is a placeholder unless rtsp_url was given."
+        },
+        "integration_token": {
+          "type": "string",
+          "description": "Sensor sources: the bearer token for POST /sources/{id}/readings (Home Assistant and scripts)."
+        }
+      },
+      "description": "Returned only when the source is created or its ingest token is rotated. Not returned when a camera is added to an existing bridge."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "retention_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Raw retention override in days; null uses the account value."
+    },
+    "retention_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "days",
+        "fill",
+        null
+      ],
+      "description": "Overrides the account's retention mode; null follows the account."
+    },
+    "retention_max_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Fill mode: this source's own byte cap; null shares the account's cap."
+    },
+    "sensor_thresholds": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "sensor.threshold fires when a reading crosses one of these.",
+      "properties": {
+        "temperature": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "above": {
+              "type": "number"
+            },
+            "below": {
+              "type": "number"
+            }
+          }
+        },
+        "humidity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "above": {
+              "type": "number"
+            },
+            "below": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "max_resolution": {
+      "type": "string",
+      "enum": [
+        "720p",
+        "1080p"
+      ],
+      "readOnly": true,
+      "description": "Highest recording resolution allowed for the account (720p by default; set by the quota provider). Enforced at the source: the capture page requests it, and the media plane refuses a stream above it (error resolution_not_in_plan) instead of transcoding. ADR 0022."
+    },
+    "view_changed_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "readOnly": true,
+      "description": "Set when the camera's view no longer matches the one the privacy masks were drawn on (moved, zoomed, or a new aspect ratio); cleared when the masks are saved again. Check the masks."
+    },
+    "status_since": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "readOnly": true,
+      "description": "When `status` last changed."
+    },
+    "bridge_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "readOnly": true,
+      "description": "rtsp sources: the bridge carrying this camera."
+    },
+    "status_detail": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "readOnly": true,
+      "description": "rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed."
+    }
+  }
+}

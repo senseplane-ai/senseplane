@@ -1,0 +1,909 @@
+{
+  "$comment": "Internal contract between the API and the brain over Valkey (ADR 0051, 0052). Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0",
+  "version": "0.2.0",
+  "connection": "VALKEY_URL (redis://[user:password@]host:port[/db]) in the api, brain and mcp. Every key below is under the sp: prefix. Persistence (AOF) is on.",
+  "transport": {
+    "frames": {
+      "key": "stream sp:frames:{brain_id}",
+      "writer": "api (from the media plane's frames batches, masks applied)",
+      "reader": "the one brain the camera is assigned to (sp:assign)",
+      "add": "XADD sp:frames:{brain_id} MAXLEN ~ 200 * kind <frame|audio> account_id <id> source_id <id> meta <json> data <bytes> [traceparent <w3c>]",
+      "read": "XREAD BLOCK 1000 COUNT 200 STREAMS sp:frames:{brain_id} <last id, $ at start>. Fire and forget: the brain keeps only the newest frame per camera and drops frames captured more than 3 s ago, so a slow brain never builds latency.",
+      "messages": [
+        "frame",
+        "audio"
+      ]
+    },
+    "events": {
+      "key": "stream sp:brain:events",
+      "writer": "brain",
+      "reader": "api, consumer group `api` (one consumer per API instance)",
+      "add": "XADD sp:brain:events MAXLEN ~ 100000 * type <brain.event|brain.episode.closed|brain.usage> payload <json> [traceparent <w3c>]",
+      "read": "XREADGROUP GROUP api <instance> COUNT 100 BLOCK 5000 STREAMS sp:brain:events >; XACK after the event is stored. An entry not acked (the handler failed, the instance died) is re-claimed with XAUTOCLAIM after 2 s idle; after 20 deliveries it is acked and copied to sp:brain:events:dead. The API dedupes on event_key (events) and id (usage), so redelivery is harmless.",
+      "producer": "The brain retries an XADD with backoff and keeps events it could not write in a bounded backlog (oldest dropped past 1000), sent again in order on the next pass.",
+      "messages": [
+        "brain.event",
+        "brain.episode.closed",
+        "brain.usage"
+      ]
+    },
+    "requests": {
+      "key": "list sp:rpc:brain",
+      "writer": "api: LPUSH {id, method, reply_to, deadline, traceparent?, payload}",
+      "reader": "any brain with a free slot: BRPOP sp:rpc:brain. A brain only waits on the list while it has capacity, so work goes to a free brain. A request past its deadline (epoch ms) is dropped.",
+      "reply": "PUBLISH <reply_to> {id, ok: true, result} or {id, ok: false, error}. reply_to is sp:rpc:reply:{api_instance}; the API waits up to the request's timeout.",
+      "methods": [
+        "compile",
+        "ask",
+        "embed",
+        "chat",
+        "check"
+      ]
+    },
+    "changes": {
+      "key": "channel sp:changed",
+      "writer": "api (and the brain for views)",
+      "message": "{bucket: sources|watches|views, key, op: put|del}",
+      "reader": "brain: HGETALL sp:sources and sp:watches on (re)connect, then HGET or forget the named field on each message"
+    }
+  },
+  "balancer": {
+    "brains": "string sp:brain:{brain_id} = {id, cameras, cpu, threads, started_at, version}, EX 6, refreshed every 2 s; cpu is the brain process's CPU percent (100 = one core); set sp:brains lists brain ids (an id whose key is gone is dead).",
+    "assign": "hash sp:assign, field {account_id}.{source_id} = brain_id, set by the API with a compare-and-set script when the camera's first frames arrive (and again when its brain is dead). Least busy live brain wins: fewest cameras, then lowest cpu; a new brain has none, so it takes new cameras first. HDEL when the camera goes offline. A gentle rebalance moves one camera every 30 s from the busiest brain while it has 2 or more cameras more than the least busy one (lock sp:balancer:lock, NX EX 25).",
+    "takeover": "A brain that gets frames for a camera it has no pipeline for re-reads that camera's zones and watches before the first frame."
+  },
+  "markers": {
+    "description": "Shared, so a camera handed to another brain never alerts twice. All SET with NX and an expiry; a brain that loses the SET does not fire. A held or episode marker is deleted when the condition stops or the episode ends, rather than left to expire; an episode marker's value is the event_key of the event that announced the label.",
+    "keys": {
+      "sp:mark:watch:{account_id}.{watch_id}:{source_id}": "a watch fired; PX = max(cooldown_s, 1) * 1000",
+      "sp:mark:held:{account_id}.{watch_id}:{source_id}": "a sustained trigger (present, stationary, motion, sound) has fired and still holds; EX 30, refreshed while it holds, so a new brain does not fire it again",
+      "sp:mark:episode:{account_id}.{source_id}:{label}": "the label was announced in the episode still running; EX 30, refreshed while a track of it is active",
+      "sp:mark:object:{account_id}.{source_id}:{label}": "an everyday object posted an event; EX 300 (object_event_cooldown)",
+      "sp:mark:sound:{account_id}.{source_id}:{class}": "a sound event was posted; EX 30 (sound_cooldown)"
+    }
+  },
+  "kv": {
+    "sources": {
+      "key": "hash sp:sources, field {account_id}.{source_id}",
+      "writer": "api",
+      "readers": [
+        "api (privacy masks for frames)",
+        "brain (zones)"
+      ],
+      "value": {
+        "type": "object",
+        "properties": {
+          "zones": {
+            "type": "array"
+          },
+          "privacy_masks": {
+            "type": "array"
+          },
+          "record_audio": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "watches": {
+      "key": "hash sp:watches, field {account_id}.{watch_id}; HDEL when the watch is deleted, paused or expired",
+      "writer": "api",
+      "readers": [
+        "brain"
+      ],
+      "value": {
+        "type": "object",
+        "description": "{id, sources, mode, compiled, status, active_hours} (active_hours: spec/schemas/watch-schedule.json or null, ADR 0043)"
+      }
+    },
+    "views": {
+      "key": "hash sp:views, field {account_id}.{source_id}",
+      "writer": "brain",
+      "readers": [
+        "brain"
+      ],
+      "description": "Brain-owned: per source (key {account_id}.{source_id}), the reference view the current privacy masks were drawn on (a 32\u00d718 normalized grayscale thumbnail, frame size, and a hash of the masks). Used to raise source.view_changed.",
+      "value": {
+        "type": "object",
+        "required": [
+          "thumb",
+          "width",
+          "height",
+          "masks"
+        ],
+        "properties": {
+          "thumb": {
+            "type": "string",
+            "description": "base64 of 576 uint8"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "masks": {
+            "type": "string"
+          },
+          "flagged": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "snapshots": {
+      "key": "string sp:snapshot:{account_id}.{source_id}, EX 86400",
+      "writer": "brain",
+      "readers": [
+        "api"
+      ],
+      "value": "JPEG bytes of the latest masked frame (every ~10 s)"
+    }
+  },
+  "messages": {
+    "brain.event": {
+      "direction": "brain \u2192 api, on stream sp:brain:events (type = this name)",
+      "schema": {
+        "type": "object",
+        "required": [
+          "event_key",
+          "account_id",
+          "source_id",
+          "type",
+          "occurred_at",
+          "labels",
+          "confidence",
+          "summary"
+        ],
+        "properties": {
+          "event_key": {
+            "type": "string",
+            "description": "Idempotency key from the brain (episode id + label)"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "detection.person",
+              "detection.vehicle",
+              "detection.animal",
+              "detection.airplane",
+              "detection.train",
+              "detection.boat",
+              "detection.traffic_light",
+              "detection.fire_hydrant",
+              "detection.stop_sign",
+              "detection.parking_meter",
+              "detection.bench",
+              "detection.backpack",
+              "detection.umbrella",
+              "detection.handbag",
+              "detection.tie",
+              "detection.suitcase",
+              "detection.frisbee",
+              "detection.skis",
+              "detection.snowboard",
+              "detection.ball",
+              "detection.kite",
+              "detection.baseball_bat",
+              "detection.baseball_glove",
+              "detection.skateboard",
+              "detection.surfboard",
+              "detection.tennis_racket",
+              "detection.bottle",
+              "detection.wine_glass",
+              "detection.cup",
+              "detection.fork",
+              "detection.knife",
+              "detection.spoon",
+              "detection.bowl",
+              "detection.banana",
+              "detection.apple",
+              "detection.sandwich",
+              "detection.orange",
+              "detection.broccoli",
+              "detection.carrot",
+              "detection.hot_dog",
+              "detection.pizza",
+              "detection.donut",
+              "detection.cake",
+              "detection.chair",
+              "detection.couch",
+              "detection.plant",
+              "detection.bed",
+              "detection.table",
+              "detection.toilet",
+              "detection.tv",
+              "detection.laptop",
+              "detection.computer_mouse",
+              "detection.remote",
+              "detection.keyboard",
+              "detection.phone",
+              "detection.microwave",
+              "detection.oven",
+              "detection.toaster",
+              "detection.sink",
+              "detection.refrigerator",
+              "detection.book",
+              "detection.clock",
+              "detection.vase",
+              "detection.scissors",
+              "detection.teddy_bear",
+              "detection.hair_dryer",
+              "detection.toothbrush",
+              "sound.detected",
+              "watch.triggered"
+            ]
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "snapshot_jpeg_b64": {
+            "type": "string",
+            "description": "Masked frame with the subject outlined"
+          },
+          "watch_id": {
+            "type": "string"
+          },
+          "verified": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "watch.triggered only: whether a vision model confirmed it; false when the watch's check was skipped because no model is configured"
+          }
+        }
+      }
+    },
+    "brain.episode.closed": {
+      "direction": "brain \u2192 api, on stream sp:brain:events (type = this name)",
+      "schema": {
+        "type": "object",
+        "required": [
+          "event_key",
+          "account_id",
+          "source_id",
+          "ended_at"
+        ],
+        "properties": {
+          "event_key": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "brain.usage": {
+      "direction": "brain \u2192 api, on stream sp:brain:events (type = this name)",
+      "schema": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "kind",
+          "quantity",
+          "at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "vlm_calls",
+              "llm_calls",
+              "ai_checks",
+              "frames_analysed",
+              "model_cost_micro_usd"
+            ]
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "enum": [
+              "verify",
+              "look",
+              "ask",
+              "summary",
+              "compile",
+              "chat"
+            ],
+            "description": "For ai_checks: what the model call was for"
+          }
+        }
+      }
+    },
+    "frame": {
+      "direction": "api \u2192 the camera's brain, on stream sp:frames:{brain_id} (kind = frame)",
+      "schema": {
+        "type": "object",
+        "required": [
+          "captured_at",
+          "width",
+          "height",
+          "format"
+        ],
+        "properties": {
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "width": {
+            "const": 640
+          },
+          "height": {
+            "const": 360
+          },
+          "format": {
+            "const": "jpeg"
+          },
+          "masked": {
+            "type": "boolean",
+            "description": "Privacy masks were blacked out by the API (always applied when the source has any)"
+          }
+        }
+      },
+      "payload": "data = one JPEG, 640x360 letterboxed, privacy masks already blacked out"
+    },
+    "audio": {
+      "direction": "api \u2192 the camera's brain, on stream sp:frames:{brain_id} (kind = audio)",
+      "schema": {
+        "type": "object",
+        "required": [
+          "captured_at",
+          "sample_rate",
+          "samples",
+          "format"
+        ],
+        "properties": {
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sample_rate": {
+            "const": 16000
+          },
+          "samples": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "format": {
+            "const": "f32le_mono"
+          }
+        }
+      },
+      "payload": "data = about 1 s of f32le mono PCM at 16 kHz"
+    }
+  },
+  "requests": {
+    "compile": {
+      "direction": "api \u2192 brain",
+      "request": {
+        "type": "object",
+        "required": [
+          "instruction",
+          "zones"
+        ],
+        "properties": {
+          "instruction": {
+            "type": "string"
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "has_audio": {
+            "type": "boolean"
+          },
+          "senses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "account_id": {
+            "type": "string",
+            "description": "For metering the compile as an AI check (ADR 0025)"
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "required": [
+          "compiled",
+          "estimate",
+          "warnings"
+        ],
+        "properties": {
+          "compiled": {
+            "type": "object",
+            "description": "Watch.compiled (spec/schemas/watch.json)"
+          },
+          "estimate": {
+            "type": "object"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "compiler": {
+            "enum": [
+              "llm",
+              "rules"
+            ]
+          }
+        }
+      }
+    },
+    "ask": {
+      "direction": "api \u2192 brain",
+      "request": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "source_id",
+          "question"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "describe": {
+            "type": "boolean"
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "snapshot_jpeg_b64": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "embed": {
+      "direction": "api \u2192 brain",
+      "request": {
+        "type": "object",
+        "required": [
+          "texts"
+        ],
+        "properties": {
+          "texts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "required": [
+          "vectors"
+        ],
+        "properties": {
+          "vectors": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            }
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "chat": {
+      "direction": "api \u2192 brain. The brain answers {ok:true} at once, then pushes events onto the list `{stream}:events` and asks the API's tools through it until it pushes `done` or `error` (ADR 0041).",
+      "request": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "stream",
+          "question",
+          "sources"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "history": {
+            "type": "array",
+            "description": "Earlier turns, oldest first (the last few)",
+            "items": {
+              "type": "object",
+              "required": [
+                "role",
+                "content"
+              ],
+              "properties": {
+                "role": {
+                  "enum": [
+                    "user",
+                    "assistant"
+                  ]
+                },
+                "content": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sources": {
+            "type": "array",
+            "description": "Every source the caller may ask about",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "location": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "senses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Senses the caller is granted on this source now"
+                },
+                "can_look": {
+                  "type": "boolean",
+                  "description": "The caller may see this camera now (video grant)"
+                }
+              }
+            }
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string",
+            "description": "sp:chat:{id}, a key prefix owned by the API for this answer"
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "stream": {
+        "{stream}:events": {
+          "direction": "brain \u2192 api, RPUSH (EXPIRE 300); the API BLPOPs it in order",
+          "schema": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "status",
+                  "delta",
+                  "moment",
+                  "suggested_watch",
+                  "done",
+                  "error",
+                  "tool"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "description": "status, delta"
+              },
+              "moment": {
+                "type": "object",
+                "description": "moment: {kind: event, event_id} or {kind: look, source_id, at, label, snapshot_jpeg_b64}",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "event",
+                      "look"
+                    ]
+                  },
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "source_id": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "snapshot_jpeg_b64": {
+                    "type": "string",
+                    "description": "Masked frame"
+                  }
+                }
+              },
+              "instruction": {
+                "type": "string",
+                "description": "suggested_watch"
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "suggested_watch"
+              },
+              "content": {
+                "type": "string",
+                "description": "done: the whole answer, citations as [n] in moment order"
+              },
+              "error": {
+                "type": "string",
+                "description": "error: no_model or failed"
+              },
+              "call_id": {
+                "type": "string",
+                "description": "tool: 12 hex characters"
+              },
+              "name": {
+                "type": "string",
+                "description": "tool: search_history or list_events"
+              },
+              "args": {
+                "type": "object",
+                "description": "tool"
+              }
+            }
+          },
+          "tool_call": {
+            "description": "A tool call rides the same list as {type: \"tool\", call_id, name, args}; the brain then BLPOPs {stream}:tool:{call_id} (30 s) for the answer",
+            "request": {
+              "type": "object",
+              "required": [
+                "name",
+                "args"
+              ],
+              "properties": {
+                "name": {
+                  "enum": [
+                    "search_history",
+                    "list_events"
+                  ]
+                },
+                "args": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    },
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "{stream}:tool:{call_id}": {
+          "direction": "api \u2192 brain, RPUSH (EXPIRE 60): the tool's answer",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "event_id",
+                    "source_id",
+                    "at",
+                    "summary"
+                  ],
+                  "properties": {
+                    "event_id": {
+                      "type": "string"
+                    },
+                    "source_id": {
+                      "type": "string"
+                    },
+                    "source_name": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "check": {
+      "direction": "api \u2192 brain (backtests, ADR 0043)",
+      "request": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "prompt",
+          "jpeg_b64"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Metered as an AI check (purpose backtest)"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The watch's verify prompt"
+          },
+          "jpeg_b64": {
+            "type": "string",
+            "description": "A stored (already masked) event snapshot"
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "properties": {
+          "yes": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "answer": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string",
+            "description": "no_model when no vision model is configured"
+          }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "sp:mcp:used:{code_id}": "SET NX EX ttl: the first redemption of an OAuth code wins",
+    "sp:mcp:revoked:{code_id}": "SET EX ttl: tokens issued from a code redeemed twice are revoked"
+  }
+}

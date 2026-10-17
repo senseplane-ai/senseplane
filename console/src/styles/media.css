@@ -1,0 +1,30 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+
+/* Video frames, snapshots and the overlays drawn on them, shared by Ask,
+   Cameras, Camera and Live view. */
+.frame {
+  position: relative; aspect-ratio: 16 / 9; background: var(--frame); border: 1px solid var(--edge);
+  border-radius: var(--r-card); overflow: hidden; min-width: 0;
+}
+.frame > img, .frame > video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.frame > video.contain, .frame > img.contain { object-fit: contain; background: #000; }
+.frame-ground { position: absolute; inset: 0; width: 100%; height: 100%; }
+.frame-label {
+  position: absolute; font-family: var(--mono); font-size: 10px; color: var(--soft);
+  background: var(--scrim); padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+}
+.frame-label.tl { left: 8px; top: 8px; }
+.frame-label.tr { right: 8px; top: 8px; }
+.frame-label.bl { left: 8px; bottom: 8px; }
+.frame-label.br { right: 8px; bottom: 8px; }
+.live-badge {
+  display: inline-flex; align-items: center; font-family: var(--mono); font-size: 10px; color: var(--on-text);
+  background: var(--live); padding: 1px 7px; border-radius: 3px;
+}
+.detection {
+  position: absolute; border: 1.5px solid var(--text); border-radius: 2px;
+}
+.detection > span {
+  position: absolute; left: -1.5px; top: -20px; background: var(--text); color: var(--on-text);
+  font-family: var(--mono); font-size: 11px; padding: 1px 6px; white-space: nowrap;
+}

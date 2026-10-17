@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/grant.json",
+  "title": "Grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "agent_id",
+    "source_ids",
+    "senses",
+    "abilities",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^grt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "senses": {
+      "type": "array",
+      "items": {
+        "$ref": "sense.json"
+      },
+      "minItems": 1
+    },
+    "abilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "watch",
+          "history"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "What else the agent may do on these sources (ADR 0048): `watch` sets watches; `history` reads recorded data older than the last two hours (events, memory search, playback, clips, conversations). Live access (look, ask, listen, read environment) comes with the senses. Default both."
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "Live access (look, ask, listen) only inside the window; recorded data only from inside it. Either end may be open."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "description": "Scoped access for an agent: which sources, which senses, and optionally a time window. An agent key sees only what its grants allow; a request outside them fails with forbidden_sense (ADR 0024)."
+}

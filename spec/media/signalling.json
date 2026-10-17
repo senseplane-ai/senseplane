@@ -1,0 +1,998 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/media/signalling.json",
+  "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0. Wire protocol v1; see signalling.md and tokens.md.",
+  "title": "Media signalling frames (protocol v1)",
+  "$defs": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "errorCode": {
+      "enum": [
+        "unauthorized",
+        "replayed",
+        "protocol_version",
+        "forbidden_transport",
+        "forbidden",
+        "not_subscribable",
+        "subscription_limit",
+        "room_closed",
+        "no_such_room",
+        "no_such_producer",
+        "no_such_transport",
+        "duplicate_identity",
+        "node_draining",
+        "capacity",
+        "bad_request",
+        "internal"
+      ]
+    },
+    "request": {
+      "title": "Client → node request",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "protocolVersion",
+            "token"
+          ],
+          "properties": {
+            "method": {
+              "const": "join"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "protocolVersion": {
+              "$ref": "#/$defs/protocolVersion"
+            },
+            "token": {
+              "type": "string",
+              "minLength": 1
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "direction"
+          ],
+          "properties": {
+            "method": {
+              "const": "createTransport"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "direction": {
+              "enum": [
+                "send",
+                "recv"
+              ]
+            },
+            "sctp": {
+              "type": "boolean"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            },
+            "network": {
+              "enum": [
+                "private",
+                "public"
+              ],
+              "description": "Plain transports only: where the client sits. private (default): the node announces its private address and sends only to private addresses"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "transportId"
+          ],
+          "properties": {
+            "method": {
+              "const": "connectTransport"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "transportId": {
+              "type": "string"
+            },
+            "dtlsParameters": {
+              "description": "WebRTC: mediasoup DtlsParameters"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            },
+            "ip": {
+              "type": "string",
+              "description": "Plain: where the node sends RTP"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "rtcpPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "srtpParameters": {
+              "description": "Plain with SRTP"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "transportId",
+            "kind",
+            "rtpParameters"
+          ],
+          "properties": {
+            "method": {
+              "const": "produce"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "transportId": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "audio",
+                "video"
+              ]
+            },
+            "rtpParameters": {
+              "description": "mediasoup RtpParameters; opaque to the protocol"
+            },
+            "appData": {
+              "type": "object"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            },
+            "timings": {
+              "$ref": "#/$defs/connectTimings"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "producerId"
+          ],
+          "properties": {
+            "method": {
+              "const": "closeProducer"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "producerId": {
+              "type": "string"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id"
+          ],
+          "properties": {
+            "method": {
+              "const": "leave"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "transportId",
+            "producerId",
+            "rtpCapabilities"
+          ],
+          "properties": {
+            "method": {
+              "const": "consume"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "transportId": {
+              "type": "string"
+            },
+            "producerId": {
+              "type": "string"
+            },
+            "rtpCapabilities": {
+              "description": "mediasoup RtpCapabilities of the receiving device"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "consumerId"
+          ],
+          "properties": {
+            "method": {
+              "const": "resumeConsumer"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "consumerId": {
+              "type": "string"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "consumerId"
+          ],
+          "properties": {
+            "method": {
+              "const": "pauseConsumer"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "consumerId": {
+              "type": "string"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "consumerId"
+          ],
+          "properties": {
+            "method": {
+              "const": "closeConsumer"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "consumerId": {
+              "type": "string"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "id",
+            "consumerId"
+          ],
+          "properties": {
+            "method": {
+              "const": "requestKeyFrame"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "consumerId": {
+              "type": "string"
+            },
+            "traceparent": {
+              "$ref": "#/$defs/traceparent"
+            }
+          }
+        }
+      ]
+    },
+    "response": {
+      "title": "Node → client reply (same id as the request)",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "ok",
+            "data"
+          ],
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "data": {}
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "ok",
+            "code"
+          ],
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "code": {
+              "$ref": "#/$defs/errorCode"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "event": {
+      "title": "Node → client event (no id, never replied to)",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "identity",
+            "room",
+            "routerRtpCapabilities",
+            "peers",
+            "producers",
+            "iceServers",
+            "recording"
+          ],
+          "properties": {
+            "event": {
+              "const": "joined"
+            },
+            "identity": {
+              "type": "string"
+            },
+            "room": {
+              "type": "string"
+            },
+            "routerRtpCapabilities": {},
+            "peers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "identity",
+                  "kind"
+                ],
+                "properties": {
+                  "identity": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "producers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "producerId",
+                  "identity",
+                  "kind"
+                ],
+                "properties": {
+                  "producerId": {
+                    "type": "string"
+                  },
+                  "identity": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "audio",
+                      "video"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                }
+              }
+            },
+            "iceServers": {
+              "type": "array"
+            },
+            "recording": {
+              "type": "boolean"
+            },
+            "grants": {
+              "$ref": "#/$defs/grants"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "producerId"
+          ],
+          "properties": {
+            "event": {
+              "const": "producerClosed"
+            },
+            "producerId": {
+              "type": "string"
+            },
+            "consumerId": {
+              "type": "string",
+              "description": "Live viewers: the consumer that ended with it"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "recording"
+          ],
+          "properties": {
+            "event": {
+              "const": "recordingChanged"
+            },
+            "recording": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "reconnectAfterMs"
+          ],
+          "properties": {
+            "event": {
+              "const": "draining"
+            },
+            "reconnectAfterMs": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "reason"
+          ],
+          "properties": {
+            "event": {
+              "const": "roomClosed"
+            },
+            "reason": {
+              "type": "string",
+              "description": "replaced, a participant removal reason, or room_closed"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "producerId",
+            "identity",
+            "kind"
+          ],
+          "properties": {
+            "event": {
+              "const": "producerAppeared"
+            },
+            "producerId": {
+              "type": "string"
+            },
+            "identity": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "audio",
+                "video"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "producerId",
+            "kind"
+          ],
+          "properties": {
+            "event": {
+              "const": "newProducer"
+            },
+            "producerId": {
+              "type": "string"
+            },
+            "identity": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "audio",
+                "video"
+              ]
+            }
+          },
+          "description": "Another name for producerAppeared; nodes send producerAppeared, clients accept both"
+        }
+      ]
+    },
+    "grants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canPublish",
+        "canSubscribe",
+        "canPublishData"
+      ],
+      "properties": {
+        "canPublish": {
+          "type": "boolean"
+        },
+        "canSubscribe": {
+          "type": "boolean"
+        },
+        "canPublishData": {
+          "type": "boolean"
+        },
+        "publishKinds": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "audio",
+              "video",
+              "screen"
+            ]
+          }
+        },
+        "subscribe": {
+          "$ref": "#/$defs/subscribeRule",
+          "description": "Who this token may receive; absent is everyone"
+        },
+        "visibleTo": {
+          "$ref": "#/$defs/subscribeRule",
+          "description": "Who may receive this participant; absent is everyone"
+        },
+        "subscribeExempt": {
+          "type": "boolean",
+          "description": "Lifts the active-set ceiling; never for kind human, and only with maxSubscriptions"
+        },
+        "maxSubscriptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "maxResolution": {
+          "enum": [
+            "720p",
+            "1080p"
+          ],
+          "description": "The highest resolution a recording of this publisher may be made at. Carried for the egress, which checks the stream before storing anything; the node does not refuse a produce on it."
+        },
+        "maxActiveSources": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "The minter's ceiling on concurrently streaming sources for the account; enforced by the minter at mint time, carried so the token is not refused"
+        },
+        "subscribeKinds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "audio",
+              "video"
+            ]
+          },
+          "description": "What this token may receive. Enforced by the node: other kinds are left out of joined and producerAppeared and consume fails with forbidden. Absent is every kind"
+        },
+        "idleTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "description": "How long the minter lets a viewer go without a sign of life; carried and echoed, the node runs no timer"
+        },
+        "maxLiveViewers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "The minter's ceiling on concurrent viewers for the account; enforced at mint time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "canSubscribe": {
+                "const": false
+              }
+            },
+            "required": [
+              "canSubscribe"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "subscribe"
+                  ]
+                },
+                {
+                  "required": [
+                    "subscribeExempt"
+                  ]
+                },
+                {
+                  "required": [
+                    "maxSubscriptions"
+                  ]
+                },
+                {
+                  "required": [
+                    "subscribeKinds"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "subscribeExempt"
+            ],
+            "properties": {
+              "subscribeExempt": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "maxSubscriptions"
+            ]
+          }
+        }
+      ]
+    },
+    "joinClaims": {
+      "title": "Join token claims (JWT, header {alg: EdDSA, typ: JWT, kid})",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "iss",
+        "aud",
+        "room",
+        "identity",
+        "kind",
+        "transport",
+        "grants",
+        "jti",
+        "iat",
+        "exp"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "iss": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aud": {
+          "const": "media"
+        },
+        "room": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "The room; Senseplane names a camera's room sp-{source_id}"
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "egress",
+            "sip",
+            "ingress"
+          ]
+        },
+        "transport": {
+          "enum": [
+            "webrtc",
+            "plain",
+            "pipe"
+          ]
+        },
+        "grants": {
+          "$ref": "#/$defs/grants"
+        },
+        "jti": {
+          "type": "string",
+          "minLength": 8,
+          "description": "Single use"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nbf": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "traceparent": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$",
+      "description": "Optional W3C trace context (ADR 0033). The node parents its span for this request on it; later requests continue the join's trace. Never required."
+    },
+    "connectTimings": {
+      "type": "object",
+      "description": "Optional client WebRTC connect timings in ms since the page started connecting (ADR 0033), recorded as span attributes. Unknown keys are ignored.",
+      "properties": {
+        "ws_open_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "join_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "transport_connected_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "first_produce_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "ice_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dtls_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "subscribeRule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "all",
+                "none"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "identities"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "identities": {
+              "type": "array",
+              "maxItems": 500,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlClaims": {
+      "title": "Control token claims (aud control)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "iss",
+        "aud",
+        "jti",
+        "iat",
+        "exp"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "iss": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aud": {
+          "const": "control"
+        },
+        "jti": {
+          "type": "string",
+          "minLength": 8
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nbf": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "whipClaims": {
+      "title": "WHIP bearer claims (aud whip)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "iss",
+        "aud",
+        "room",
+        "authorize_url",
+        "jti",
+        "iat"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "iss": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aud": {
+          "const": "whip"
+        },
+        "room": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "authorize_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://"
+        },
+        "jti": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 200
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nbf": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

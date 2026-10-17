@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/demo-session.json",
+  "title": "DemoSession",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "token",
+    "capture_url",
+    "qr_svg",
+    "source_id",
+    "watches",
+    "expires_at",
+    "limits"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^dem_"
+    },
+    "token": {
+      "type": "string",
+      "description": "Bearer token for this session's demo endpoints. Returned once."
+    },
+    "capture_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Open on a phone to stream its camera (video only)."
+    },
+    "qr_svg": {
+      "type": "string",
+      "description": "SVG QR code of capture_url."
+    },
+    "source_id": {
+      "type": "string"
+    },
+    "watches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "instruction"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The session ends here (at most 10 minutes); its data is deleted 1 hour later."
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "max_minutes",
+        "vlm_calls",
+        "delete_after_minutes"
+      ],
+      "properties": {
+        "max_minutes": {
+          "type": "integer"
+        },
+        "vlm_calls": {
+          "type": "integer"
+        },
+        "delete_after_minutes": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

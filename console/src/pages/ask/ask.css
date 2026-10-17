@@ -1,0 +1,101 @@
+/* Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0 */
+.ask { flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+.ask-topbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 32px; border-bottom: 1px solid var(--quiet);
+}
+.ask-cams { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.cam-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--edge); border-radius: 14px; font-size: 12px; color: var(--soft);
+}
+.cam-chip:hover { border-color: var(--line-3); color: var(--text); }
+.ask-topbar .btn-sm { height: 30px; }
+
+/* Empty state */
+.ask-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 64px 24px 40px; gap: 28px; }
+.ask-hero { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: var(--text); }
+.ask-hero h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.2; }
+.link-inline { text-decoration: underline; text-underline-offset: 3px; }
+.ask-notice { width: 100%; max-width: 720px; }
+
+.composer { box-sizing: border-box; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-panel-lg); }
+.composer:focus-within { border-color: var(--line-3); }
+.composer textarea { resize: none; background: transparent; border: 0; outline: none; color: var(--text); width: 100%; }
+.composer textarea::placeholder { color: var(--faint); }
+.composer-big { width: 100%; max-width: 720px; padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 10px; }
+.composer-big textarea { font-size: 16px; padding: 4px 6px; }
+.composer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.composer-pickers { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.composer-followup { max-width: 760px; margin: 0 auto; padding: 10px 10px 10px 16px; display: flex; align-items: flex-end; gap: 10px; }
+.composer-followup textarea { flex: 1; font-size: 15px; padding: 7px 0; }
+.send-btn {
+  flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--text); color: var(--on-text);
+  display: grid; place-items: center;
+}
+.send-btn:disabled { opacity: 0.4; }
+
+.chip-select {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
+  background: var(--well); border: 1px solid var(--line-2); border-radius: var(--r-control); color: var(--soft); font-size: 13px; max-width: 220px;
+}
+.chip-select > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-select:hover { border-color: var(--line-3); color: var(--text); }
+.chip-select:focus-within { outline: 2px solid var(--live); outline-offset: 2px; }
+.chip-select select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; }
+.chip-select select option { color: #000; }
+
+.suggestions { width: 100%; max-width: 720px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.suggestion {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; text-align: left;
+  background: var(--sidebar); border: 1px solid var(--edge); border-radius: var(--r-panel); color: var(--text);
+}
+.suggestion:hover { background: var(--hover); border-color: var(--line-3); }
+.suggestion-hint { font-size: 12px; color: var(--dim); }
+
+.stats-line { width: 100%; max-width: 720px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 18px; font-size: 13px; }
+.stats-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+
+/* Conversation */
+.ask-chat { flex: 1; display: flex; flex-direction: column; }
+.ask-thread { flex: 1; width: 100%; max-width: 808px; margin: 0 auto; padding: 32px 24px 24px; display: flex; flex-direction: column; gap: 28px; }
+.bubble-user {
+  align-self: flex-end; max-width: 80%; background: var(--selected); border-radius: 16px 16px 4px 16px; padding: 10px 16px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.answer { display: flex; gap: 14px; }
+.answer-avatar { flex: 0 0 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line-2); display: grid; place-items: center; }
+.answer-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.answer-header { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.answer-status { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--live); }
+.answer-text { display: flex; flex-direction: column; gap: 10px; font-size: 15px; color: var(--text); overflow-wrap: anywhere; }
+.answer-text strong { font-weight: 600; }
+
+.moments { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.moment { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--edge); border-radius: var(--r-card); overflow: hidden; }
+.moment:hover { border-color: var(--line-3); }
+.moment-frame { border: 0; border-radius: 0; background: var(--well); }
+.moment-play { position: absolute; right: 6px; bottom: 6px; width: 22px; height: 22px; border-radius: 50%; background: var(--scrim); display: grid; place-items: center; color: var(--text); }
+.moment-label { padding: 8px 10px; font-size: 13px; color: var(--soft); }
+
+.answer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.suggested-watch {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px;
+  background: var(--sidebar); border: 1px solid var(--live-line); border-radius: var(--r-panel);
+}
+.suggested-text { display: flex; flex-direction: column; gap: 2px; }
+.suggested-eyebrow { font-family: var(--mono); font-size: 11px; color: var(--live); }
+.feedback { display: flex; gap: 4px; color: var(--faint); }
+
+.ask-followup { position: sticky; bottom: 0; padding: 12px 24px 20px; background: var(--bg); }
+.ask-disclaimer { margin-top: 8px; text-align: center; font-size: 12px; color: var(--faint); }
+
+@media (max-width: 860px) {
+  .ask { min-height: calc(100vh - 56px); }
+  .ask-topbar { padding: 12px 16px; }
+  .ask-empty { padding: 32px 16px; gap: 22px; justify-content: flex-start; }
+  .ask-hero h1 { font-size: 26px; }
+  .ask-thread { padding: 20px 16px; }
+  .ask-followup { padding: 10px 16px 16px; }
+  .bubble-user { max-width: 90%; }
+}

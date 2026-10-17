@@ -30,6 +30,13 @@ export async function createTestDatabase(): Promise<{ appUrl: string; drop: () =
     drop: async () => {
       const c = new pg.Client({ connectionString: ADMIN });
       await c.connect();
+      // pg's pool.end() resolves before its connections have closed; give them a moment so FORCE
+      // doesn't terminate one mid-close (an unhandled error in the test that just finished).
+      for (let i = 0; i < 40; i++) {
+        const { rows } = await c.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1", [name]);
+        if (rows[0].n === 0) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
       await c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       await c.end();
     },

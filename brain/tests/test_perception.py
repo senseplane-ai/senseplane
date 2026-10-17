@@ -1,6 +1,6 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Perception on the fixtures (offline, same framing as the analysis feed):
+"""Perception on the fixtures (offline, same framing and detector cascade as the analysis feed):
 per-class precision/recall against fixtures/labels.json, person latency."""
 
 import json
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from senseplane_brain.detector import YoloxDetector
+from senseplane_brain.detector import detectors
 from senseplane_brain.offline import run_file
 from senseplane_brain.pipeline import SourcePipeline
 from senseplane_brain.sound import SoundClassifier
@@ -23,10 +23,10 @@ def label_of(payload: dict) -> str:
 
 @pytest.fixture(scope="module")
 def results():
-    det, snd = YoloxDetector(), SoundClassifier()
+    (det, confirm), snd = detectors(), SoundClassifier()
     out = {}
     for name in LABELS:
-        events = run_file(str(FIXTURES / name), SourcePipeline("acc", "src", det, snd))
+        events = run_file(str(FIXTURES / name), SourcePipeline("acc", "src", det, snd, confirm=confirm))
         out[name] = [(t, p) for t, s, p in events if s == "brain.event"]
     return out
 

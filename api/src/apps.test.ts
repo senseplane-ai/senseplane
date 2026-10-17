@@ -115,9 +115,10 @@ describe("connected apps (ADR 0048)", () => {
     expect(grants).toEqual([expect.objectContaining({ source_ids: [sensor], senses: ["temperature", "humidity"], abilities: ["history"] })]);
     // Both machines stay connected and see the new access.
     for (const k of [key1, key2]) expect((await call(k, "GET", "/v1/sources")).json().data.map((s: { id: string }) => s.id)).toEqual([sensor]);
-    const agents = (await call(owner, "GET", "/v1/agents")).json().data.filter((a: { name: string }) => a.name === "Cursor");
-    expect(agents).toHaveLength(1);
-    expect(agents[0].last_active_at).not.toBeNull();
+    const agents = async () => (await call(owner, "GET", "/v1/agents")).json().data.filter((a: { name: string }) => a.name === "Cursor");
+    expect(await agents()).toHaveLength(1);
+    // last_active_at is written after the response.
+    await expect.poll(async () => (await agents())[0].last_active_at).not.toBeNull();
 
     // Another host is another app, even with the same name.
     const r3 = request();

@@ -8,7 +8,7 @@
 import { ConnectTimings, newTraceparent, traceEnabled } from "./trace";
 import { Device } from "mediasoup-client";
 import type { Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
-import { reactTo } from "./events";
+import { canRetry, reactTo, retryDelay } from "./events";
 import { PROTOCOL_VERSION, SignallingClient } from "./signalling";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -53,7 +53,7 @@ async function getJoinToken(): Promise<{ token: string; url: string; max_resolut
     body: JSON.stringify({ ticket, device: deviceKey() }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error?.message ?? `could not start (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(json?.error?.message ?? `could not start (${res.status})`), { status: res.status, code: json?.error?.code });
   return json;
 }
 
@@ -73,6 +73,30 @@ let state: "idle" | "live" | "paused" | "stopped" = "idle";
 
 const setStatus = (text: string) => (statusEl.textContent = text);
 
+// Reconnecting by itself after a server restart or a dropped connection, until it works or the user stops.
+let attempt = 0;
+let reconnecting = false;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+let lostTimer: ReturnType<typeof setTimeout> | undefined;
+
+function cancelRetry() {
+  clearTimeout(retryTimer);
+  clearTimeout(lostTimer);
+  retryTimer = lostTimer = undefined;
+  reconnecting = false;
+}
+
+function reconnectSoon(message: string, minMs = 0) {
+  if (state === "stopped" || reconnecting) return; // a drop often trips several signals at once
+  reconnecting = true;
+  const wait = Math.max(minMs, retryDelay(attempt++));
+  void halt("paused", false).then(() => {
+    if (!reconnecting || state !== "paused") return;
+    setStatus(`${message} Reconnecting in ${Math.ceil(wait / 1000)} s…`);
+    retryTimer = setTimeout(() => void start().catch(fail), wait);
+  });
+}
+
 async function holdWakeLock() {
   try {
     if ("wakeLock" in navigator && document.visibilityState === "visible") wakeLock = await navigator.wakeLock.request("screen");
@@ -82,6 +106,7 @@ async function holdWakeLock() {
 }
 
 async function start() {
+  cancelRetry();
   setStatus("Connecting…");
   const { token, url, max_resolution } = await getJoinToken();
   plan = max_resolution ?? "720p";
@@ -98,8 +123,7 @@ async function start() {
   sig.onEvent((e) => {
     const r = reactTo(e);
     if (r.action === "reconnect") {
-      setStatus(r.message);
-      void halt("paused", false).then(() => setTimeout(() => void start().catch(fail), r.afterMs));
+      reconnectSoon(r.message, r.afterMs);
     } else if (r.action === "stop") {
       void halt("stopped", false).then(() => setStatus(r.message));
     } else if (r.action === "notice" && state === "live") {
@@ -135,7 +159,17 @@ async function start() {
     sig.request<{ producerId: string }>("produce", { transportId, kind, rtpParameters, appData, ...extra }).then(({ producerId }) => ok({ id: producerId }), fail);
   });
   transport.on("connectionstatechange", (s) => {
-    if (s === "failed" || s === "disconnected") setStatus("Connection lost. Press Resume to reconnect.");
+    if (s === "connected") clearTimeout(lostTimer);
+    // "disconnected" often recovers by itself within a few seconds; "failed" doesn't.
+    else if (s === "failed") reconnectSoon("Connection lost.");
+    else if (s === "disconnected") {
+      clearTimeout(lostTimer);
+      lostTimer = setTimeout(() => reconnectSoon("Connection lost."), 5000);
+    }
+  });
+  // The media server went away without saying so (a crash or a hard restart).
+  void sig.closed.then(() => {
+    if (signalling === sig && state === "live") reconnectSoon("Lost the media server.");
   });
 
   const video = stream.getVideoTracks()[0]!;
@@ -147,6 +181,7 @@ async function start() {
   if (audio) producers.push(await transport.produce({ track: audio, appData: { source: "microphone" } }));
 
   await holdWakeLock();
+  attempt = 0;
   state = "live";
   indicator.hidden = false;
   toggleBtn.textContent = "Pause";
@@ -156,6 +191,7 @@ async function start() {
 }
 
 async function halt(next: "paused" | "stopped", notify = true) {
+  if (next === "stopped" || notify) cancelRetry();
   toggleBtn.disabled = true;
   stopBtn.disabled = true;
   // `leave` first, so the media plane finalises the open segment while media still flows.
@@ -192,6 +228,7 @@ document.addEventListener("visibilitychange", () => {
 });
 function fail(err: unknown) {
   const e = err as Error & { code?: string };
+  if (state !== "stopped" && canRetry(err)) return reconnectSoon("Can't reach the server.");
   // The account's streaming-camera limit (ADR 0025), from the API at join or the media plane at produce.
   if (e.code === "source_limit_reached" || /camera limit/.test(e.message ?? "")) setStatus("This account's camera limit is reached. Stop another camera, then try again.");
   else if (e.code === "allowance_exhausted") setStatus("This account has used its camera time for now. Streaming resumes when the allowance resets or the plan changes.");

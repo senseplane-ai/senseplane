@@ -186,17 +186,17 @@ try {
   const sources = async () => (await api(key, "GET", "/v1/sources")).json.data as { id: string; name: string; status: string }[];
   const front = (await sources()).find((s) => s.name === "Front door")!;
 
-  // 3b. An IP camera through the bridge: go2rtc plays an RTSP camera; the bridge runs with the token the console shows.
-  await go(page, "/cameras");
+  // 3b. An IP camera through the bridge: go2rtc plays an RTSP camera; the bridge runs with the token the API
+  // returns (the console shows IP cameras as coming soon, so the source is made through the API).
+  await go(page, "/cameras"); // away first: the add page is still on its last step
   await go(page, "/cameras/new");
-  await page.getByRole("radio", { name: /IP camera/ }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByLabel("Name", { exact: true }).fill("Driveway");
-  await page.getByRole("button", { name: "Continue" }).click();
-  const bridgeToken = (await page.getByLabel("Bridge token", { exact: true }).textContent({ timeout: 15_000 }))?.trim() ?? "";
-  const dockerCmd = (await page.getByLabel("Docker", { exact: true }).textContent())?.trim() ?? "";
-  check("bridge_command_shown", bridgeToken.startsWith("brg_") && dockerCmd.includes("--token"), { docker: dockerCmd.replace(bridgeToken, "brg_<redacted>") });
-  await shoot(page, "07-add-ip-camera");
+  const ipSoon = await page.getByRole("radio", { name: /IP camera/ }).isDisabled();
+  check("ip_camera_shown_as_coming_soon", ipSoon);
+  await shoot(page, "07-add-camera-kinds");
+  const rtsp = (await api(key, "POST", "/v1/sources", { name: "Driveway", type: "rtsp" })).json;
+  const bridgeToken = String(rtsp.ingest?.bridge_token ?? "");
+  const dockerCmd = String(rtsp.ingest?.docker_command ?? "");
+  check("bridge_command_returned", bridgeToken.startsWith("brg_") && dockerCmd.includes("--token"), { docker: dockerCmd.replace(bridgeToken, "brg_<redacted>") });
   docker("run", "-d", "--name", RTSP_NAME, "--network", `${project}_default`, "--network-alias", "journey-camera",
     "-v", `${FIXTURES}:/fixtures:ro`, "--entrypoint", "go2rtc", GO2RTC_IMAGE, "-config",
     JSON.stringify({ api: { listen: "" }, webrtc: { listen: "" }, rtsp: { listen: ":8554" },
@@ -205,8 +205,8 @@ try {
   const media = docker(...compose, "ps", "-q", "media").trim();
   docker("run", "-d", "--name", BRIDGE_NAME, "--network", `container:${media}`, BRIDGE_IMAGE,
     "--api", "http://api:8080", "--token", bridgeToken, "--rtsp", "rtsp://journey-camera:8554/cam", "--whip-base", "http://127.0.0.1:8090", "--listen", "127.0.0.1:8099");
-  const ipConnected = await page.getByText(/Connected\. Driveway is streaming\./).waitFor({ timeout: 60_000 }).then(() => true, () => false);
-  check("ip_camera_online", ipConnected);
+  const ipConnected = await until("driveway online", 60_000, async () => (await sources()).some((s) => s.name === "Driveway" && s.status === "online"));
+  check("ip_camera_online", !!ipConnected);
   const drive = (await sources()).find((s) => s.name === "Driveway")!;
   await go(page, "/cameras");
   await page.getByText("Streaming").first().waitFor({ timeout: 20_000 }).catch(() => undefined);
@@ -367,6 +367,18 @@ try {
   }
   check("audit_log_shows_activity", audited && actions.has("invite.created") && actions.has("invite.accepted") && actions.has("live.start"), { actions: [...actions].filter((a) => !a.includes(" ")).slice(0, 20) });
   await shoot(page, "21-audit");
+
+  // 9b. The phone reconnects by itself after the media server restarts (a clean stop, then a kill). The
+  // bridge shares the media container's network here, so only the phone is checked.
+  for (const [how, args] of [["restart", ["restart", "media"]], ["kill", ["kill", "media"]]] as const) {
+    docker(...compose, ...args);
+    if (how === "kill") docker(...compose, "up", "-d", "--no-deps", "media");
+    const dropped = await phonePage.waitForFunction("window.__senseplaneCapture.state() !== 'live'", undefined, { timeout: 20_000, polling: 50 }).then(() => true, () => false);
+    const back = await phonePage.waitForFunction("window.__senseplaneCapture.state() === 'live'", undefined, { timeout: 90_000 }).then(() => true, () => false);
+    const status = await phonePage.locator("#status").textContent().catch(() => "");
+    check(`phone_reconnects_after_media_${how}`, dropped && back, { dropped, status });
+  }
+  await shoot(phonePage, "21b-phone-reconnected");
 
   // 10. Live view locked: the deployment turns it off (QUOTA_LIVE_VIEW=0), then back on.
   const restartApi = (on: boolean) =>

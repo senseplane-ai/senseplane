@@ -156,7 +156,8 @@ export async function startModelProxy(o: ProxyOptions) {
       const contentType = up.headers.get("content-type") ?? "application/json";
       if (up.ok) {
         const rec = { ...d, status: up.status, contentType, body: sanitize(text, contentType) };
-        byKey.set(d.key, rec);
+        // A named phase's answers are kept for that phase only, so they never answer another check.
+        if (!scope.includes(":")) byKey.set(d.key, rec);
         if (scoped) byKey.set(scoped, { ...rec, key: scoped });
         stats.recorded++;
         save();
@@ -170,10 +171,14 @@ export async function startModelProxy(o: ProxyOptions) {
     if (hit) stats.exact++;
     else {
       const mine = words(d.text);
+      // The same turn of a tool loop first: a recording with as many tool calls so far answers this step, not an
+      // earlier one (which would ask for the same tool again).
+      const turn = (t: string) => (t.match(/assistant calls /g) ?? []).length;
+      const myTurn = turn(d.text);
       let best = -1;
       for (const r of recorded) {
-        if (r.kind !== d.kind || (phased && !r.key.startsWith(`${scope}|`))) continue;
-        const s = similarity(mine, words(r.text));
+        if (r.kind !== d.kind || (phased ? !r.key.startsWith(`${scope}|`) : /^[^|]*:[^|]*\|/.test(r.key))) continue;
+        const s = similarity(mine, words(r.text)) + (turn(r.text) === myTurn ? 1 : 0);
         if (s > best) [best, hit] = [s, r];
       }
       if (hit) stats.similar++;

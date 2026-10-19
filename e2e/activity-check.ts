@@ -122,6 +122,25 @@ try {
   const blindEvents = (await call("GET", `/v1/events?type=watch.triggered&source=${door.id}`)).data.filter((e: { watch_id?: string }) => e.watch_id === blind.id);
   const blindRow = (await call("GET", `/v1/watches/${blind.id}`));
   check("condition_watch_doesnt_judge_what_it_couldnt_see", blindEvents.length === 0, { status: blindRow.status });
+
+  // The chat answers "how long" and "how many" from these activities (query_activity), not by counting events.
+  const phase = (name: string) =>
+    process.env.E2E_MODEL_PROXY_URL ? fetch(`${process.env.E2E_MODEL_PROXY_URL}/_phase`, { method: "POST", body: JSON.stringify({ name }) }).then(() => {}) : Promise.resolve();
+  const chat = async (name: string, question: string) => {
+    await phase(`activity:${name}`);
+    const conv = await call("POST", "/v1/conversations", {});
+    return call("POST", `/v1/conversations/${conv.id}/messages`, { content: question, time_zone: "Europe/London" });
+  };
+  // Replayed answers come from the recording run, whose times (and so the cited span) differ from this run's:
+  // live runs check the numbers and the citation, replays that the loop ends in an answer of the right kind.
+  const live = process.env.E2E_LIVE_MODEL === "1";
+  const long = await chat("duration", "How long was someone at the front door in the last hour?");
+  const seconds = [...String(long.content).matchAll(/(\d+)\s*(?:s\b|sec)/g)].map((m) => Number(m[1]));
+  check("chat_says_how_long_from_activities", live
+    ? seconds.some((n) => Math.abs(n - (person?.duration_s ?? 0)) <= 3) && long.moments.some((m: { until?: string }) => m.until)
+    : /\d+\s*seconds?/.test(long.content), { answer: long.content, moments: long.moments.length });
+  const many = await chat("count", "How many times did someone come to the front door in the last hour?");
+  check("chat_says_how_many_from_activities", /\b(once|one|1)\b/i.test(many.content) && (!live || many.moments.some((m: { until?: string }) => m.until)), { answer: many.content });
 } catch (err) {
   check("activity_check_ran", false, { error: (err as Error).message });
 }

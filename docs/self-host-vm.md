@@ -149,9 +149,10 @@ your phone (or open the link on a laptop). Allow the camera and keep the page
 open with the screen on. The camera shows as online in a few seconds, and
 someone walking past gives a `detection.person` event.
 
-IP cameras (RTSP) connect through the bridge, a small container on the
-cameras' network that connects out to your domain: see
-[Self-hosting](self-host.md#ip-cameras-and-the-bridge).
+OBS, a hardware encoder or any WHIP client works too: choose **OBS or
+streaming software** and paste the server and token it shows (see
+[Publishing with WHIP](ingest-whip.md)). IP cameras (through the bridge) and
+Home Assistant sensors are shown as coming soon in the console.
 
 ## 7. Connect Claude or another agent (MCP)
 

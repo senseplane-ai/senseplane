@@ -46,12 +46,14 @@ describe("AddCameraPage", () => {
     expect(await screen.findByText("Connected. Loading dock is streaming.", {}, { timeout: 5000 })).toBeInTheDocument();
   });
 
-  it("moves between kinds with the arrow keys", async () => {
+  it("moves between the selectable kinds with the arrow keys", async () => {
     renderWithApp(<AddCameraPage />, appData());
     screen.getByRole("radio", { name: /Phone or laptop/ }).focus();
-    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    await userEvent.keyboard("{ArrowDown}");
     expect(screen.getByRole("radio", { name: /OBS or streaming software/ })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /OBS/ })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}"); // skips the ones coming soon, back to the start
+    expect(screen.getByRole("radio", { name: /Phone or laptop/ })).toHaveFocus();
   });
 
   it("shows WHIP copy blocks from the ingest response", async () => {
@@ -67,14 +69,13 @@ describe("AddCameraPage", () => {
     expect(screen.getByRole("button", { name: "Copy Bearer token" })).toBeInTheDocument();
   });
 
-  it("explains when the server can't do IP cameras", async () => {
-    const { fetch } = withBodies({ "POST /sources": () => Response.json({ error: { code: "validation_failed", message: "body/type must be equal to one of the allowed values" } }, { status: 400 }) });
-    renderWithApp(<AddCameraPage />, appData({ fetch }));
-    await userEvent.click(screen.getByRole("radio", { name: /IP camera/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await userEvent.type(screen.getByLabelText("Name"), "Dock");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("can't connect IP cameras");
+  it("shows IP cameras and Home Assistant sensors as coming soon, not selectable", async () => {
+    renderWithApp(<AddCameraPage />, appData({ fetch: withBodies({}).fetch }));
+    for (const name of [/IP camera/, /Home Assistant/]) {
+      const r = screen.getByRole("radio", { name });
+      expect(r).toBeDisabled();
+      expect(r).toHaveTextContent("Coming soon");
+    }
   });
 });
 

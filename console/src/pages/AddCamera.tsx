@@ -22,6 +22,9 @@ const KINDS: Record<Kind, { tag: string; title: string; desc: string; connectTit
   ha: { tag: "HA", title: "Home Assistant sensors", desc: "Temperature, humidity and other readings from Home Assistant.", connectTitle: "Add Senseplane to Home Assistant", codeIntro: "In Home Assistant, add the Senseplane integration and paste:", waiting: "Waiting for the first reading…" },
 };
 const ORDER: Kind[] = ["phone", "ip", "whip", "ha"];
+/** Shown but not selectable yet. */
+const SOON = new Set<Kind>(["ip", "ha"]);
+const READY = ORDER.filter((k) => !SOON.has(k));
 
 type Ingest = { capture_url?: string; whip_url?: string; token?: string; bridge_token?: string; docker_command?: string; integration_token?: string };
 
@@ -129,9 +132,10 @@ export function AddCameraPage() {
     const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
     if (!d) return;
     e.preventDefault();
-    const n = (i + d + ORDER.length) % ORDER.length;
-    setKind(ORDER[n]!);
-    radios.current[n]?.focus();
+    const r = READY.indexOf(ORDER[i]!);
+    const next = READY[(r + d + READY.length) % READY.length]!;
+    setKind(next);
+    radios.current[ORDER.indexOf(next)]?.focus();
   };
 
   async function create() {
@@ -188,10 +192,14 @@ export function AddCameraPage() {
                 {ORDER.map((id, i) => (
                   <button
                     key={id} ref={(el) => { radios.current[i] = el; }} type="button" role="radio" aria-checked={kind === id}
+                    aria-disabled={SOON.has(id) || undefined} disabled={SOON.has(id)}
                     tabIndex={kind === id ? 0 : -1} className="kind" onClick={() => setKind(id)} onKeyDown={(e) => radioKey(e, i)}
                   >
                     <span className="kind-tag" aria-hidden="true">{KINDS[id].tag}</span>
-                    <span className="kind-text"><span className="kind-title">{KINDS[id].title}</span><span className="kind-desc">{KINDS[id].desc}</span></span>
+                    <span className="kind-text">
+                      <span className="kind-title">{KINDS[id].title}{SOON.has(id) && <span className="kind-soon"> · Coming soon</span>}</span>
+                      <span className="kind-desc">{KINDS[id].desc}</span>
+                    </span>
                   </button>
                 ))}
               </div>

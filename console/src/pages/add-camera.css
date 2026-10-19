@@ -26,6 +26,9 @@
 }
 .kind:hover { border-color: var(--line-3); }
 .kind[aria-checked="true"] { background: var(--raise); border-color: var(--text); }
+.kind:disabled { opacity: 0.55; cursor: not-allowed; }
+.kind:disabled:hover { border-color: var(--line-2, var(--line)); }
+.kind-soon { font-weight: 400; color: var(--muted); }
 .kind-tag {
   flex: 0 0 40px; height: 40px; border-radius: var(--r-card); background: var(--well); border: 1px solid var(--line-2);
   display: grid; place-items: center; font-family: var(--mono); font-size: 11px; color: var(--soft);

@@ -148,6 +148,7 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `RAW_RETENTION_DAYS` | `7` | Default raw footage retention for new accounts |
 | `RAW_RETENTION_MAX_DAYS` | empty | Optional upper limit for `retention_days`; also adds a storage lifecycle backstop |
 | `RETENTION_SWEEP_SECONDS` | `600` | How often expired footage is deleted |
+| `API_WORKERS` | `true` | `false`: this API process only serves requests. Background work (housekeeping, scheduled watches, webhook deliveries, clips) runs in the processes that have it on, each piece in one of them ([ADR 0058](decisions/0058-background-work-in-postgres.md)) |
 | `QUOTA_MAX_SOURCES` | unlimited | Registered sources per account |
 | `QUOTA_MAX_ACTIVE_SOURCES` | unlimited | Sources streaming at once per account |
 | `QUOTA_MAX_RESOLUTION` | `720p` | Largest recording resolution (`720p` or `1080p`) |

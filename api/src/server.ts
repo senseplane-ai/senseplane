@@ -29,6 +29,8 @@ const api = await createApi({
   apiPublicUrl: process.env.API_PUBLIC_URL,
   storage: process.env.S3_ENDPOINT || process.env.S3_BUCKET ? storageConfigFromEnv() : undefined,
   sweepIntervalSeconds: process.env.RETENTION_SWEEP_SECONDS ? Number(process.env.RETENTION_SWEEP_SECONDS) : undefined,
+  // API_WORKERS=false: this process only serves requests; background work runs in the ones that have it on (ADR 0058).
+  workers: process.env.API_WORKERS !== "false",
   corsOrigins: process.env.CORS_ORIGINS?.split(",").map((s) => s.trim()).filter(Boolean),
 });
 await api.listen({ port: Number(process.env.PORT ?? 8080) });

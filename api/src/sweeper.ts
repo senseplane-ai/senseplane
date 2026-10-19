@@ -7,13 +7,11 @@
 // byte cap holds and delete the oldest first.
 // Deletes objects first, then index rows, so a crash never leaves an index
 // row pointing at nothing it can't retry. Clips are separate copies and are
-// never touched. One sweeper at a time across replicas (advisory lock).
+// never touched. It runs as a background job, once at a time across replicas (ADR 0058).
 import { sql } from "kysely";
-import type { FastifyBaseLogger } from "fastify";
 import type { DataAccess } from "./data/access.js";
 import type { ObjectStorage } from "./storage.js";
 
-const LOCK_ID = 0x5e75; // arbitrary, constant
 const BATCH = 1000;
 
 export interface SweepResult {
@@ -128,26 +126,6 @@ async function sweepFill(data: DataAccess, storage: ObjectStorage, result: Sweep
       }
     }
   }
-}
-
-export function startSweeper(data: DataAccess, storage: ObjectStorage, log: FastifyBaseLogger, intervalSeconds: number, storageCap?: StorageCap) {
-  let running = false;
-  const tick = async () => {
-    if (running) return;
-    running = true;
-    try {
-      const got = await data.tryAdvisoryLock(LOCK_ID, async () => sweepOnce(data, storage, new Date(), storageCap));
-      if (got && got.segments) log.info({ sweep: got }, "retention sweep deleted raw segments");
-    } catch (err) {
-      log.error({ err }, "retention sweep failed; will retry");
-    } finally {
-      running = false;
-    }
-  };
-  const timer = setInterval(() => void tick(), intervalSeconds * 1000);
-  timer.unref();
-  void tick();
-  return () => clearInterval(timer);
 }
 
 export { sql };

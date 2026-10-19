@@ -128,6 +128,8 @@ export interface EventsTable {
   snapshot_bytes: ColumnType<number | null, number | null | undefined, number | null>;
   clip_id: string | null;
   clip_due_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** The clip worker's lease on cutting this event's clip (ADR 0058). */
+  clip_claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   feedback: string | null;
   embedding: ColumnType<string | null, string | null | undefined, string | null>;
   created_at: Timestamp;
@@ -153,6 +155,8 @@ export interface WebhookDeliveriesTable {
   last_status_code: number | null;
   last_error: string | null;
   delivered_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** A worker's lease on sending it (ADR 0058). */
+  claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   created_at: Timestamp;
 }
 
@@ -337,6 +341,9 @@ export interface WatchesTable {
   /** Condition and digest watches (ADR 0057): when last checked, and whether the condition held then. */
   last_checked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   last_condition: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
+  /** When a condition or digest watch is next checked, and a checker's lease on it (ADR 0058). Kept by a trigger and the checker. */
+  next_check_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
 export type Destination = { type: "webhook" | "agent"; id: string };

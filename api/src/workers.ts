@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Background workers in the API process: webhook delivery (signed, retried
-// with backoff for 24 h, logged) and event clip cutting.
+// with backoff for 24 h, logged) and event clip cutting, each row claimed by
+// one process (ADR 0058).
 import { createHmac } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
 import { sql } from "kysely";
@@ -12,6 +13,7 @@ import { type EventUrls, toEvent } from "./events.js";
 import { createClip } from "./routes/playback.js";
 import type { ObjectStorage } from "./storage.js";
 import { deliveryErrorText, egressPolicyFromEnv, guardedRequest, type EgressRequest } from "./egress.js";
+import { startClaimLoop } from "./jobs.js";
 
 /** Sends one webhook POST; injectable for tests. */
 export type WebhookSender = (url: string, req: EgressRequest) => Promise<{ status: number }>;
@@ -23,6 +25,9 @@ export const defaultSender = (): WebhookSender => {
 /** Delay before attempt n+1 (n = attempts so far). After 24 h a delivery is failed. */
 export const BACKOFF_SECONDS = [5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200, 14400];
 export const RETRY_WINDOW_MS = 24 * 3600_000;
+/** A claimed delivery or clip goes back to the queue if its process hasn't finished it by then (ADR 0058). */
+const DELIVERY_LEASE_S = 60;
+const CLIP_LEASE_S = 300;
 
 export function signatureHeader(secret: string, body: string, timestamp = Math.floor(Date.now() / 1000)) {
   return `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
@@ -87,7 +92,7 @@ async function deliverUntraced(data: DataAccess, id: string, accountId: string, 
   await data.withAccount(accountId, async (s) => {
     if (!error) {
       await s.db.updateTable("webhook_deliveries")
-        .set({ status: "delivered", attempts, last_status_code: status, last_error: null, delivered_at: new Date(), next_attempt_at: null })
+        .set({ status: "delivered", attempts, last_status_code: status, last_error: null, delivered_at: new Date(), next_attempt_at: null, claimed_until: null })
         .where("id", "=", id).execute();
       return;
     }
@@ -95,7 +100,7 @@ async function deliverUntraced(data: DataAccess, id: string, accountId: string, 
     const delay = BACKOFF_SECONDS[Math.min(attempts - 1, BACKOFF_SECONDS.length - 1)]! * 1000;
     const giveUp = age + delay > RETRY_WINDOW_MS;
     await s.db.updateTable("webhook_deliveries")
-      .set({ status: giveUp ? "failed" : "pending", attempts, last_status_code: status, last_error: error, next_attempt_at: giveUp ? null : new Date(Date.now() + delay) })
+      .set({ status: giveUp ? "failed" : "pending", attempts, last_status_code: status, last_error: error, next_attempt_at: giveUp ? null : new Date(Date.now() + delay), claimed_until: null })
       .where("id", "=", id).execute();
   });
   if (error) log.warn({ delivery: id, error, attempts }, "webhook delivery failed");
@@ -106,54 +111,27 @@ async function deliverUntraced(data: DataAccess, id: string, accountId: string, 
 export const deliveryKick = new EventTarget();
 
 export function startWebhookWorker(data: DataAccess, urls: EventUrls, log: FastifyBaseLogger, intervalMs = 1000) {
-  let running = false;
-  const tick = async () => {
-    if (running) return;
-    running = true;
-    try {
-      const { rows } = await sql<{ id: string; account_id: string }>`select * from due_webhook_deliveries(50)`.execute(data.db());
-      await Promise.all(rows.map((r) => deliverOnce(data, r.id, r.account_id, urls, log)));
-    } catch (err) {
-      log.error({ err }, "webhook worker tick failed");
-    } finally {
-      running = false;
-    }
-  };
-  const t = setInterval(() => void tick(), intervalMs);
-  t.unref();
-  const onKick = () => void tick();
-  deliveryKick.addEventListener("kick", onKick);
-  return () => {
-    clearInterval(t);
-    deliveryKick.removeEventListener("kick", onKick);
-  };
+  return startClaimLoop({
+    name: "webhooks", intervalMs, log, kick: deliveryKick, batch: 50,
+    claim: async (max) => (await sql<{ id: string; account_id: string }>`select * from claim_webhook_deliveries(${max}, ${DELIVERY_LEASE_S})`.execute(data.db())).rows,
+    handle: async (r) => void (await deliverOnce(data, r.id, r.account_id, urls, log)),
+  });
 }
 
 /** Cuts event clips once the segments around the event exist ([start-5 s, end+10 s], at most 1 h). */
 export function startClipWorker(data: DataAccess, storage: ObjectStorage, log: FastifyBaseLogger, intervalMs = 5000) {
-  let running = false;
-  const tick = async () => {
-    if (running) return;
-    running = true;
-    try {
-      const { rows } = await sql<{ id: string; account_id: string }>`select * from due_event_clips(20)`.execute(data.db());
-      for (const r of rows) {
-        const ev = await data.withAccount(r.account_id, (s) => s.db.selectFrom("events").selectAll().where("id", "=", r.id).executeTakeFirst());
-        if (!ev) continue;
-        const start = new Date(ev.occurred_at).getTime();
-        const end = ev.ended_at ? new Date(ev.ended_at).getTime() : start;
-        const clip = await createClip({ data, storage }, r.account_id, ev.source_id, start - 5000, Math.min(end + 10_000, start - 5000 + 3600_000), ev.summary);
-        await data.withAccount(r.account_id, (s) =>
-          s.db.updateTable("events").set(clip ? { clip_id: clip.id, clip_due_at: null } : { clip_due_at: null }).where("id", "=", r.id).execute(),
-        );
-      }
-    } catch (err) {
-      log.error({ err }, "clip worker tick failed");
-    } finally {
-      running = false;
-    }
-  };
-  const t = setInterval(() => void tick(), intervalMs);
-  t.unref();
-  return () => clearInterval(t);
+  return startClaimLoop({
+    name: "clips", intervalMs, log, batch: 20,
+    claim: async (max) => (await sql<{ id: string; account_id: string }>`select * from claim_event_clips(${max}, ${CLIP_LEASE_S})`.execute(data.db())).rows,
+    handle: async (r) => {
+      const ev = await data.withAccount(r.account_id, (s) => s.db.selectFrom("events").selectAll().where("id", "=", r.id).executeTakeFirst());
+      if (!ev) return;
+      const start = new Date(ev.occurred_at).getTime();
+      const end = ev.ended_at ? new Date(ev.ended_at).getTime() : start;
+      const clip = await createClip({ data, storage }, r.account_id, ev.source_id, start - 5000, Math.min(end + 10_000, start - 5000 + 3600_000), ev.summary);
+      await data.withAccount(r.account_id, (s) =>
+        s.db.updateTable("events").set(clip ? { clip_id: clip.id, clip_due_at: null, clip_claimed_until: null } : { clip_due_at: null, clip_claimed_until: null }).where("id", "=", r.id).execute(),
+      );
+    },
+  });
 }

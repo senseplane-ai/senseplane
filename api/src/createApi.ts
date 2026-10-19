@@ -39,7 +39,8 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
 import { markSilentBridges, registerBridgeRoutes } from "./routes/bridges.js";
 import { closeStaleActivities } from "./activity.js";
-import { runScheduledWatches } from "./scheduled-watches.js";
+import { startScheduledWatches } from "./scheduled-watches.js";
+import { type Job, startJobs } from "./jobs.js";
 import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
@@ -48,7 +49,7 @@ import { metricsAllowed, registerRateLimits, trustProxyFromEnv } from "./rate-li
 import { hashApiKey } from "./data/access.js";
 import type { FastifyRequest } from "fastify";
 import { type ObjectStorage, type StorageConfig, createObjectStorage } from "./storage.js";
-import { startSweeper } from "./sweeper.js";
+import { sweepOnce } from "./sweeper.js";
 import { isProduction } from "./ingest.js";
 import { createSecretBox, newSecretsKey } from "./secret-box.js";
 import { expireIdempotencyKeys, registerIdempotency } from "./idempotency.js";
@@ -111,7 +112,7 @@ export interface CreateApiOptions {
   playbackTtlSeconds?: number;
   /** Retention sweep interval; 0 disables the background sweeper (default 600 s). */
   sweepIntervalSeconds?: number;
-  /** Background workers (webhooks, event clips); default on. Tests may turn them off. */
+  /** Background work (jobs, scheduled watches, deliveries, clips; ADR 0058); default on. Off for processes that only serve requests, and in tests. */
   workers?: boolean;
   /** A bus to use instead of connecting to valkeyUrl (tests). */
   bus?: ApiBus;
@@ -452,48 +453,48 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       keyRefs, guard: mediaGuard,
       latestSnapshot: bus ? (a, s) => bus!.latestSnapshot(a, s) : undefined,
     });
-    const interval = options.sweepIntervalSeconds ?? 600;
-    if (interval > 0) stoppers.push(startSweeper(data, storage, app.log, interval, async (id) => (await quotaFor(id)).storageCapBytes));
     if (options.workers !== false) stoppers.push(startClipWorker(data, storage, app.log));
   }
   if (options.workers !== false) {
-    let sampledHour = "";
-    let overBefore = new Set<string>();
-    const t = setInterval(() => {
-      void sweepDemos({ data, bus, media: mediaControl, storage }, demo, app.log).catch((err) => app.log.error({ err }, "demo sweep failed"));
-      void expireWatches(data, bus).catch((err) => app.log.error({ err }, "watch expiry failed"));
-      void markSilentBridges(data, app.log).catch((err) => app.log.error({ err }, "bridge sweep failed"));
-      void closeStaleActivities(data).catch((err) => app.log.error({ err }, "activity sweep failed"));
-      void runScheduledWatches(data, app.log).catch((err) => app.log.error({ err }, "scheduled watches failed"));
-      void purgeDeletedAccounts({ data, bus, storage }, app.log).catch((err) => app.log.error({ err }, "account deletion failed"));
+    // Housekeeping, each job once per interval across every API process (ADR 0058).
+    const sweepEvery = options.sweepIntervalSeconds ?? 600;
+    const jobs: Job[] = [
+      { name: "demos.sweep", everyS: 30, run: () => sweepDemos({ data, bus, media: mediaControl, storage }, demo, app.log) },
+      { name: "watches.expire", everyS: 30, run: () => expireWatches(data, bus) },
+      { name: "bridges.silent", everyS: 30, run: () => markSilentBridges(data, app.log) },
+      { name: "activities.close_stale", everyS: 30, run: () => closeStaleActivities(data) },
+      { name: "accounts.purge", everyS: 30, leaseS: 1800, run: () => purgeDeletedAccounts({ data, bus, storage }, app.log) },
       // Live sessions the media plane stopped reporting (3 missed minute reports) are closed and metered.
-      void mediaDriver?.sweepFeeds().catch((err) => app.log.error({ err }, "feed sweep failed"));
-      const hour = new Date().toISOString().slice(0, 13);
-      if (hour !== sampledHour) {
-        sampledHour = hour;
-        void sampleStorage(data).catch((err) => app.log.error({ err }, "storage sample failed"));
-        void expireIdempotencyKeys(data).catch((err) => app.log.error({ err }, "idempotency expiry failed"));
-      }
-      void (async () => {
-        const now = await enforceLimits({ data, bus, media: mediaControl, quotaFor, log: app.log,
-          onUsageLimit: async (a, m, u, l) => { for (const mod of modules) await mod.onUsageLimit?.(a, m, u, l); } });
-        // Back under every limit (a new day or month, or a raised limit): resume watches.
-        for (const id of overBefore) {
-          if (now.has(id)) continue;
-          const rows = await data.withAccount(id, (s) => s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute());
-          for (const w of rows) await bus?.putWatch(id, w.id, kvValue(w));
-        }
-        overBefore = new Set(now.keys());
-      })().catch((err) => app.log.error({ err }, "usage limits failed"));
-    }, 30_000);
-    t.unref();
-    stoppers.push(() => clearInterval(t));
-    // Live viewers: idle close, camera gone, metering (ADR 0042, 0049); its own cadence, as the idle timeout can be short.
-    const lv = setInterval(() => {
-      void sweepLiveSessions(data, { idleTimeoutSeconds: liveIdleTimeoutSeconds, media: mediaControl, log: app.log }).catch((err) => app.log.error({ err }, "live session sweep failed"));
-    }, Number(process.env.LIVE_SWEEP_SECONDS ?? 10) * 1000);
-    lv.unref();
-    stoppers.push(() => clearInterval(lv));
+      ...(mediaDriver ? [{ name: "media.feeds", everyS: 30, run: () => mediaDriver.sweepFeeds() }] : []),
+      { name: "storage.sample", everyS: 3600, run: () => sampleStorage(data) },
+      { name: "idempotency.expire", everyS: 3600, run: () => expireIdempotencyKeys(data) },
+      {
+        name: "usage.limits", everyS: 30,
+        run: async (state) => {
+          const now = await enforceLimits({ data, bus, media: mediaControl, quotaFor, log: app.log,
+            onUsageLimit: async (a, m, u, l) => { for (const mod of modules) await mod.onUsageLimit?.(a, m, u, l); } });
+          // Back under every limit (a new day or month, or a raised limit): resume watches.
+          for (const id of (state as { over?: string[] } | null)?.over ?? []) {
+            if (now.has(id)) continue;
+            const rows = await data.withAccount(id, (s) => s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute());
+            for (const w of rows) await bus?.putWatch(id, w.id, kvValue(w));
+          }
+          return { over: [...now.keys()] };
+        },
+      },
+      // Live viewers: idle close, camera gone, metering (ADR 0042, 0049); its own cadence, as the idle timeout can be short.
+      { name: "live.sessions", everyS: Number(process.env.LIVE_SWEEP_SECONDS ?? 10), leaseS: 60,
+        run: () => sweepLiveSessions(data, { idleTimeoutSeconds: liveIdleTimeoutSeconds, media: mediaControl, log: app.log }) },
+      ...(storage && sweepEvery > 0 ? [{
+        name: "retention.sweep", everyS: sweepEvery, leaseS: 3600,
+        run: async () => {
+          const got = await sweepOnce(data, storage, new Date(), async (id) => (await quotaFor(id)).storageCapBytes);
+          if (got.segments) app.log.info({ sweep: got }, "retention sweep deleted raw segments");
+        },
+      }] : []),
+    ];
+    stoppers.push(startJobs(data, jobs, app.log));
+    stoppers.push(startScheduledWatches(data, app.log));
     // Deliveries are built outside a request, so links use the configured public URL.
     const workerBase = options.apiPublicUrl ?? `http://localhost:${process.env.PORT ?? 8080}`;
     stoppers.push(startWebhookWorker(data, { signer: playbackSigner, base: workerBase, ttlSeconds: options.playbackTtlSeconds ?? 900 }, app.log));

@@ -124,8 +124,12 @@ export function registerAccountRoutes(
       if (mode === "fill" && capBytes == null && (await deps.storageCap(accountId)) == null) {
         throw new ApiError(400, "validation_failed", "fill mode needs retention_max_bytes on this instance");
       }
-      await deps.data.withAccount(accountId, (s) =>
-        s.db
+      await deps.data.withAccount(accountId, async (s) => {
+        // Scheduled watches in the workspace's zone are due by its clock: work their next check out again (ADR 0058).
+        if (b.time_zone && b.time_zone !== current!.time_zone) {
+          await s.db.updateTable("watches").set({ next_check_at: new Date(0) }).where("next_check_at", "is not", null).execute();
+        }
+        return s.db
           .updateTable("accounts")
           .set({
             ...(b.name ? { name: b.name } : {}),
@@ -135,8 +139,8 @@ export function registerAccountRoutes(
             ...("retention_max_bytes" in b ? { retention_max_bytes: b.retention_max_bytes ?? null } : {}),
           })
           .where("id", "=", accountId)
-          .execute(),
-      );
+          .execute();
+      });
       return show(accountId);
     },
   );

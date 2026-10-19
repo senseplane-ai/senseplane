@@ -1,6 +1,7 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Per-source cascade: signal → perception → tracking/zones → episodes → events.
+"""Per-source cascade: signal → perception → tracking/zones → episodes → events,
+and activities (what is present, and where, from when to when; ADR 0057).
 
 Pure and synchronous, so the Valkey worker and offline tests drive the same
 code. Outputs are (subject, payload) pairs, messages of spec/brain/valkey.json.
@@ -15,6 +16,7 @@ import cv2
 import numpy as np
 
 from . import labels
+from .activity import PRESENCE_GAP_S, SOUND_GAP_S, Spans
 from .detector import YoloxDetector
 from .markers import Markers, MemoryMarkers
 from .signal import MotionDetector, loudness_dbfs
@@ -116,6 +118,7 @@ class SourcePipeline:
         self.last_frame_t = 0.0
         self.loudness = -120.0
         self.last_sound_scores: dict[str, float] = {}
+        self.spans = Spans(account_id, source_id)
 
     @property
     def _key(self) -> str:
@@ -150,6 +153,7 @@ class SourcePipeline:
             for track in self.tracker.active:
                 if track.last_seen == t and self._event_score(track) >= EVENT_MIN_SCORE[track.label]:
                     out += self._on_confirmed(track, rgb, t)
+            out += self._presence(t)
         if self.episode and any(not tr.stationary for tr in self.tracker.active):
             self.episode.last_active = t
             active = {tr.label for tr in self.tracker.active if not tr.stationary}
@@ -159,6 +163,21 @@ class SourcePipeline:
         with child_span("brain.episode") as span:
             out += self.tick(t)
             span.set_attribute("senseplane.events", len(out))
+        return out
+
+    def _presence(self, t: float) -> list[tuple[str, dict]]:
+        """Presence activities: each label in view, and in each zone, while a track that scores high enough
+        to post events is there (stationary ones too: someone sitting at a table is present)."""
+        here: dict[tuple[str, str | None], list[float]] = {}
+        for tr in self.tracker.active:
+            if tr.label not in labels.EVENTS or t - tr.last_seen > 1.0 or self._event_score(tr) < EVENT_MIN_SCORE[tr.label]:
+                continue
+            for zone in [None, *zones_for(tr.box, self.w, self.h, self.zones)]:
+                here.setdefault((tr.label, zone), []).append(tr.best_score)
+        out = []
+        for (label, zone), scores in here.items():
+            gap = PRESENCE_GAP_S["group" if label in labels.GROUPS else "object"]
+            out += self.spans.seen("presence", label, zone, t, gap, count=len(scores), confidence=max(scores))
         return out
 
     def _event_score(self, track: Track) -> float:
@@ -293,13 +312,14 @@ class SourcePipeline:
         return base64.b64decode(self._snapshot(self.last_frame)) if self.last_frame is not None else None
 
     def tick(self, t: float) -> list[tuple[str, dict]]:
+        out = self.spans.tick(t)
         ep = self.episode
         if ep and t - ep.last_active > self.cfg.episode_grace_s:
             self.episode = None
             for label in ep.labels:
                 self.markers.release(f"episode:{self._key}:{label}")
-            return [("brain.episode.closed", {"event_key": k, **self._ids(), "ended_at": iso(ep.last_active)}) for k in ep.labels.values()]
-        return []
+            out += [("brain.episode.closed", {"event_key": k, **self._ids(), "ended_at": iso(ep.last_active)}) for k in ep.labels.values()]
+        return out
 
     def on_audio(self, samples: np.ndarray, t: float) -> list[tuple[str, dict]]:
         self.loudness = loudness_dbfs(samples)
@@ -309,6 +329,8 @@ class SourcePipeline:
         out = []
         self.last_sound_scores = self.sound.classify(samples)
         for cls, score in self.last_sound_scores.items():
+            if cls in SOUND_THRESHOLDS and score >= SOUND_THRESHOLDS[cls]:
+                out += self.spans.seen("sound", cls, None, t, SOUND_GAP_S, confidence=score)
             if cls not in self.cfg.sound_events or score < SOUND_THRESHOLDS[cls]:
                 continue
             if not self.markers.claim(f"sound:{self._key}:{cls}", self.cfg.sound_cooldown_s, t):

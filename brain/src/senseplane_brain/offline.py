@@ -35,5 +35,6 @@ def run_file(path: str, pipeline: SourcePipeline, t0: float = 1_000_000.0, after
             after_frame(pipeline, frame, t0 + t)
     end = len(frames) / FPS
     out += [(end + 10, s, p) for s, p in pipeline.tick(t0 + end + 10)]
+    out += [(end + 60, s, p) for s, p in pipeline.tick(t0 + end + 60)]  # activities end after their gap (ADR 0057)
     return out
 

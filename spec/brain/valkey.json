@@ -305,6 +305,92 @@
         }
       }
     },
+    "brain.activity": {
+      "direction": "brain \u2192 api, on stream sp:brain:events (type = this name). ADR 0057: sent when an activity opens, every 60 s while it stays open, and when it closes; the API keeps one row per activity_key and closes one with no update for 3 minutes at last_seen_at",
+      "schema": {
+        "type": "object",
+        "required": [
+          "activity_key",
+          "account_id",
+          "source_id",
+          "kind",
+          "label",
+          "started_at",
+          "last_seen_at"
+        ],
+        "properties": {
+          "activity_key": {
+            "type": "string",
+            "description": "Unique per activity, e.g. pres:{source}:{label}:{zone|*}:{ms}"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "presence",
+              "sound",
+              "watch"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "presence: a detector label; sound: a sound class; watch: the watch id"
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "presence: the zone, or null for anywhere in view"
+          },
+          "watch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set when the activity closes"
+          },
+          "peak_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "presence: the most seen at once"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "verified": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "watch: whether the model check passed (null: no check)"
+          },
+          "summary": {
+            "type": "string",
+            "description": "watch: what the model check saw"
+          }
+        }
+      }
+    },
     "brain.usage": {
       "direction": "brain \u2192 api, on stream sp:brain:events (type = this name)",
       "schema": {

@@ -35,6 +35,7 @@ import redis.asyncio as aioredis
 
 from . import __version__, chat, telemetry, vlm
 from .compiler import compile_watch
+from .activity import Spans
 from .markers import Markers, MemoryMarkers, ValkeyMarkers
 from .pipeline import SourcePipeline, iso
 from .view import Reference, ViewMonitor
@@ -99,6 +100,7 @@ HEARTBEAT_S = 2.0
 HEARTBEAT_TTL_S = 6
 ACTIVE_CAMERA_S = 30.0  # a camera counts towards this brain's load while frames arrived this recently
 DROP_PIPELINE_S = 60.0  # a camera with no frames for this long is forgotten (moved, or offline)
+WATCH_GAP_S = 60.0  # a watch activity ends this long after its condition last held (ADR 0057)
 CHAT_EVENTS_TTL_S = 300
 CHAT_TOOL_TIMEOUT_S = 30
 
@@ -142,6 +144,7 @@ class Worker:
         self.detector, self.sound, self.embedder, self.confirm = detector, sound, embedder, confirm
         self.rpc_slots = rpc_slots or int(os.environ.get("BRAIN_RPC_SLOTS", "4"))
         self.pipelines: dict[str, SourcePipeline] = {}
+        self.watch_spans: dict[str, Spans] = {}  # "account.source" → its open watch activities (event loop only)
         self.last_seen: dict[str, float] = {}  # wall clock of a camera's last frame
         # Per camera, the frames not yet analysed, oldest first: jpeg, capture time, trace context, arrival time.
         # A media plane sends a second's frames in one batch, so a camera may have up to PENDING_PER_CAMERA.
@@ -286,8 +289,9 @@ class Worker:
             await self.ensure_camera(key)
             p = self.pipeline(key)
             out = p.on_audio(np.frombuffer(f.get("data") or b"", dtype=np.float32), t)
-            await self.publish(self.sink, out)
-            for fire in self.engine.on_audio(acc, src, p.last_sound_scores, t, p.last_frame):
+            fires = self.engine.on_audio(acc, src, p.last_sound_scores, t, p.last_frame)
+            await self.publish(self.sink, out + self.watch_activity(key, t))
+            for fire in fires:
                 asyncio.create_task(self.verify_and_publish(self.sink, fire))
 
     async def ensure_camera(self, key: str):
@@ -586,7 +590,7 @@ class Worker:
                     continue
                 frame, out, fires = result
                 self.stats["frames_processed"] += 1
-                await self.publish(self.sink, out)
+                await self.publish(self.sink, out + self.watch_activity(key, t))
                 await self.view_check(key, frame, t)
                 for fire in fires:
                     asyncio.create_task(self.verify_and_publish(self.sink, fire))  # tasks copy the current context
@@ -599,9 +603,10 @@ class Worker:
                     except Exception as err:  # noqa: BLE001 - the next snapshot replaces it in 10 s
                         log.warning("snapshot put failed", extra={"fields": {"source": key, "error": repr(err)}})
         for key, p in list(self.pipelines.items()):  # close quiet episodes even without new frames
-            await self.publish(self.sink, p.tick(now))
+            await self.publish(self.sink, p.tick(now) + self.watch_activity(key, now))
             if now - self.last_seen.get(key, now) > DROP_PIPELINE_S:
                 # Moved to another brain, or offline: its state goes (markers keep alerts from repeating).
+                await self.publish(self.sink, p.spans.close_all() + (self.watch_spans.pop(key).close_all() if key in self.watch_spans else []))
                 del self.pipelines[key]
                 self.last_seen.pop(key, None)
                 self.monitors.pop(key, None)
@@ -626,8 +631,20 @@ class Worker:
         fires = self.engine.on_frame(acc, src, p.tracker.active, p.motion.last_mask, p.zones, frame, t)
         return frame, out, fires
 
+    def watch_activity(self, key: str, t: float) -> list[tuple[str, dict]]:
+        """Keeps the open watch activities of a source going while their condition holds (ADR 0057)."""
+        ws = self.watch_spans.get(key)
+        if not ws:
+            return []
+        acc, src = key.split(".", 1)
+        out = []
+        for (_, watch_id, _), sp in list(ws.open.items()):
+            if self.engine.holding_now(acc, watch_id, src):
+                out += ws.seen("watch", watch_id, None, t, WATCH_GAP_S)
+        return out + ws.tick(t)
+
     async def verify_and_publish(self, sink, fire: Fire):
-        """VLM check (only if the watch has one), then a watch.triggered event."""
+        """VLM check (only if the watch has one), then a watch activity, and for alerts a watch.triggered event."""
         summary, confidence, labels = f"Watch triggered: {fire.description}.", None, []
         verified = None  # no check on this watch
         if fire.verify:
@@ -642,8 +659,18 @@ class Worker:
                     vspan.set_attribute("senseplane.confidence", float(a.confidence or 0))
                 if a.yes is not True or a.confidence < float(fire.verify.get("min_confidence", 0.7)):
                     log.info("watch check said no", extra={"fields": {"watch": fire.watch_id, "answer": a.answer, "confidence": a.confidence}})
+                    self.engine.check_failed(fire.account_id, fire.watch_id, fire.source_id, time.time())
                     return
                 summary, confidence, verified = a.answer or summary, round(a.confidence, 3), True
+        key = f"{fire.account_id}.{fire.source_id}"
+        ws = self.watch_spans.setdefault(key, Spans(fire.account_id, fire.source_id))
+        activity = ws.seen("watch", fire.watch_id, None, fire.t, WATCH_GAP_S, confidence=confidence or 0.0, watch_id=fire.watch_id,
+                           verified=verified, summary=summary)
+        if not self.engine.holding_now(fire.account_id, fire.watch_id, fire.source_id):
+            activity += ws.close("watch", fire.watch_id, None, fire.t)  # an instant trigger: an activity with no length
+        await self.publish(sink, activity)
+        if fire.mode == "track":
+            return
         snap = None
         if fire.frame is not None:
             ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(fire.frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])

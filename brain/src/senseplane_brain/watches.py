@@ -24,6 +24,9 @@ LEAVE_ABSENCE_S = 4.0
 # brain that takes the camera over does not fire it again (spec/brain/valkey.json `markers`).
 HELD_MARK_S = 30.0
 MOTION_MIN = 0.02  # fraction of a zone's pixels moving
+# A tracking watch (mode "track", ADR 0057) whose check said no asks again this often while its condition
+# holds, so "eating at the table" is found once the person sitting there starts eating.
+RECHECK_S = 120.0
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -36,6 +39,7 @@ class Fire:
     description: str
     verify: dict | None
     frame: np.ndarray | None = None
+    mode: str = "alert"
 
 
 class _State:
@@ -258,6 +262,7 @@ class WatchEngine:
         # Cooldowns and "fired and still holds" are shared across brains (ADR 0052).
         self.markers: Markers = markers if markers is not None else MemoryMarkers()
         self.holding: set[tuple[str, str]] = set()
+        self.recheck: dict[tuple[str, str], float] = {}  # (watch key, source) → when a failed check may run again
 
     def set_watch(self, key: str, watch: dict | None):
         if watch is None or watch.get("status") == "paused":
@@ -278,12 +283,29 @@ class WatchEngine:
                     st = self.states[(key, source_id)] = make_state(trig)
                 yield key, w, st
 
+    def check_failed(self, account_id: str, watch_id: str, source_id: str, t: float):
+        """The model check of a firing said no: a tracking watch whose condition still holds asks again later."""
+        key = f"{account_id}.{watch_id}"
+        w, st = self.watches.get(key), self.states.get((key, source_id))
+        if w and st and w.get("mode") == "track" and st.holding():
+            self.recheck[(key, source_id)] = t + RECHECK_S
+
+    def holding_now(self, account_id: str, watch_id: str, source_id: str) -> bool | None:
+        """Whether the watch's condition still holds on this source (None: an instant trigger, or unknown)."""
+        st = self.states.get((f"{account_id}.{watch_id}", source_id))
+        return st.holding() if st else None
+
     def evaluate(self, account_id: str, source_id: str, ctx: Ctx, frame: np.ndarray | None = None) -> list[Fire]:
         fires = []
         for key, w, st in self._for_source(account_id, source_id):
             fired = st.step(ctx)
             held, hk = f"held:{key}:{source_id}", (key, source_id)
             holding = st.holding()
+            if not holding:
+                self.recheck.pop(hk, None)
+            elif not fired and hk in self.recheck and ctx.t >= self.recheck[hk]:
+                del self.recheck[hk]
+                fired = True  # a tracking watch asks again (see check_failed)
             # Another brain fired this sustained trigger and it has held since: a handover, not a new firing.
             by_other = fired and holding is not None and hk not in self.holding and self.markers.held(held, ctx.t)
             if holding:
@@ -297,10 +319,12 @@ class WatchEngine:
             comp = w["compiled"]
             if not active_now(comp.get("active_hours"), ctx.t) or not in_schedule(w.get("active_hours"), ctx.t):
                 continue
-            if not self.markers.claim(f"watch:{key}:{source_id}", max(float(comp.get("cooldown_s", 0)), 1.0), ctx.t):
+            track = w.get("mode") == "track"
+            # A tracking watch records every time its condition starts; only alerts are spaced by a cooldown.
+            if not self.markers.claim(f"watch:{key}:{source_id}", 1.0 if track else max(float(comp.get("cooldown_s", 0)), 1.0), ctx.t):
                 continue
             fires.append(Fire(w["id"], account_id, source_id, ctx.t, describe(comp["trigger"]), comp.get("verify"),
-                              None if frame is None else frame.copy()))
+                              None if frame is None else frame.copy(), "track" if track else "alert"))
         return fires
 
     def on_frame(self, account_id: str, source_id: str, tracks: list[Track], motion_mask: np.ndarray | None,

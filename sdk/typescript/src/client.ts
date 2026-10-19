@@ -137,6 +137,9 @@ export class Senseplane {
       paginate<Watch>((cursor) => unwrap(this.raw.GET("/watches", { params: { query: { cursor } } }))),
     /** Backtest over recorded history: the cheap trigger over stored detections, then at most `max_checks` model checks (AI checks). */
     test: (body: S["WatchTestRequest"]) => unwrap(this.raw.POST("/watches/test", { body })),
+    /** Ready-made sets of watches (eldercare, home, shop, site; ADR 0057). */
+    packs: () => unwrap(this.raw.GET("/watch-packs")),
+    applyPack: (id: string, body: S["WatchPackApply"]) => unwrap(this.raw.POST("/watch-packs/{id}/apply", { params: { path: { id } }, body })),
   };
 
   /** Events routed to an agent by its watches' `notify` (ADR 0043). Agent keys read their own inbox; account keys pass `agent`. */

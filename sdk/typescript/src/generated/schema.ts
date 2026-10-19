@@ -649,6 +649,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/watch-packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ready-made sets of watches for a use case */
+        get: operations["listWatchPacks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/watch-packs/{id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a pack's watches on these sources
+         * @description Creates the pack's watches (or the ones named in `items`) on the sources: sentences are compiled like any watch, conditions and digests are added compiled, and a digest summarises the pack's own tracking watches. Times are in time_zone (default the workspace's).
+         */
+        post: operations["applyWatchPack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/activity/query": {
         parameters: {
             query?: never;
@@ -1597,6 +1634,37 @@ export interface components {
         ActivityCheckResult: components["schemas"]["WatchTestResult"] & {
             /** @description Matches kept as the watch's activities */
             stored: number;
+        };
+        WatchPack: {
+            id: string;
+            name: string;
+            description: string;
+            watches: {
+                key: string;
+                instruction: string;
+                /** @enum {string} */
+                mode: "alert" | "track";
+                hours?: {
+                    from?: string;
+                    to?: string;
+                };
+            }[];
+        };
+        WatchPackList: {
+            data: components["schemas"]["WatchPack"][];
+        };
+        WatchPackApply: {
+            /** @description Source ids or names */
+            sources: string[];
+            /** @description Only these watches of the pack, by key (default all) */
+            items?: string[];
+            /** @description IANA zone for the pack's times (default the workspace's) */
+            time_zone?: string;
+            notify?: components["schemas"]["destination"][];
+        };
+        WatchPackApplied: {
+            pack: string;
+            watches: components["schemas"]["watch"][];
         };
         ActivityList: {
             data: components["schemas"]["activity"][];
@@ -3865,6 +3933,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemorySearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWatchPacks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchPackList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    applyWatchPack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pack id (eldercare, home, shop, site) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WatchPackApply"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchPackApplied"];
                 };
             };
             default: components["responses"]["Error"];

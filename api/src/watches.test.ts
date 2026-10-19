@@ -97,6 +97,28 @@ describe("watches, ask, memory search, sensor watches", () => {
     await call("DELETE", `/v1/watches/${w.id}`);
   });
 
+  it("adds a pack of watches in one step (ADR 0057)", async () => {
+    const packs = (await call("GET", "/v1/watch-packs")).json().data;
+    expect(packs.map((p: { id: string }) => p.id)).toEqual(["eldercare", "home", "shop", "site"]);
+    const r = await call("POST", "/v1/watch-packs/eldercare/apply", { sources: [src], time_zone: "Europe/London" });
+    expect(r.statusCode).toBe(201);
+    const made = r.json().watches;
+    expect(made.map((w: { mode: string }) => w.mode)).toEqual(["track", "track", "track", "alert", "alert", "alert", "alert", "alert"]);
+    const meals = made[0];
+    const day = made.at(-1);
+    expect(day.compiled.trigger).toMatchObject({ type: "digest", at: "20:00", time_zone: "Europe/London" });
+    expect(day.compiled.trigger.items).toContainEqual({ label: "Meals", query: { measure: "count", what: { watch_id: meals.id }, compare: "last_14_days" } });
+    expect(made[5]).toMatchObject({ active_hours: { from: "08:00", to: "22:00", time_zone: "Europe/London" }, compiled: { trigger: { type: "condition", every_min: 10 } } });
+    for (const w of made) await call("DELETE", `/v1/watches/${w.id}`);
+    // Only some: the digest keeps the lines it can answer.
+    const some = (await call("POST", "/v1/watch-packs/eldercare/apply", { sources: [src], items: ["meals", "day"] })).json().watches;
+    expect(some).toHaveLength(2);
+    expect(some[1].compiled.trigger.items.map((i: { label: string }) => i.label)).toEqual(["First seen", "Meals", "Longest quiet spell"]);
+    for (const w of some) await call("DELETE", `/v1/watches/${w.id}`);
+    expect((await call("POST", "/v1/watch-packs/nope/apply", { sources: [src] })).statusCode).toBe(404);
+    expect((await call("POST", "/v1/watch-packs/home/apply", { sources: [src], items: ["teleport"] })).statusCode).toBe(400);
+  });
+
   it("puts a camera at a site", async () => {
     const s = (await call("POST", "/v1/sources", { name: "Till", type: "browser", site: "High St" })).json();
     expect(s.site).toBe("High St");

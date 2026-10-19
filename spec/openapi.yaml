@@ -1070,6 +1070,46 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/MemorySearchResponse'}
         default: {$ref: '#/components/responses/Error'}
+  /watch-packs:
+    get:
+      operationId: listWatchPacks
+      summary: Ready-made sets of watches for a use case
+      tags: [watches]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WatchPackList'}
+        default: {$ref: '#/components/responses/Error'}
+  /watch-packs/{id}/apply:
+    post:
+      operationId: applyWatchPack
+      summary: Add a pack's watches on these sources
+      description: >-
+        Creates the pack's watches (or the ones named in `items`) on the
+        sources: sentences are compiled like any watch, conditions and digests
+        are added compiled, and a digest summarises the pack's own tracking
+        watches. Times are in time_zone (default the workspace's).
+      tags: [watches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Pack id (eldercare, home, shop, site)
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WatchPackApply'}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WatchPackApplied'}
+        default: {$ref: '#/components/responses/Error'}
   /activity/query:
     post:
       operationId: queryActivity
@@ -2300,6 +2340,43 @@ components:
           required: [stored]
           properties:
             stored: {type: integer, description: Matches kept as the watch's activities}
+    WatchPack:
+      type: object
+      required: [id, name, description, watches]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        description: {type: string}
+        watches:
+          type: array
+          items:
+            type: object
+            required: [key, instruction, mode]
+            properties:
+              key: {type: string}
+              instruction: {type: string}
+              mode: {type: string, enum: [alert, track]}
+              hours: {type: object, properties: {from: {type: string}, to: {type: string}}}
+    WatchPackList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/WatchPack'}}
+    WatchPackApply:
+      type: object
+      additionalProperties: false
+      required: [sources]
+      properties:
+        sources: {type: array, minItems: 1, maxItems: 50, items: {type: string}, description: Source ids or names}
+        items: {type: array, items: {type: string}, description: 'Only these watches of the pack, by key (default all)'}
+        time_zone: {type: string, description: "IANA zone for the pack's times (default the workspace's)"}
+        notify: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Destination'}}
+    WatchPackApplied:
+      type: object
+      required: [pack, watches]
+      properties:
+        pack: {type: string}
+        watches: {type: array, items: {$ref: '#/components/schemas/Watch'}}
     ActivityList:
       type: object
       required: [data]

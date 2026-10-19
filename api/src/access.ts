@@ -121,10 +121,11 @@ const AGENT_ROUTES = new Set([
   "POST /v1/watches/test", "GET /v1/inbox", "POST /v1/inbox/seen",
   // Activities (ADR 0057): questions and intervals, within the agent's grants.
   "POST /v1/activity/query", "GET /v1/activities", "POST /v1/activity/check",
+  "GET /v1/watch-packs", "POST /v1/watch-packs/:id/apply",
 ]);
 
 /** Agent routes that need the `watch` ability on a grant (ADR 0048). */
-const WATCH_ROUTES = new Set(["POST /v1/watches", "PATCH /v1/watches/:id", "DELETE /v1/watches/:id", "POST /v1/watches/test"]);
+const WATCH_ROUTES = new Set(["POST /v1/watches", "PATCH /v1/watches/:id", "DELETE /v1/watches/:id", "POST /v1/watches/test", "POST /v1/watch-packs/:id/apply"]);
 /** Agent routes over recorded data: grants without `history` only reach the last RECENT_MS (ADR 0048). */
 const HISTORY_ROUTES = new Set([
   "GET /v1/events", "GET /v1/events/:id", "POST /v1/events/:id/feedback", "GET /v1/memory/search",

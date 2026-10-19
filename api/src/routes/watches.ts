@@ -9,7 +9,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormatsModule from "ajv-formats";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { type Compiled, type Reading, candidates } from "../backtest.js";
-import { DAYS, scheduleProblem } from "../schedule.js";
+import { DAYS, scheduleProblem, validTimeZone } from "../schedule.js";
 import type { Destination, WatchSchedule } from "../data/schema.js";
 import { sql } from "kysely";
 import type { Selectable } from "kysely";
@@ -26,6 +26,7 @@ import scheduleSchemaJson from "../generated/watch-schedule.schema.json" with { 
 import type { ApiBus } from "../indexer.js";
 import { type ObjectStorage, readObject } from "../storage.js";
 import { storeActivity } from "../brain-events.js";
+import { PACKS, toPack } from "../packs.js";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 (addFormatsModule as unknown as (a: Ajv2020) => void)(ajv);
@@ -160,41 +161,45 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     return out;
   }
 
-  app.post<{ Body: { instruction: string; sources: string[]; mode?: "alert" | "track"; compiled?: Record<string, unknown>; duration_minutes?: number; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
+  type CreateBody = { instruction: string; sources: string[]; mode?: "alert" | "track"; compiled?: Record<string, unknown>; duration_minutes?: number; notify?: Destination[]; active_hours?: WatchSchedule | null };
+  /** Compiles (unless given compiled), stores and shares a watch: POST /v1/watches and packs. */
+  async function createWatch(req: FastifyRequest, b: CreateBody) {
+    const accountId = req.accountId!;
+    const sources = await resolveSources(req, b.sources);
+    for (const id of sources) {
+      // An agent may watch only with senses it holds now.
+      if (!seesSource(req, id) || !(["video", "audio", "temperature", "humidity"] as const).some((x) => canSense(req, id, x))) throw new ApiError(403, "forbidden_sense", `no grant to watch ${id}`);
+    }
+    const schedule = checkSchedule(b.active_hours);
+    const notify = await checkNotify(deps.data, req, b.notify ?? []);
+    // A compiled watch given with the request (packs, or code that knows exactly what it wants) is used as it is.
+    if (b.compiled && !validateCompiled(b.compiled)) {
+      throw new ApiError(400, "validation_failed", ajv.errorsText(validateCompiled.errors), { errors: validateCompiled.errors });
+    }
+    const c = b.compiled
+      ? { compiled: b.compiled, estimate: { vlm_calls_per_day: b.compiled.verify ? "varies" : "0" }, warnings: [] as string[], compiler: "user", needs_zone: false }
+      : await compile(accountId, b.instruction, sources);
+    const row = await deps.data.withAccount(accountId, (s) =>
+      s.db.insertInto("watches").values({
+        id: newId("wat"), account_id: accountId, instruction: b.instruction, sources, mode: b.mode ?? "alert",
+        compiled: JSON.stringify(c.compiled), estimate: JSON.stringify(c.estimate), warnings: c.warnings,
+        status: c.needs_zone ? "needs_zone" : "active", compiler: c.compiler,
+        expires_at: b.duration_minutes ? new Date(Date.now() + b.duration_minutes * 60_000) : null,
+        notify: JSON.stringify(notify), active_hours: schedule ? JSON.stringify(schedule) : null,
+      }).returningAll().executeTakeFirstOrThrow(),
+    );
+    await bus().putWatch(accountId, row.id, kvValue(row));
+    return row;
+  }
+
+  app.post<{ Body: CreateBody }>(
     "/v1/watches",
     { schema: { body: { type: "object", additionalProperties: false, required: ["instruction", "sources"], properties: {
       instruction: { type: "string", minLength: 3, maxLength: 500 }, sources: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } },
       mode: { enum: ["alert", "track"] }, compiled: { type: "object" },
       duration_minutes: { type: "integer", minimum: 1, maximum: 525600 }, notify: notifySchema, active_hours: { ...scheduleSchema, type: ["object", "null"] },
     } } } },
-    async (req, reply) => {
-      const accountId = req.accountId!;
-      const sources = await resolveSources(req, req.body.sources);
-      for (const id of sources) {
-        // An agent may watch only with senses it holds now.
-        if (!seesSource(req, id) || !(["video", "audio", "temperature", "humidity"] as const).some((x) => canSense(req, id, x))) throw new ApiError(403, "forbidden_sense", `no grant to watch ${id}`);
-      }
-      const schedule = checkSchedule(req.body.active_hours);
-      const notify = await checkNotify(deps.data, req, req.body.notify ?? []);
-      // A compiled watch given with the request (packs, or code that knows exactly what it wants) is used as it is.
-      if (req.body.compiled && !validateCompiled(req.body.compiled)) {
-        throw new ApiError(400, "validation_failed", ajv.errorsText(validateCompiled.errors), { errors: validateCompiled.errors });
-      }
-      const c = req.body.compiled
-        ? { compiled: req.body.compiled, estimate: { vlm_calls_per_day: req.body.compiled.verify ? "varies" : "0" }, warnings: [] as string[], compiler: "user", needs_zone: false }
-        : await compile(accountId, req.body.instruction, sources);
-      const row = await deps.data.withAccount(accountId, (s) =>
-        s.db.insertInto("watches").values({
-          id: newId("wat"), account_id: accountId, instruction: req.body.instruction, sources, mode: req.body.mode ?? "alert",
-          compiled: JSON.stringify(c.compiled), estimate: JSON.stringify(c.estimate), warnings: c.warnings,
-          status: c.needs_zone ? "needs_zone" : "active", compiler: c.compiler,
-          expires_at: req.body.duration_minutes ? new Date(Date.now() + req.body.duration_minutes * 60_000) : null,
-          notify: JSON.stringify(notify), active_hours: schedule ? JSON.stringify(schedule) : null,
-        }).returningAll().executeTakeFirstOrThrow(),
-      );
-      await bus().putWatch(accountId, row.id, kvValue(row));
-      return reply.code(201).send(toWatch(row));
-    },
+    async (req, reply) => reply.code(201).send(toWatch(await createWatch(req, req.body))),
   );
 
   app.get("/v1/watches", async (req) => {
@@ -368,6 +373,45 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       compiled,
     };
   }
+
+  // --- packs (ADR 0057) ------------------------------------------------------------
+  app.get("/v1/watch-packs", async () => ({ data: PACKS.map(toPack) }));
+
+  app.post<{ Params: { id: string }; Body: { sources: string[]; items?: string[]; time_zone?: string; notify?: Destination[] } }>(
+    "/v1/watch-packs/:id/apply",
+    { schema: { body: { type: "object", additionalProperties: false, required: ["sources"], properties: {
+      sources: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } }, items: { type: "array", items: { type: "string" } },
+      time_zone: { type: "string", maxLength: 64 }, notify: notifySchema,
+    } } } },
+    async (req, reply) => {
+      const pack = PACKS.find((p) => p.id === req.params.id);
+      if (!pack) throw new ApiError(404, "not_found", "pack not found");
+      const unknown = (req.body.items ?? []).filter((k) => !pack.items.some((i) => i.key === k));
+      if (unknown.length) throw new ApiError(400, "validation_failed", `not in this pack: ${unknown.join(", ")}`);
+      const tz = req.body.time_zone ?? (await deps.data.withAccount(req.accountId!, (s) => s.account.get()))?.time_zone ?? "UTC";
+      if (!validTimeZone(tz)) throw new ApiError(400, "validation_failed", `unknown time zone "${tz}"`);
+      const ids: Record<string, string> = {};
+      const made = [];
+      for (const item of pack.items) {
+        if (req.body.items?.length && !req.body.items.includes(item.key)) continue;
+        const compiled = item.compiled?.(ids);
+        if (compiled) {
+          const trig = compiled.trigger as { type: string; time_zone?: string; items?: { query: { what: { watch_id?: string } } }[] };
+          // A digest line about a watch that wasn't added (left out of `items`) is dropped; with none left, so is the digest.
+          if (trig.items) trig.items = trig.items.filter((i) => !("watch_id" in i.query.what) || i.query.what.watch_id);
+          if (trig.items && !trig.items.length) continue;
+          trig.time_zone = tz;
+        }
+        const row = await createWatch(req, {
+          instruction: item.instruction, sources: req.body.sources, mode: item.mode, ...(compiled ? { compiled } : {}),
+          ...(item.hours ? { active_hours: { ...item.hours, time_zone: tz } } : {}), ...(req.body.notify ? { notify: req.body.notify } : {}),
+        });
+        ids[item.key] = row.id;
+        made.push(toWatch(row));
+      }
+      return reply.code(201).send({ pack: pack.id, watches: made });
+    },
+  );
 
   // --- backtest (ADR 0043) -------------------------------------------------------
   app.post<{ Body: {

@@ -42,6 +42,7 @@ const CONSOLE = `http://localhost:${CONSOLE_PORT}`;
 const CHECKS: { name: string; file: string; env?: Record<string, string>; needs?: () => string | undefined }[] = [
   { name: "m1", file: "m1-check.ts", env: { STREAM_SECONDS: "75" } },
   { name: "m3", file: "m3-check.ts" },
+  { name: "activity", file: "activity-check.ts" },
   { name: "m4", file: "m4-check.ts" },
   { name: "m4-5", file: "m4-5-check.ts", needs: () => (siteDir() ? undefined : "no website checkout (set E2E_SITE_DIR)") },
   { name: "m5", file: "m5-check.ts" },

@@ -310,3 +310,49 @@ describe("telegram channels", () => {
     expect((await api.public.inject({ method: "POST", url: "/telegram/webhook", payload: { update_id: 1 } })).statusCode).toBe(404);
   });
 });
+
+describe("telegram with background workers on", () => {
+  it("polls, links, and delivers an alert by itself", async () => {
+    const t = await createTestDatabase();
+    const sent: Sent[] = [];
+    const pending: TelegramUpdate[] = [];
+    const fake = (async (url: string | URL, init?: RequestInit) => {
+      const method = String(url).split("/").pop()!;
+      const params = init?.body instanceof FormData ? Object.fromEntries([...init.body.entries()].map(([k, v]) => [k, typeof v === "string" ? v : "<file>"])) : JSON.parse(String(init?.body ?? "{}"));
+      sent.push({ method, params });
+      const ok = (result: unknown) => new Response(JSON.stringify({ ok: true, result }), { status: 200 });
+      if (method === "getMe") return ok(BOT);
+      if (method === "getUpdates") {
+        await new Promise((r) => setTimeout(r, 200)); // a short long poll
+        return ok(pending.splice(0));
+      }
+      return ok({ message_id: 1 });
+    }) as typeof fetch;
+    const api = await createApi({ database: t.appUrl, logger: false, captureUrl: "https://c/capture.html", telegram: CONFIG, telegramFetch: fake,
+      bus: { async putSourceConfig() {}, async putWatch() {}, async latestSnapshot() { return undefined; }, async close() {}, async request<T>(): Promise<T> { throw new Error("x"); }, async stream() {} },
+      media: { async createIngestSession() { return { id: "s", publish_url: "ws://m/" }; } } });
+    try {
+      const acc = (await api.data.accounts.create("Workers")).id;
+      const key = (await api.data.withAccount(acc, (s) => s.apiKeys.create("owner"))).key;
+      const call = (method: "GET" | "POST", url: string, payload?: unknown) => api.public.inject({ method, url, payload: payload as object, headers: { authorization: `Bearer ${key}` } });
+      const src = (await call("POST", "/v1/sources", { name: "Door", type: "browser" })).json().id;
+      const code = new URL((await call("POST", "/v1/channels/telegram/link")).json().url).searchParams.get("start");
+      pending.push({ update_id: 1, message: { message_id: 1, chat: { id: 77, type: "private", first_name: "Bo" }, from: { id: 5 }, text: `/start ${code}` } });
+      const until = async (f: () => Promise<boolean> | boolean, ms = 15_000) => {
+        for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (await f()) return true;
+        return false;
+      };
+      expect(await until(async () => (await call("GET", "/v1/channels")).json().data.length === 1)).toBe(true);
+      const ch = (await call("GET", "/v1/channels")).json().data[0];
+      expect(await until(() => sent.some((x) => x.method === "sendMessage" && String(x.params.text).startsWith("Linked to")))).toBe(true);
+      const w = (await call("POST", "/v1/watches", { instruction: "Tell me when someone is at the door", sources: [src], notify: [{ type: "channel", id: ch.id }],
+        compiled: { trigger: { type: "objects", label: "person", on: "present" }, cooldown_s: 0, active_hours: null } })).json();
+      await api.data.withAccount(acc, (s) => createEvent(s, { event_key: "w1", source_id: src, type: "watch.triggered", sense: "video", occurred_at: new Date(),
+        summary: "Someone is at the door", labels: ["person"], confidence: 0.9, watch_id: w.id }));
+      expect(await until(() => sent.some((x) => x.method === "sendMessage" && String(x.params.text).includes("Someone is at the door")))).toBe(true);
+    } finally {
+      await api.close();
+      await t.drop();
+    }
+  }, 30_000);
+});

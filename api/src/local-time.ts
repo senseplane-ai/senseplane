@@ -24,16 +24,25 @@ export function wall(at: Date | number, timeZone: string): WallTime {
   return { y: +p.year!, m: +p.month!, d: +p.day!, hh: +p.hour!, mm: +p.minute!, ss: +p.second!, dow: DOW.indexOf(String(p.weekday)) };
 }
 
-/** The instant a wall-clock time names in a time zone (the earlier one in a repeated hour). */
+/** The offset from UTC a zone has at an instant, in ms. */
+function offsetAt(t: number, timeZone: string): number {
+  const w = wall(t, timeZone);
+  return Date.UTC(w.y, w.m - 1, w.d, w.hh, w.mm, w.ss) - Math.floor(t / 1000) * 1000;
+}
+
+/**
+ * The instant a wall-clock time names in a time zone. In a repeated hour (clocks go back) it is the earlier one;
+ * in a skipped hour (clocks go forward) the time moves forward by the gap, so 01:30 on the night London skips
+ * 01:00–02:00 is 02:30 BST. The brain's zoneinfo (fold=0) agrees.
+ */
 export function fromWall(y: number, m: number, d: number, hh: number, mm: number, timeZone: string): number {
-  const guess = Date.UTC(y, m - 1, d, hh, mm);
-  let t = guess;
-  for (let i = 0; i < 3; i++) {
-    const w = wall(t, timeZone);
-    const shown = Date.UTC(w.y, w.m - 1, w.d, w.hh, w.mm);
-    t += guess - shown;
-  }
-  return t;
+  const named = Date.UTC(y, m - 1, d, hh, mm);
+  // The offsets a day either side bracket any change of offset near this time.
+  const before = offsetAt(named - 86400_000, timeZone);
+  const after = offsetAt(named + 86400_000, timeZone);
+  const fits = [named - before, named - after].filter((t) => offsetAt(t, timeZone) === named - t);
+  if (fits.length) return Math.min(...fits);
+  return named - before;
 }
 
 /** Local midnight of the day `at` falls on, `days` days later (negative: earlier). */

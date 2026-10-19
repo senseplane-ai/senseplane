@@ -56,6 +56,23 @@ describe("local time", () => {
     expect(localMidnight(fromWall(2026, 10, 25, 12, 0, TZ), TZ, 1) - localMidnight(fromWall(2026, 10, 25, 12, 0, TZ), TZ)).toBe(25 * 3600_000);
   });
 
+  it("names an instant in a skipped or repeated hour as zoneinfo does", () => {
+    const iso = (...a: [number, number, number, number, number, string]) => new Date(fromWall(...a)).toISOString();
+    // Clocks go forward: the skipped time moves forward by the gap.
+    expect(iso(2026, 3, 29, 1, 30, "Europe/London")).toBe("2026-03-29T01:30:00.000Z"); // 02:30 BST
+    expect(iso(2026, 3, 8, 2, 30, "America/New_York")).toBe("2026-03-08T07:30:00.000Z"); // 03:30 EDT
+    // Clocks go back: the earlier of the two.
+    expect(iso(2026, 10, 25, 1, 30, "Europe/London")).toBe("2026-10-25T00:30:00.000Z"); // 01:30 BST
+    expect(iso(2026, 11, 1, 1, 30, "America/New_York")).toBe("2026-11-01T05:30:00.000Z"); // 01:30 EDT
+    // Lord Howe moves by half an hour: 02:00 → 02:30 on 4 Oct 2026, back 02:00 → 01:30 on 5 Apr 2026.
+    expect(iso(2026, 10, 4, 2, 15, "Australia/Lord_Howe")).toBe("2026-10-03T15:45:00.000Z"); // 02:45 +11:00
+    expect(iso(2026, 4, 5, 1, 45, "Australia/Lord_Howe")).toBe("2026-04-04T14:45:00.000Z"); // 01:45 +11:00, the first
+    // Ordinary times, and zones east and west of UTC.
+    expect(iso(2026, 10, 19, 20, 0, "Europe/London")).toBe("2026-10-19T19:00:00.000Z");
+    expect(iso(2026, 10, 19, 8, 0, "Asia/Kolkata")).toBe("2026-10-19T02:30:00.000Z");
+    expect(iso(2026, 10, 19, 23, 59, "Pacific/Honolulu")).toBe("2026-10-20T09:59:00.000Z");
+  });
+
   it("cuts a range into nightly windows that run past midnight", () => {
     const w = dailyWindows(at("2026-10-12T23:00:00Z"), at("2026-10-14T23:00:00Z"), { from: "22:00", to: "06:00" }, TZ);
     expect(w.map(([a, b]) => [new Date(a).toISOString(), new Date(b).toISOString()])).toEqual([

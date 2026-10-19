@@ -27,10 +27,11 @@ import * as m0022 from "./0022_connected_apps.js";
 import * as m0023 from "./0023_media_feeds.js";
 import * as m0024 from "./0024_activities.js";
 import * as m0025 from "./0025_scheduled_watches.js";
+import * as m0026 from "./0026_readings_partitions_in_utc.js";
 
 /** Migrations are imported explicitly so they ship inside the package. */
 export const migrationProvider: MigrationProvider = {
   async getMigrations(): Promise<Record<string, Migration>> {
-    return { "0001_accounts_and_sources": m0001, "0002_ingest_keys_segments": m0002, "0003_clips_and_retention": m0003, "0004_events_webhooks_readings": m0004, "0005_watches_memory_usage": m0005, "0006_demo_sessions": m0006, "0007_watch_expiry": m0007, "0008_agents_grants_audit_metering": m0008, "0009_view_changed": m0009, "0010_encrypted_webhook_secrets": m0010, "0011_event_verified": m0011, "0012_idempotency_keys": m0012, "0013_users_and_sign_in": m0013, "0014_retention_modes": m0014, "0015_capture_link_binding": m0015, "0016_whip_ingest_tokens": m0016, "0017_conversations": m0017, "0018_live_view_sessions": m0018, "0019_watch_destinations": m0019, "0020_team_and_workspaces": m0020, "0021_bridges_and_integrations": m0021, "0022_connected_apps": m0022, "0023_media_feeds": m0023, "0024_activities": m0024, "0025_scheduled_watches": m0025 };
+    return { "0001_accounts_and_sources": m0001, "0002_ingest_keys_segments": m0002, "0003_clips_and_retention": m0003, "0004_events_webhooks_readings": m0004, "0005_watches_memory_usage": m0005, "0006_demo_sessions": m0006, "0007_watch_expiry": m0007, "0008_agents_grants_audit_metering": m0008, "0009_view_changed": m0009, "0010_encrypted_webhook_secrets": m0010, "0011_event_verified": m0011, "0012_idempotency_keys": m0012, "0013_users_and_sign_in": m0013, "0014_retention_modes": m0014, "0015_capture_link_binding": m0015, "0016_whip_ingest_tokens": m0016, "0017_conversations": m0017, "0018_live_view_sessions": m0018, "0019_watch_destinations": m0019, "0020_team_and_workspaces": m0020, "0021_bridges_and_integrations": m0021, "0022_connected_apps": m0022, "0023_media_feeds": m0023, "0024_activities": m0024, "0025_scheduled_watches": m0025, "0026_readings_partitions_in_utc": m0026 };
   },
 };

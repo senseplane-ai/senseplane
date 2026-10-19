@@ -30,6 +30,7 @@ from . import labels
 log = logging.getLogger("senseplane.brain.chat")
 
 MAX_STEPS = 6  # model calls per answer (each is one AI check)
+NO_ANSWER = "I couldn't put an answer together for that. Try asking about one camera, or a shorter time."
 HOLD_CHARS = 160  # text held back until we know it isn't a preamble to a tool call
 
 # One streamed model turn: ("delta", text) items, then ("tool_call", {id, name, arguments}) items.
@@ -376,6 +377,10 @@ class Session:
         messages.append({"role": "user", "content": self.req["question"]})
         for step in range(MAX_STEPS):
             last = step == MAX_STEPS - 1
+            if last:
+                # Without tools some models stop with nothing to say; ask for the answer outright.
+                messages.append({"role": "user", "content": "No more tools. Answer my question now from the results above; "
+                                 "if they don't settle it, say what you found and what you couldn't tell."})
             held, text, released, calls = "", "", False, []
             for kind, value in self.complete(messages, None if last else TOOL_SPECS):
                 if kind == "delta":
@@ -389,9 +394,11 @@ class Session:
                             self.write(held)
                 elif kind == "tool_call":
                     calls.append(value)
-            if not calls:
+            if not calls or last:
                 if not released:
                     self.write(held)
+                if not text.strip():
+                    self.write(NO_ANSWER)
                 return self.finish()
             # A short preamble before a tool call ("Let me check…") is not part of the answer.
             assistant: dict = {"role": "assistant", "content": text if released else None, "tool_calls": [

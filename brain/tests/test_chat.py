@@ -207,6 +207,15 @@ def test_keeps_context_and_stops_after_max_steps():
     assert "Front door (id src_door, Porch; online; can look now)" in first[0]["content"]
 
 
+def test_asks_for_the_answer_on_the_last_step_and_never_ends_empty():
+    # The last call has no tools; a model that still says nothing gets a plain reply, not an empty answer.
+    model = scripted(*([[("tool", "list_sources", {})]] * 5 + [[]]))
+    content, _ = run(REQ, model, FakeTools())
+    assert content == "I couldn't put an answer together for that. Try asking about one camera, or a shorter time."
+    assert model.seen[-1]["messages"][-1] == {"role": "user", "content": "No more tools. Answer my question now from the results above; "
+                                              "if they don't settle it, say what you found and what you couldn't tell."}
+
+
 def test_without_a_model_lists_related_moments():
     content, events = run(REQ, None, FakeTools())
     assert "[1]" in content and "A person walked up" in content

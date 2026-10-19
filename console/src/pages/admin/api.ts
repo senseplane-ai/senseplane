@@ -114,7 +114,10 @@ export interface WatchInput {
   notify?: Destination[];
   active_hours?: ActiveHours | null;
   status?: "active" | "paused";
+  mode?: WatchMode;
 }
+/** alert: events and notifications; track: only records activities, to ask about later (ADR 0057). */
+export type WatchMode = "alert" | "track";
 export interface WatchTestResult {
   matches: { source_id: string; source_name: string; at: string; summary: string; snapshot_url?: string }[];
   checks_used: number;
@@ -123,6 +126,18 @@ export interface WatchTestResult {
 export const createWatch = (ctx: Ctx, body: WatchInput & { instruction: string; sources: string[] }) => api<WatchX>(ctx, "POST", "/watches", body);
 export const updateWatch = (ctx: Ctx, id: string, body: WatchInput) => api<WatchX>(ctx, "PATCH", `/watches/${encodeURIComponent(id)}`, body);
 export const testWatch = (ctx: Ctx, body: { instruction: string; sources: string[]; from: string; to: string }) => api<WatchTestResult>(ctx, "POST", "/watches/test", body);
+
+// --- watch packs: ready-made sets of watches (ADR 0057) ------------------------
+
+export interface WatchPack {
+  id: string;
+  name: string;
+  description: string;
+  watches: { key: string; instruction: string; mode: WatchMode; hours?: { from?: string; to?: string } }[];
+}
+export const listWatchPacks = (ctx: Ctx) => api<{ data: WatchPack[] }>(ctx, "GET", "/watch-packs").then((r) => r.data);
+export const applyWatchPack = (ctx: Ctx, id: string, body: { sources: string[]; items?: string[]; time_zone?: string }) =>
+  api<{ pack: unknown; watches: WatchX[] }>(ctx, "POST", `/watch-packs/${encodeURIComponent(id)}/apply`, body);
 
 // --- team --------------------------------------------------------------------
 

@@ -55,7 +55,7 @@ function SuggestedWatchCard({ w }: { w: SuggestedWatch }) {
     setState("busy");
     try {
       const targets = w.sources.length ? w.sources : (sources ?? []).filter((s) => s.senses.includes("video")).map((s) => s.id);
-      await client.watches.create({ instruction: w.instruction, sources: targets });
+      await client.watches.create({ instruction: w.instruction, sources: targets, mode: "alert" });
       setState("done");
       toast("Watch started.");
     } catch (e) {

@@ -85,7 +85,7 @@ describe("AskPage", () => {
     expect(screen.getByLabelText("Follow-up question")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Start watching" }));
-    await waitFor(() => expect(watch).toEqual({ instruction: final.suggested_watch.instruction, sources: ["src_a"] }));
+    await waitFor(() => expect(watch).toEqual({ instruction: final.suggested_watch.instruction, sources: ["src_a"], mode: "alert" }));
     expect(await screen.findByRole("link", { name: /Watching/ })).toHaveAttribute("href", "/watches");
 
     await userEvent.click(screen.getByRole("button", { name: "Helpful" }));

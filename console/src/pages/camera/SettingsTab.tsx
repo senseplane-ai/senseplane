@@ -1,7 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-camera settings: name, retention override, record audio, resolution (read-only).
+// Per-camera settings: name, site, retention override, record audio, resolution (read-only).
 import { useState } from "react";
 import type { Source } from "senseplane";
 import { errorText } from "../../api/extra";
@@ -28,6 +28,7 @@ export function SettingsTab({ source }: { source: Source }) {
   const { client, putSource, account } = useApp();
   const toast = useToast();
   const [name, setName] = useState(source.name);
+  const [site, setSite] = useState(source.site ?? "");
   const [busy, setBusy] = useState(false);
 
   const save = async (body: Parameters<typeof client.sources.update>[1], done = "Saved.") => {
@@ -49,6 +50,12 @@ export function SettingsTab({ source }: { source: Source }) {
     if (!n || n === source.name) return setName(source.name);
     void save({ name: n }, "Name saved.");
   };
+  const saveSite = () => {
+    const v = site.trim();
+    setSite(v);
+    if (v === (source.site ?? "")) return;
+    void save({ site: v || null }, v ? "Site saved." : "Site cleared.");
+  };
 
   const accDefault = account?.retention_mode === "fill" ? "until storage is full"
     : account?.retention_days == null ? "until deleted" : `${account.retention_days} days`;
@@ -64,6 +71,15 @@ export function SettingsTab({ source }: { source: Source }) {
           onChange={(e) => setName(e.target.value)} onBlur={saveName}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveName(); } }}
         />
+      </div>
+      <div className="card-row field">
+        <label htmlFor="cam-site" className="toggle-label">Site</label>
+        <input
+          id="cam-site" className="input input-md" value={site} maxLength={120} placeholder="Home, High St shop"
+          onChange={(e) => setSite(e.target.value)} onBlur={saveSite}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveSite(); } }}
+        />
+        <span className="field-hint">Groups cameras by place, so you can ask about one place at a time.</span>
       </div>
       <div className="card-row field">
         <label htmlFor="cam-keep" className="toggle-label">Keep recordings for</label>

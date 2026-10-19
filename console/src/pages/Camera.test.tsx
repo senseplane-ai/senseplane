@@ -1,11 +1,12 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { navigate } from "../router";
 import { appData, fakeFetch, renderWithApp, source } from "../test/render";
 import { CameraPage } from "./Camera";
+import { durationText } from "./camera/ActivityTab";
 import { retentionBody } from "./camera/SettingsTab";
 import { snapToRecorded } from "./camera/time";
 
@@ -96,6 +97,85 @@ it("saves a new name from the Settings tab", async () => {
   await waitFor(() => expect(putSource).toHaveBeenCalledWith(expect.objectContaining({ name: "Porch" })));
   expect(patch).toHaveBeenCalledTimes(1);
   expect(await screen.findByText("Name saved.")).toBeInTheDocument();
+});
+
+it("lists today's activity with durations, ongoing and checked later", async () => {
+  let asked: URL | undefined;
+  const f = routes({
+    "GET /activities": (url: URL) => {
+      asked = url;
+      return Response.json({ data: [
+        { id: "act_1", source: { id, name: "Front door" }, kind: "presence", label: "person", zone: "kitchen", watch_id: null, started_at: iso(at(8)), ended_at: iso(at(9, 25)), ongoing: false, duration_s: 5100, peak_count: 2, confidence: 0.9, verified: null, summary: null, checked: false },
+        { id: "act_2", source: { id, name: "Front door" }, kind: "watch", label: "wat_1", zone: null, watch_id: "wat_1", started_at: iso(at(14, 48)), ended_at: null, ongoing: true, duration_s: 720, peak_count: 1, confidence: 0.8, verified: true, summary: "Eating lunch", checked: false },
+        { id: "act_3", source: { id, name: "Front door" }, kind: "sound", label: "crying", zone: null, watch_id: null, started_at: iso(at(10)), ended_at: iso(at(10) + 45_000), ongoing: false, duration_s: 45, peak_count: 1, confidence: 0.7, verified: null, summary: null, checked: true },
+      ] });
+    },
+    "GET /watches": { data: [{ id: "wat_1", instruction: "Eating at the table", sources: [id], mode: "track", compiled: { trigger: { type: "objects", label: "person", on: "present" }, cooldown_s: 0, active_hours: null }, estimate: { vlm_calls_per_day: "1-5" }, status: "active", warnings: [], created_at: iso(at(1)) }], next_cursor: null },
+  });
+  const { container } = renderWithApp(<CameraPage id={id} />, appData({ sources: [cam], fetch: f }));
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: "Activity" }));
+  expect(await screen.findByText("Person in kitchen")).toBeInTheDocument();
+  expect(screen.getByText("1 h 25 min")).toBeInTheDocument();
+  expect(screen.getByText("Up to 2 at once")).toBeInTheDocument();
+  expect(screen.getByText("Crying")).toBeInTheDocument();
+  expect(screen.getByText("45 s")).toBeInTheDocument();
+  expect(screen.getByText("Checked later")).toBeInTheDocument();
+  // The watch's instruction, not its summary (it also shows in the Watches card).
+  const panel = screen.getByRole("tabpanel");
+  expect(await within(panel).findByText("Eating at the table")).toBeInTheDocument();
+  expect(screen.getByText("now")).toBeInTheDocument();
+  expect(screen.getByText("12 min so far")).toBeInTheDocument();
+  // Newest first: the ongoing watch, then the sound, then the person.
+  expect([...container.querySelectorAll(".cam-act .cam-event-text > span:first-child")].map((e) => e.textContent)).toEqual(["Eating at the table", "Crying", "Person in kitchen"]);
+  expect(container.querySelectorAll(".cam-act-seg")).toHaveLength(1);
+  expect(asked?.searchParams.get("source")).toBe(id);
+  expect(asked?.searchParams.get("from")).toBe(iso(at(0)));
+  expect(asked?.searchParams.get("limit")).toBe("200");
+});
+
+it("has no Activity tab for sensors", () => {
+  const sensor = source({ id: "src_sensor", name: "Fridge", type: "sensor", senses: ["temperature"] } as never);
+  renderWithApp(<CameraPage id="src_sensor" />, appData({ sources: [sensor], fetch: routes() }));
+  expect(screen.getByRole("tab", { name: "Events" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
+});
+
+it("words durations plainly", () => {
+  expect(durationText(45)).toBe("45 s");
+  expect(durationText(720)).toBe("12 min");
+  expect(durationText(5100)).toBe("1 h 25 min");
+  expect(durationText(7200)).toBe("2 h");
+  expect(durationText(3590)).toBe("1 h");
+});
+
+it("saves the site from the Settings tab, and clears it when emptied", async () => {
+  const site = { ...cam, site: "Home" } as typeof cam;
+  const putSource = vi.fn();
+  const bodies: unknown[] = [];
+  const f = routes();
+  const wrapped: typeof fetch = async (input, init) => {
+    if (input instanceof Request && input.method === "PATCH") {
+      const body = JSON.parse(await input.text());
+      bodies.push(body);
+      return Response.json({ ...site, ...body });
+    }
+    return f(input, init);
+  };
+  renderWithApp(<CameraPage id={id} />, appData({ sources: [site], fetch: wrapped, putSource }));
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+  const field = screen.getByLabelText("Site");
+  expect(field).toHaveValue("Home");
+  expect(field).toHaveAttribute("placeholder", "Home, High St shop");
+  await user.clear(field);
+  await user.type(field, "High St shop{Enter}");
+  await waitFor(() => expect(bodies).toEqual([{ site: "High St shop" }]));
+  expect(await screen.findByText("Site saved.")).toBeInTheDocument();
+  await user.clear(field);
+  await user.type(field, "{Enter}");
+  await waitFor(() => expect(bodies).toEqual([{ site: "High St shop" }, { site: null }]));
+  expect(putSource).toHaveBeenLastCalledWith(expect.objectContaining({ site: null }));
 });
 
 it("shows not found for an unknown camera", async () => {

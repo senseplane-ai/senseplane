@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Camera detail (ADR 0046): recorded playback with today's timeline, Right now,
-// Ask this camera, its watches, and tabs for events, privacy masks and settings.
+// Ask this camera, its watches, and tabs for events, today's activity (video
+// only), privacy masks and settings.
 import { useEffect, useState } from "react";
 import type { Event, Source } from "senseplane";
 import { Link, useLocation } from "../router";
@@ -10,6 +11,7 @@ import { useApp } from "../shell/AppData";
 import { ingestLong, isVideo, keepsLabel, noVideoSince, startOfToday, statusOf } from "../shell/sources";
 import { EmptyState, LinkButton, StatusDot, Tabs, tabPanelProps } from "../ui";
 import { CameraActions } from "./camera/Actions";
+import { ActivityTab } from "./camera/ActivityTab";
 import { AskCamera, CameraWatches, RightNow } from "./camera/Aside";
 import { EventsTab } from "./camera/EventsTab";
 import { Playback } from "./camera/Playback";
@@ -18,7 +20,7 @@ import { SettingsTab } from "./camera/SettingsTab";
 import { ZoneEditor } from "./camera/ZoneEditor";
 import "./camera/camera.css";
 
-type Tab = "events" | "masks" | "settings";
+type Tab = "events" | "activity" | "masks" | "settings";
 
 /** The source from the shared list, else fetched once (deep links before the list loads). */
 function useSource(id: string): { source: Source | null; missing: boolean } {
@@ -87,7 +89,7 @@ export function CameraPage({ id }: { id: string }) {
     `Keeps ${keepsLabel(source, account)}`.replace("Keeps Until", "Keeps until"),
   ].filter(Boolean) as string[];
   const tabs: { id: Tab; label: string }[] = video
-    ? [{ id: "events", label: "Events" }, { id: "masks", label: "Privacy masks" }, { id: "settings", label: "Settings" }]
+    ? [{ id: "events", label: "Events" }, { id: "activity", label: "Activity" }, { id: "masks", label: "Privacy masks" }, { id: "settings", label: "Settings" }]
     : [{ id: "events", label: "Events" }, { id: "settings", label: "Settings" }];
 
   return (
@@ -131,6 +133,7 @@ export function CameraPage({ id }: { id: string }) {
       <Tabs label="Camera sections" tabs={tabs} value={tab} onChange={setTab} idPrefix="cam" />
       <div {...tabPanelProps(tab, "cam")}>
         {tab === "events" && <EventsTab events={events ?? []} loading={events === null} />}
+        {tab === "activity" && video && <ActivityTab source={source} />}
         {tab === "masks" && video && <ZoneEditor client={client} source={source} onSaved={putSource} />}
         {tab === "settings" && <SettingsTab key={source.id} source={source} />}
       </div>

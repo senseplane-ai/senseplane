@@ -3,23 +3,36 @@
 
 // Watches: say what to look out for in plain words, pick cameras, where to
 // send it and when it is active, see how Senseplane will watch, try it on the
-// last hour, then manage the running watches.
+// last hour, then manage the running watches. A watch alerts or just keeps
+// track (ADR 0057); packs add a ready-made set of watches in one step.
 import { useMemo, useState } from "react";
 import { LABELS, type Source, type Trigger, type Webhook } from "senseplane";
 import { labelText } from "../../shell/sources";
 import {
-  type ActiveHours, type Day, type Destination, type WatchTestResult, type WatchX, createWatch, errorText, listEvents,
-  testWatch, unavailable, updateWatch,
+  type ActiveHours, type Day, type Destination, type WatchMode, type WatchPack, type WatchTestResult, type WatchX,
+  applyWatchPack, createWatch, errorText, listEvents, listWatchPacks, testWatch, unavailable, updateWatch,
 } from "./api";
 import {
-  type PageProps, Confirm, Dialog, ErrorNote, Header, LoadState, Menu, MultiChips, Switch, Thumb, Unavailable, can, ctxOf,
-  dayLabel, fmtHm, fmtTime, hostOf, joinAnd, roleNote, useLoad, useRole, useSources,
+  type PageProps, Chip, Confirm, Dialog, ErrorNote, Header, LoadState, Menu, MultiChips, Switch, Thumb, Unavailable, can,
+  ctxOf, dayLabel, fmtHm, fmtTime, hostOf, joinAnd, roleNote, useLoad, useRole, useSources,
 } from "./kit";
 
 // --- plain-language rendering of a compiled watch --------------------------------
 
 const ON: Record<string, string> = { enter: "enters", leave: "leaves", present: "seen", stationary: "stays still" };
 const GROUPS: ReadonlySet<unknown> = new Set(LABELS.filter((l) => "group" in l).map((l) => l.label));
+const DAY_NAMES: Record<string, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+
+/** Condition and digest watches are answered by the API on a schedule, not on every frame. */
+export const scheduled = (t: Trigger) => ["condition", "digest"].includes((t as { type: string }).type);
+
+function onDays(days: unknown): string {
+  const d = Array.isArray(days) ? (days as string[]) : [];
+  if (!d.length || d.length === 7) return "daily";
+  if (d.join(",") === "mon,tue,wed,thu,fri") return "on weekdays";
+  if (d.join(",") === "sat,sun") return "at weekends";
+  return `on ${d.map((x) => DAY_NAMES[x] ?? x).join(", ")}`;
+}
 
 export function describeTrigger(t: Trigger): string {
   const x = t as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -37,6 +50,11 @@ export function describeTrigger(t: Trigger): string {
     case "sensor": return `${x.sense}${x.above !== undefined ? ` > ${x.above}` : ""}${x.below !== undefined ? ` < ${x.below}` : ""}${dur}`;
     case "schedule": return `every ${x.every_min} min`;
     case "sequence": return (x.steps as Trigger[]).map(describeTrigger).join(", then ");
+    case "condition": return x.every_min ? `Checked every ${x.every_min} min` : x.at ? `Checked ${onDays(x.days)} at ${x.at}` : "Checked on a schedule";
+    case "digest": {
+      const items = Array.isArray(x.items) ? (x.items as { label: string }[]).map((i) => i.label).filter(Boolean) : [];
+      return `Summary at ${x.at}${items.length ? `: ${items.join(", ")}` : ""}`;
+    }
     default: return String(x.type);
   }
 }
@@ -76,6 +94,7 @@ function activeIdOf(a: ActiveHours | null): { id: ActiveId; custom: { from: stri
 
 interface Form {
   instruction: string;
+  mode: WatchMode;
   cams: string[];
   dests: string[]; // "webhook:<id>" | "agent:<id>"
   active: ActiveId;
@@ -107,18 +126,28 @@ function FormFields({ f, set, sources, places, disabled, navigate, idp }: { f: F
       <textarea id={`${idp}-instr`} className="adm-textarea" rows={3} value={f.instruction} disabled={disabled} maxLength={500}
         placeholder="Tell me if the loading dock door stays open after 6 pm" onChange={(e) => set({ ...f, instruction: e.target.value })} />
       <fieldset className="adm-fieldset">
+        <legend className="adm-legend">When it happens</legend>
+        <div className="adm-chips">
+          <Chip on={f.mode === "alert"} check disabled={disabled} onClick={() => set({ ...f, mode: "alert" })}>Alert me</Chip>
+          <Chip on={f.mode === "track"} check disabled={disabled} onClick={() => set({ ...f, mode: "track" })}>Just keep track</Chip>
+        </div>
+        {f.mode === "track" && <span className="adm-note">Records when it happens so you can ask about it later, without notifications.</span>}
+      </fieldset>
+      <fieldset className="adm-fieldset">
         <legend className="adm-legend">Watch on <span className="adm-legend-count">{f.cams.length === 1 ? "1 camera" : `${f.cams.length} cameras`}</span></legend>
         {sources.length ? (
           <MultiChips all="All cameras" items={sources.map((s) => ({ id: s.id, label: s.name }))} value={f.cams} onChange={(cams) => set({ ...f, cams })} disabled={disabled} />
         ) : <span className="adm-note">Add a camera first, then come back to watch it.</span>}
       </fieldset>
-      <fieldset className="adm-fieldset">
-        <legend className="adm-legend">Send to <span className="adm-legend-count">{f.dests.length === 1 ? "1 place" : `${f.dests.length} places`}</span></legend>
-        <MultiChips items={items} value={f.dests} onChange={(dests) => set({ ...f, dests })} disabled={disabled} kindOf={(id) => (id.startsWith("agent:") ? "AGENT" : "WEBHOOK")}>
-          <a href="/webhooks" className="adm-chip adm-chip-add" onClick={(e) => { e.preventDefault(); navigate("/webhooks"); }}>+ Add webhook</a>
-        </MultiChips>
-        <span className="adm-note">Every fired watch also appears in Events.</span>
-      </fieldset>
+      {f.mode === "alert" && (
+        <fieldset className="adm-fieldset">
+          <legend className="adm-legend">Send to <span className="adm-legend-count">{f.dests.length === 1 ? "1 place" : `${f.dests.length} places`}</span></legend>
+          <MultiChips items={items} value={f.dests} onChange={(dests) => set({ ...f, dests })} disabled={disabled} kindOf={(id) => (id.startsWith("agent:") ? "AGENT" : "WEBHOOK")}>
+            <a href="/webhooks" className="adm-chip adm-chip-add" onClick={(e) => { e.preventDefault(); navigate("/webhooks"); }}>+ Add webhook</a>
+          </MultiChips>
+          <span className="adm-note">Every fired watch also appears in Events.</span>
+        </fieldset>
+      )}
       <div className="adm-row">
         <label className="adm-label">Active
           <select className="adm-select adm-select-dark" style={{ height: 36 }} value={f.active} disabled={disabled} onChange={(e) => set({ ...f, active: e.target.value as ActiveId })}>
@@ -142,7 +171,7 @@ function FormFields({ f, set, sources, places, disabled, navigate, idp }: { f: F
 
 // --- page ------------------------------------------------------------------------------
 
-const emptyForm = (): Form => ({ instruction: "", cams: [], dests: [], active: "always", custom: { from: "", to: "" } });
+const emptyForm = (): Form => ({ instruction: "", mode: "alert", cams: [], dests: [], active: "always", custom: { from: "", to: "" } });
 const browserTz = () => {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -191,6 +220,8 @@ export function WatchesPage(p: PageProps) {
   const [test, setTest] = useState<WatchTestResult | "missing" | null>(null);
   const [editing, setEditing] = useState<WatchX | null>(null);
   const [deleting, setDeleting] = useState<WatchX | null>(null);
+  const [packing, setPacking] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
   const pl: Places = places.data ?? { webhooks: [], agents: [], hooksMissing: false };
   const destName = (d: Destination) => (d.type === "agent" ? pl.agents.find((a) => a.id === d.id)?.name ?? "agent" : hostOf(pl.webhooks.find((h) => h.id === d.id)?.url ?? "webhook"));
@@ -204,7 +235,8 @@ export function WatchesPage(p: PageProps) {
       const w = await createWatch(ctx, {
         instruction: form.instruction.trim(),
         sources: form.cams,
-        ...(form.dests.length ? { notify: toNotify(form.dests) } : {}),
+        mode: form.mode,
+        ...(form.mode === "alert" && form.dests.length ? { notify: toNotify(form.dests) } : {}),
         ...(form.active !== "always" ? { active_hours: activeHours(form.active, form.custom, tz.data ?? browserTz()) } : {}),
       });
       setCreated(w);
@@ -244,12 +276,28 @@ export function WatchesPage(p: PageProps) {
     }
   };
 
+  const setMode = async (w: WatchX, mode: WatchMode) => {
+    watches.setData((l) => l?.map((x) => (x.id === w.id ? { ...x, mode } : x)));
+    try {
+      const u = await p.client.watches.update(w.id, { mode });
+      watches.setData((l) => l?.map((x) => (x.id === w.id ? { ...x, ...(u as WatchX) } : x)));
+      setMsg({ text: mode === "track" ? `“${w.instruction}” keeps track without notifications now.` : `“${w.instruction}” alerts you again.` });
+    } catch (e) {
+      watches.setData((l) => l?.map((x) => (x.id === w.id ? w : x)));
+      setMsg({ text: errorText(e), error: true });
+    }
+  };
+
   // Preview: the compiled form of the watch just started, otherwise a draft from the form.
   const preview = created && !form.instruction ? created : null;
 
   return (
     <div className="adm">
-      <Header eyebrow="Watches" title="Tell Senseplane what to look out for" />
+      <Header eyebrow="Watches" title="Tell Senseplane what to look out for">
+        <button type="button" className="adm-btn adm-btn-lg" disabled={!editable} onClick={() => setPacking(true)}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>Add a pack
+        </button>
+      </Header>
 
       <section aria-labelledby="new-h" className="adm-panel adm-composer">
         <div className="adm-composer-main">
@@ -265,7 +313,9 @@ export function WatchesPage(p: PageProps) {
             <ol className="adm-steps">
               <Step n={1} title={`Watch ${form.cams.length ? camNames(form.cams) : "[pick a camera]"}`} note="Runs on every frame, separately for each camera. Free." />
               <Step n={2} title="Ask the AI to confirm what it sees" note="Senseplane works out the exact check when you start the watch. About 1 AI check each time." />
-              <Step n={3} title={`Then tell ${form.dests.length ? joinAnd(toNotify(form.dests).map(destName)) : "every webhook subscribed to watch alerts"}`} note="Each gets the camera name, a snapshot and a short clip." />
+              {form.mode === "track"
+                ? <Step n={3} title="Then keep a record" note="No notifications. Ask about it later, like how long or how often." />
+                : <Step n={3} title={`Then tell ${form.dests.length ? joinAnd(toNotify(form.dests).map(destName)) : "every webhook subscribed to watch alerts"}`} note="Each gets the camera name, a snapshot and a short clip." />}
             </ol>
           )}
           {preview && <p className="adm-small adm-ok" role="status">Started. It's in the list below.</p>}
@@ -281,11 +331,12 @@ export function WatchesPage(p: PageProps) {
 
       <section aria-labelledby="list-h" className="adm-section" style={{ gap: 12 }}>
         <h2 id="list-h" className="adm-h2">Running watches</h2>
+        {msg && <p role={msg.error ? "alert" : "status"} className={msg.error ? "adm-error" : "adm-small adm-ok"}>{msg.text}</p>}
         <LoadState r={watches} what="Watches">
           {(list) => list.length ? list.map((w) => (
             <WatchRow key={w.id} w={w} fired={fired.data?.get(w.id) ?? []} camLabel={sources.list.length > 1 && sources.list.every((s) => w.sources.includes(s.id)) ? "All cameras" : w.sources.map(sources.name).join(", ")}
               to={w.notify?.length ? w.notify.map(destName).join(", ") : "Subscribed webhooks"}
-              editable={editable} onToggle={(on) => void toggle(w, on)} onEdit={() => setEditing(w)} onDelete={() => setDeleting(w)} />
+              editable={editable} onToggle={(on) => void toggle(w, on)} onMode={(m) => void setMode(w, m)} onEdit={() => setEditing(w)} onDelete={() => setDeleting(w)} />
           )) : <p className="adm-card adm-empty">No watches yet. Describe one above.</p>}
         </LoadState>
       </section>
@@ -293,6 +344,14 @@ export function WatchesPage(p: PageProps) {
       {editing && (
         <EditWatch w={editing} p={p} sources={sources.list} places={pl} tz={tz.data ?? browserTz()} onClose={() => setEditing(null)}
           onSaved={(u) => { watches.setData((l) => l?.map((x) => (x.id === u.id ? u : x))); setEditing(null); }} />
+      )}
+      {packing && (
+        <PackDialog p={p} sources={sources.list} onClose={() => setPacking(false)}
+          onApplied={(pack, added) => {
+            setMsg({ text: `Added ${added === 1 ? "1 watch" : `${added} watches`} from ${pack.name}.` });
+            setPacking(false);
+            void watches.reload();
+          }} />
       )}
       {deleting && (
         <Confirm title="Delete this watch?" action="Delete watch" body={<>“{deleting.instruction}” stops at once. Events it already created stay.</>}
@@ -314,14 +373,17 @@ function Step({ n, title, note }: { n: number; title: string; note: string }) {
 
 function CompiledSteps({ w, cams, dests }: { w: WatchX; cams: string; dests: string }) {
   const c = w.compiled;
+  const track = w.mode === "track";
   return (
     <>
       <ol className="adm-steps">
-        <Step n={1} title={`Watch for ${describeTrigger(c.trigger)} on ${cams}`} note="Runs on every frame, separately for each camera. Free." />
+        {scheduled(c.trigger)
+          ? <Step n={1} title={`${describeTrigger(c.trigger)} on ${cams}`} note="Answered from what the cameras recorded. Free." />
+          : <Step n={1} title={`Watch for ${describeTrigger(c.trigger)} on ${cams}`} note="Runs on every frame, separately for each camera. Free." />}
         {c.verify
           ? <Step n={2} title={`Ask the AI: “${c.verify.prompt}”`} note={`Only when step 1 matches. About ${w.estimate.vlm_calls_per_day} AI checks a day.`} />
           : <Step n={2} title="No AI check needed" note="It fires on step 1 alone." />}
-        <Step n={3} title={`Then tell ${dests}`} note={c.cooldown_s ? `At most once every ${c.cooldown_s >= 60 ? `${Math.round(c.cooldown_s / 60)} min` : `${c.cooldown_s} s`} per camera.` : "Every time it matches."} />
+        {track ? <Step n={3} title="Then keep a record" note="No notifications. Ask about it later, like how long or how often." /> : <Step n={3} title={`Then tell ${dests}`} note={c.cooldown_s ? `At most once every ${c.cooldown_s >= 60 ? `${Math.round(c.cooldown_s / 60)} min` : `${c.cooldown_s} s`} per camera.` : "Every time it matches."} />}
       </ol>
       {w.warnings.map((x) => <p key={x} className="adm-warn-note adm-small">{x}</p>)}
     </>
@@ -344,24 +406,26 @@ function TestResults({ r, name }: { r: WatchTestResult; name: (id: string) => st
   );
 }
 
-function WatchRow({ w, fired, camLabel, to, editable, onToggle, onEdit, onDelete }: {
+function WatchRow({ w, fired, camLabel, to, editable, onToggle, onMode, onEdit, onDelete }: {
   w: WatchX; fired: string[]; camLabel: string; to: string; editable: boolean;
-  onToggle: (on: boolean) => void; onEdit: () => void; onDelete: () => void;
+  onToggle: (on: boolean) => void; onMode: (m: WatchMode) => void; onEdit: () => void; onDelete: () => void;
 }) {
   const on = w.status === "active";
+  const track = w.mode === "track";
   const last = w.last_fired_at ?? fired.slice().sort().pop() ?? null;
   const today = fired.filter((t) => dayLabel(t) === "Today").length;
-  const lastText = w.status === "paused" ? "Paused" : w.status === "needs_zone" ? "Needs a zone" : w.status === "expired" ? "Expired" : last ? `Fired ${dayLabel(last) === "Today" ? fmtHm(last) : dayLabel(last)}` : "Waiting";
-  const count = today === 1 ? "Once today" : today > 1 ? `${today} times today` : fired.length ? "Not fired today" : "Not fired this week";
+  const lastText = w.status === "paused" ? "Paused" : w.status === "needs_zone" ? "Needs a zone" : w.status === "expired" ? "Expired" : track ? "Keeping a record" : last ? `Fired ${dayLabel(last) === "Today" ? fmtHm(last) : dayLabel(last)}` : "Waiting";
+  const count = track ? "No notifications" : today === 1 ? "Once today" : today > 1 ? `${today} times today` : fired.length ? "Not fired today" : "Not fired this week";
   return (
     <div className="adm-card adm-watch" data-off={!on}>
       <span className="adm-watch-main">
         <span className="adm-watch-text">{w.instruction}</span>
         <span className="adm-row" style={{ gap: 6 }}>
+          {track && <span className="adm-pill adm-pill-watch">Tracking</span>}
           <span className="adm-tag">{camLabel}</span>
           <span className="adm-tag">{activeLabel(activeOf(w))}</span>
           <span className="adm-tag adm-mono" style={{ fontSize: 11 }}>{describeTrigger(w.compiled.trigger)}{w.compiled.verify ? " → AI check" : ""}</span>
-          <span className="adm-tag">→ {to}</span>
+          {!track && <span className="adm-tag">→ {to}</span>}
         </span>
         {w.status === "needs_zone" && <span className="adm-warn-note adm-small">Draw the zone this watch needs on the camera page.</span>}
       </span>
@@ -373,6 +437,9 @@ function WatchRow({ w, fired, camLabel, to, editable, onToggle, onEdit, onDelete
         <Switch checked={on} label={`Watch on or off: ${w.instruction}`} disabled={!editable || w.status === "needs_zone" || w.status === "expired"} onChange={onToggle} />
         <Menu label={`Watch options: ${w.instruction}`} items={[
           { label: "Edit", onSelect: onEdit, disabled: !editable },
+          track
+            ? { label: "Alert me instead", onSelect: () => onMode("alert"), disabled: !editable }
+            : { label: "Just keep track", onSelect: () => onMode("track"), disabled: !editable },
           { label: "Delete", onSelect: onDelete, danger: true, disabled: !editable },
         ]} />
       </span>
@@ -382,16 +449,17 @@ function WatchRow({ w, fired, camLabel, to, editable, onToggle, onEdit, onDelete
 
 function EditWatch({ w, p, sources, places, tz, onClose, onSaved }: { w: WatchX; p: PageProps; sources: Source[]; places: Places; tz: string; onClose: () => void; onSaved: (w: WatchX) => void }) {
   const a = activeIdOf(activeOf(w));
-  const [f, setF] = useState<Form>(() => ({ instruction: w.instruction, cams: w.sources, dests: (w.notify ?? []).map((d) => `${d.type}:${d.id}`), active: a.id, custom: a.custom }));
+  const [f, setF] = useState<Form>(() => ({ instruction: w.instruction, mode: w.mode ?? "alert", cams: w.sources, dests: (w.notify ?? []).map((d) => `${d.type}:${d.id}`), active: a.id, custom: a.custom }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>();
-  const changed = useMemo(() => JSON.stringify(f) !== JSON.stringify({ instruction: w.instruction, cams: w.sources, dests: (w.notify ?? []).map((d) => `${d.type}:${d.id}`), active: a.id, custom: a.custom }), [f]); // eslint-disable-line react-hooks/exhaustive-deps
+  const changed = useMemo(() => JSON.stringify(f) !== JSON.stringify({ instruction: w.instruction, mode: w.mode ?? "alert", cams: w.sources, dests: (w.notify ?? []).map((d) => `${d.type}:${d.id}`), active: a.id, custom: a.custom }), [f]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => {
     setBusy(true);
     setErr(undefined);
     try {
       onSaved(await updateWatch(ctxOf(p), w.id, {
         ...(f.instruction !== w.instruction ? { instruction: f.instruction.trim() } : {}),
+        ...(f.mode !== (w.mode ?? "alert") ? { mode: f.mode } : {}),
         sources: f.cams,
         notify: toNotify(f.dests),
         active_hours: activeHours(f.active, f.custom, tz),
@@ -410,6 +478,83 @@ function EditWatch({ w, p, sources, places, tz, onClose, onSaved }: { w: WatchX;
       <div className="adm-dialog-foot">
         <button type="button" className="adm-btn" onClick={onClose}>Cancel</button>
         <button type="button" className="adm-btn adm-btn-primary" disabled={busy || !changed || f.cams.length === 0 || f.instruction.trim().length < 3} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
+      </div>
+    </Dialog>
+  );
+}
+
+function PackDialog({ p, sources, onClose, onApplied }: { p: PageProps; sources: Source[]; onClose: () => void; onApplied: (pack: WatchPack, added: number) => void }) {
+  const packs = useLoad(() => listWatchPacks(ctxOf(p)), [p.apiUrl, p.apiKey]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [off, setOff] = useState<string[]>([]); // watch keys left out
+  const [cams, setCams] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>();
+  const pack = packs.data?.find((x) => x.id === picked) ?? packs.data?.[0];
+  const items = pack ? pack.watches.filter((w) => !off.includes(w.key)) : [];
+
+  const apply = async () => {
+    if (!pack) return;
+    setBusy(true);
+    setErr(undefined);
+    try {
+      const r = await applyWatchPack(ctxOf(p), pack.id, {
+        sources: cams,
+        ...(items.length < pack.watches.length ? { items: items.map((w) => w.key) } : {}),
+        time_zone: browserTz(),
+      });
+      onApplied(pack, r.watches?.length ?? items.length);
+    } catch (e) {
+      setErr(e);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog title="Add a pack" onClose={onClose} wide>
+      <LoadState r={packs} what="Watch packs">
+        {(list) => list.length && pack ? (
+          <div className="adm-stack">
+            <fieldset className="adm-fieldset">
+              <legend className="adm-legend">Pack</legend>
+              {list.map((x) => (
+                <label key={x.id} className="adm-opt">
+                  <input type="radio" name="pack" checked={x.id === pack.id} disabled={busy} onChange={() => { setPicked(x.id); setOff([]); }} />
+                  <span className="adm-col"><span>{x.name}</span><span className="adm-small adm-muted">{x.description}</span></span>
+                </label>
+              ))}
+            </fieldset>
+            <fieldset className="adm-fieldset">
+              <legend className="adm-legend">Watches it adds <span className="adm-legend-count">{items.length} of {pack.watches.length}</span></legend>
+              {pack.watches.map((w) => (
+                <label key={w.key} className="adm-opt">
+                  <input type="checkbox" className="adm-check" checked={!off.includes(w.key)} disabled={busy}
+                    onChange={(e) => setOff((o) => (e.target.checked ? o.filter((k) => k !== w.key) : [...o, w.key]))} />
+                  <span className="adm-col">
+                    <span>{w.instruction}</span>
+                    <span className="adm-row" style={{ gap: 6 }}>
+                      <span className={w.mode === "track" ? "adm-pill adm-pill-watch" : "adm-pill"}>{w.mode === "track" ? "Tracking" : "Alert"}</span>
+                      {w.hours?.from && w.hours.to && <span className="adm-small adm-muted">{w.hours.from}–{w.hours.to}</span>}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <fieldset className="adm-fieldset">
+              <legend className="adm-legend">Watch on <span className="adm-legend-count">{cams.length === 1 ? "1 camera" : `${cams.length} cameras`}</span></legend>
+              {sources.length ? (
+                <MultiChips all="All cameras" items={sources.map((s) => ({ id: s.id, label: s.name }))} value={cams} onChange={setCams} disabled={busy} />
+              ) : <span className="adm-note">Add a camera first, then come back to add a pack.</span>}
+            </fieldset>
+          </div>
+        ) : <p className="adm-empty">No packs on this server.</p>}
+      </LoadState>
+      <ErrorNote error={err} />
+      <div className="adm-dialog-foot">
+        <button type="button" className="adm-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="adm-btn adm-btn-primary" disabled={busy || !pack || !items.length || !cams.length} onClick={() => void apply()}>
+          {busy ? "Adding…" : items.length === 1 ? "Add 1 watch" : `Add ${items.length} watches`}
+        </button>
       </div>
     </Dialog>
   );

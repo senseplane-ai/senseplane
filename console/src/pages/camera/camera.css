@@ -82,6 +82,14 @@
 .cam-event-type.live-text { color: var(--live); }
 .cam-event-conf { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
+/* Activity tab */
+.cam-activity { display: flex; flex-direction: column; gap: 12px; }
+.cam-act-day { padding: 14px 16px 12px; gap: 8px; }
+.cam-act-strip { position: relative; height: 10px; background: var(--well); border-radius: 2px; }
+.cam-act-seg { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--live); border-radius: 2px; }
+.cam-act { display: grid; grid-template-columns: 112px 1fr auto; align-items: center; gap: 14px; padding: 10px 16px; }
+.cam-act-end { display: flex; align-items: center; gap: 10px; }
+
 /* Privacy masks tab */
 .cam-masks { display: flex; flex-wrap: wrap; gap: 20px; }
 .cam-mask-canvas { flex: 3 1 480px; cursor: crosshair; }
@@ -124,5 +132,7 @@
   .cam-event { grid-template-columns: 64px 1fr; }
   .cam-event-thumb { display: none; }
   .cam-event-conf { grid-column: 2; }
+  .cam-act { grid-template-columns: 96px 1fr; }
+  .cam-act-end { grid-column: 2; }
   .cam-left, .cam-aside, .cam-mask-canvas, .cam-mask-side { flex-basis: 100%; }
 }

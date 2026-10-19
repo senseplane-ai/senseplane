@@ -44,6 +44,7 @@ describe("detector labels", () => {
 
   it("the objects trigger the API validates accepts every label and nothing else", () => {
     const ajv = new Ajv2020({ strict: false });
+    ajv.addSchema(JSON.parse(readFileSync(new URL("./generated/activity-query.schema.json", import.meta.url), "utf8"))); // condition and digest triggers ask one
     const validate = ajv.compile(JSON.parse(readFileSync(new URL("./generated/trigger.schema.json", import.meta.url), "utf8")));
     for (const label of labels) expect(validate({ type: "objects", label, on: "stationary" }), label).toBe(true);
     expect(validate({ type: "objects", label: "mug", on: "present" })).toBe(false);

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/channel.json",
+  "title": "Channel",
+  "description": "A chat in a messaging app (Telegram) linked to the workspace (ADR 0059). Watches that list it in `notify` send their events there, and people in the chat can ask about the cameras, as the channel's agent (its grants apply).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "name", "chat_type", "status", "snapshots", "can_ask", "muted_until", "agent_id", "created_at"],
+  "properties": {
+    "id": {"type": "string", "description": "chn_…"},
+    "kind": {"type": "string", "enum": ["telegram"]},
+    "name": {"type": "string", "description": "The chat's title, or the person's name for a private chat."},
+    "chat_type": {"type": "string", "enum": ["private", "group"]},
+    "status": {"type": "string", "enum": ["active", "blocked"], "description": "`blocked`: the bot was blocked or removed from the chat; link it again to use it."},
+    "snapshots": {"type": "boolean", "description": "Send the event's snapshot with each alert. A snapshot sent to Telegram is stored by Telegram."},
+    "can_ask": {"type": "boolean", "description": "Whether people in the chat can ask questions."},
+    "muted_until": {"type": ["string", "null"], "format": "date-time", "description": "Alerts are skipped until then."},
+    "agent_id": {"type": "string", "description": "The agent the chat asks as; its grants decide which cameras and senses answers use."},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

@@ -26,6 +26,11 @@ tags:
   - name: activity
     description: Activities (one thing, in one place, from a start to an end) and questions about them (ADR 0057).
   - name: webhooks
+  - name: channels
+    description: >-
+      Telegram chats that watches send alerts to and that can ask about the cameras (ADR 0059).
+      A chat is linked by opening a one-time link and pressing Start; it then asks as an agent
+      of kind `channel`, whose grants apply.
   - name: agents
     description: Agent keys. An agent sees only what its grants allow (ADR 0024).
   - name: grants
@@ -1275,6 +1280,120 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Delivery'}
         default: {$ref: '#/components/responses/Error'}
+  /channels:
+    get:
+      operationId: listChannels
+      summary: List linked chats
+      tags: [channels]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Channel'}}
+                  next_cursor: {type: 'null'}
+        default: {$ref: '#/components/responses/Error'}
+  /channels/telegram:
+    get:
+      operationId: getTelegram
+      summary: Whether Telegram is set up on this server, and the bot's username
+      tags: [channels]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, mode, username]
+                properties:
+                  configured: {type: boolean}
+                  mode: {type: [string, 'null'], enum: [polling, webhook, null]}
+                  username: {type: [string, 'null']}
+                  error: {type: string, description: Present when Telegram refused the token or can't be reached}
+        default: {$ref: '#/components/responses/Error'}
+  /channels/telegram/link:
+    post:
+      operationId: createTelegramLink
+      summary: A one-time link that links a Telegram chat (valid 10 minutes)
+      description: >-
+        Open `url` and press Start to link a private chat, or `group_url` to add the bot to a
+        group. The chat gets an agent with a grant on every current camera (questions only).
+        503 when Telegram isn't set up (TELEGRAM_BOT_TOKEN).
+      tags: [channels]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, group_url, bot_username, expires_at]
+                properties:
+                  url: {type: string}
+                  group_url: {type: string}
+                  bot_username: {type: string}
+                  expires_at: {type: string, format: date-time}
+        default: {$ref: '#/components/responses/Error'}
+  /channels/{id}:
+    patch:
+      operationId: updateChannel
+      summary: Rename, mute, or turn snapshots or questions on or off
+      tags: [channels]
+      parameters:
+        - {name: id, in: path, required: true, description: Channel ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: {type: string, minLength: 1, maxLength: 100}
+                snapshots: {type: boolean}
+                can_ask: {type: boolean}
+                muted_until: {type: [string, 'null'], format: date-time}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Channel'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteChannel
+      summary: Unlink a chat; its agent is revoked
+      tags: [channels]
+      parameters:
+        - {name: id, in: path, required: true, description: Channel ID, schema: {type: string}}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /channels/{id}/test:
+    post:
+      operationId: testChannel
+      summary: Send a test message to a chat
+      tags: [channels]
+      parameters:
+        - {name: id, in: path, required: true, description: Channel ID, schema: {type: string}}
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued]
+                properties:
+                  queued: {type: boolean}
+        default: {$ref: '#/components/responses/Error'}
   /agents:
     post:
       operationId: createAgent
@@ -1892,6 +2011,7 @@ components:
     Clip: {$ref: './schemas/clip.json'}
     Grant: {$ref: './schemas/grant.json'}
     Webhook: {$ref: './schemas/webhook.json'}
+    Channel: {$ref: './schemas/channel.json'}
     Usage: {$ref: './schemas/usage.json'}
     Reading: {$ref: './schemas/reading.json'}
     Error: {$ref: './schemas/error.json'}
@@ -2185,7 +2305,7 @@ components:
       properties:
         id: {type: string, pattern: '^agt_[0-9A-HJKMNP-TV-Z]{26}$'}
         name: {type: string}
-        kind: {type: string, enum: [key, app], description: '`key`: created with an API key for code; `app`: an MCP client connected on the consent page (ADR 0048)'}
+        kind: {type: string, enum: [key, app, channel], description: '`key`: created with an API key for code; `app`: an MCP client connected on the consent page (ADR 0048); `channel`: a linked chat, such as Telegram, asking questions (ADR 0059)'}
         key_prefix: {type: string, description: Prefix of its newest live key}
         client_name: {type: string, description: Apps only}
         redirect_host: {type: string, description: 'Apps only: the redirect host, without port (loopback as `localhost`)'}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://senseplane.com/schemas/destination.json",
   "title": "Destination",
-  "description": "Where a watch's events go (ADR 0043): one of the account's webhooks, or an agent's inbox.",
+  "description": "Where a watch's events go (ADR 0043, 0059): one of the account's webhooks, an agent's inbox, or a linked chat (channel).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,12 +14,13 @@
       "type": "string",
       "enum": [
         "webhook",
-        "agent"
+        "agent",
+        "channel"
       ]
     },
     "id": {
       "type": "string",
-      "description": "A webhook id (whk_…) or an agent id (agt_…).",
+      "description": "A webhook id (whk_\u2026), an agent id (agt_\u2026) or a channel id (chn_\u2026).",
       "minLength": 1,
       "maxLength": 64
     }

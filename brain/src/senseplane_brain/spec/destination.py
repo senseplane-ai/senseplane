@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class Type(StrEnum):
     webhook = 'webhook'
     agent = 'agent'
+    channel = 'channel'
 
 
 class Destination(BaseModel):
@@ -25,7 +26,7 @@ class Destination(BaseModel):
     id: Annotated[
         str,
         Field(
-            description='A webhook id (whk_…) or an agent id (agt_…).',
+            description='A webhook id (whk_…), an agent id (agt_…) or a channel id (chn_…).',
             max_length=64,
             min_length=1,
         ),

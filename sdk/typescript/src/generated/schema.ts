@@ -812,6 +812,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List linked chats */
+        get: operations["listChannels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/telegram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether Telegram is set up on this server, and the bot's username */
+        get: operations["getTelegram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/telegram/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A one-time link that links a Telegram chat (valid 10 minutes)
+         * @description Open `url` and press Start to link a private chat, or `group_url` to add the bot to a group. The chat gets an agent with a grant on every current camera (questions only). 503 when Telegram isn't set up (TELEGRAM_BOT_TOKEN).
+         */
+        post: operations["createTelegramLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unlink a chat; its agent is revoked */
+        delete: operations["deleteChannel"];
+        options?: never;
+        head?: never;
+        /** Rename, mute, or turn snapshots or questions on or off */
+        patch: operations["updateChannel"];
+        trace?: never;
+    };
+    "/channels/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a test message to a chat */
+        post: operations["testChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents": {
         parameters: {
             query?: never;
@@ -1194,6 +1283,7 @@ export interface components {
         Clip: components["schemas"]["clip"];
         Grant: components["schemas"]["grant"];
         Webhook: components["schemas"]["webhook"];
+        Channel: components["schemas"]["channel"];
         Usage: components["schemas"]["usage"];
         Reading: components["schemas"]["reading"];
         Error: components["schemas"]["error"];
@@ -1478,10 +1568,10 @@ export interface components {
             id: string;
             name: string;
             /**
-             * @description `key`: created with an API key for code; `app`: an MCP client connected on the consent page (ADR 0048)
+             * @description `key`: created with an API key for code; `app`: an MCP client connected on the consent page (ADR 0048); `channel`: a linked chat, such as Telegram, asking questions (ADR 0059)
              * @enum {string}
              */
-            kind: "key" | "app";
+            kind: "key" | "app" | "channel";
             /** @description Prefix of its newest live key */
             key_prefix?: string;
             /** @description Apps only */
@@ -2342,12 +2432,12 @@ export interface components {
         };
         /**
          * Destination
-         * @description Where a watch's events go (ADR 0043): one of the account's webhooks, or an agent's inbox.
+         * @description Where a watch's events go (ADR 0043, 0059): one of the account's webhooks, an agent's inbox, or a linked chat (channel).
          */
         destination: {
             /** @enum {string} */
-            type: "webhook" | "agent";
-            /** @description A webhook id (whk_…) or an agent id (agt_…). */
+            type: "webhook" | "agent" | "channel";
+            /** @description A webhook id (whk_…), an agent id (agt_…) or a channel id (chn_…). */
             id: string;
         };
         /**
@@ -2526,6 +2616,38 @@ export interface components {
             next_attempt_at?: string | null;
             /** Format: date-time */
             delivered_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /**
+         * Channel
+         * @description A chat in a messaging app (Telegram) linked to the workspace (ADR 0059). Watches that list it in `notify` send their events there, and people in the chat can ask about the cameras, as the channel's agent (its grants apply).
+         */
+        channel: {
+            /** @description chn_… */
+            id: string;
+            /** @enum {string} */
+            kind: "telegram";
+            /** @description The chat's title, or the person's name for a private chat. */
+            name: string;
+            /** @enum {string} */
+            chat_type: "private" | "group";
+            /**
+             * @description `blocked`: the bot was blocked or removed from the chat; link it again to use it.
+             * @enum {string}
+             */
+            status: "active" | "blocked";
+            /** @description Send the event's snapshot with each alert. A snapshot sent to Telegram is stored by Telegram. */
+            snapshots: boolean;
+            /** @description Whether people in the chat can ask questions. */
+            can_ask: boolean;
+            /**
+             * Format: date-time
+             * @description Alerts are skipped until then.
+             */
+            muted_until: string | null;
+            /** @description The agent the chat asks as; its grants decide which cameras and senses answers use. */
+            agent_id: string;
             /** Format: date-time */
             created_at: string;
         };
@@ -4205,6 +4327,167 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["delivery"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["channel"][];
+                        next_cursor: null;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getTelegram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        configured: boolean;
+                        /** @enum {string|null} */
+                        mode: "polling" | "webhook" | null;
+                        username: string | null;
+                        /** @description Present when Telegram refused the token or can't be reached */
+                        error?: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createTelegramLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        url: string;
+                        group_url: string;
+                        bot_username: string;
+                        /** Format: date-time */
+                        expires_at: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    snapshots?: boolean;
+                    can_ask?: boolean;
+                    /** Format: date-time */
+                    muted_until?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["channel"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    testChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        queued: boolean;
+                    };
                 };
             };
             default: components["responses"]["Error"];

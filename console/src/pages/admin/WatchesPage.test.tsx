@@ -52,6 +52,25 @@ describe("WatchesPage", () => {
     expect(within(paused).getByRole("switch").getAttribute("aria-checked")).toBe("false");
   });
 
+  it("sends a watch to a linked Telegram chat, and leaves the chat's own agent out", async () => {
+    const family = { id: "chn_1", kind: "telegram", name: "Family", chat_type: "group", status: "active", snapshots: true, can_ask: true, muted_until: null, agent_id: "agt_tg", created_at: "2026-10-19T08:00:00Z" };
+    const { props, api } = setup(routes({
+      "GET /channels": page([family, { ...family, id: "chn_2", name: "Old phone", status: "blocked" }]),
+      "GET /agents": page([claude, { ...agent(2, "Telegram: Family"), id: "agt_tg", kind: "channel" }]),
+    }));
+    render(<WatchesPage {...props} />);
+    fireEvent.change(screen.getByLabelText("What should Senseplane watch for?"), { target: { value: "Tell me if someone is lying on the floor" } });
+    fireEvent.click(await within(screen.getByRole("group", { name: /Watch on/ })).findByRole("button", { name: "All cameras" }));
+    const dests = screen.getByRole("group", { name: /Send to/ });
+    fireEvent.click(await within(dests).findByRole("button", { name: /Family/ }));
+    expect(within(dests).queryByRole("button", { name: /Telegram: Family/ })).toBeNull();
+    expect(within(dests).queryByRole("button", { name: /Old phone/ })).toBeNull(); // blocked
+    expect(within(dests).getByRole("link", { name: "+ Connect Telegram" }).getAttribute("href")).toBe("/settings?tab=notifications");
+    expect(screen.getByText("Then tell Telegram (Family)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start watching" }));
+    await waitFor(() => expect(api.called("POST", "/watches")[0]?.body.notify).toEqual([{ type: "channel", id: "chn_1" }]));
+  });
+
   it("multi-selects cameras and destinations and starts a watch with notify and active hours", async () => {
     const { props, api } = setup(routes());
     render(<WatchesPage {...props} />);

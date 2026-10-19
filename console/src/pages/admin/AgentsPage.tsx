@@ -19,7 +19,7 @@ import {
 export { mcpUrl } from "../../mcp";
 
 type Agent = {
-  id: string; name: string; kind?: "key" | "app"; key_prefix?: string; client_name?: string; redirect_host?: string;
+  id: string; name: string; kind?: "key" | "app" | "channel"; key_prefix?: string; client_name?: string; redirect_host?: string;
   connected_at?: string; last_active_at?: string | null; created_at: string;
 };
 
@@ -64,8 +64,9 @@ export function AgentsPage(p: PageProps) {
 
       <LoadState r={data} what="Agents">
         {({ agents }) => {
-          const apps = agents.filter((a) => a.kind === "app");
-          const keys = agents.filter((a) => a.kind !== "app");
+          // Linked Telegram chats ask as agents of their own (ADR 0059); they sit with the apps.
+          const apps = agents.filter((a) => a.kind === "app" || a.kind === "channel");
+          const keys = agents.filter((a) => a.kind !== "app" && a.kind !== "channel");
           const card = (a: Agent) => (
             <AgentCard key={a.id} agent={a} grants={grantsOf(a.id)} sources={sources.list} client={p.client} editable={editable}
               onSaved={() => void data.reload()} onRevoke={() => setRevoking(a)} />
@@ -103,9 +104,11 @@ export function AgentsPage(p: PageProps) {
       {creating && <CreateKeyDialog client={p.client} sources={sources.list} onClose={() => { setCreating(false); void data.reload(); }} />}
       {revoking && (
         <Confirm
-          title={revoking.kind === "app" ? `Disconnect ${revoking.name}?` : `Delete the key ${revoking.name}?`}
-          action={revoking.kind === "app" ? "Disconnect" : "Delete key"}
-          body={revoking.kind === "app"
+          title={revoking.kind === "key" || !revoking.kind ? `Delete the key ${revoking.name}?` : `Disconnect ${revoking.name}?`}
+          action={revoking.kind === "key" || !revoking.kind ? "Delete key" : "Disconnect"}
+          body={revoking.kind === "channel"
+            ? <>The chat stops getting alerts and can&apos;t ask any more. To use it again, connect it again from Settings → Notifications.</>
+            : revoking.kind === "app"
             ? <>{revoking.name} loses access on its next request, on every device it connected from. To use it again, connect it again from the app.</>
             : <>The key and its access stop working on its next request.</>}
           onClose={() => setRevoking(null)}
@@ -151,7 +154,7 @@ function ConnectHelp({ mcp, empty }: { mcp: string; empty: boolean }) {
 function AgentCard({ agent, grants, sources, client, editable, onSaved, onRevoke }: {
   agent: Agent; grants: Grant[]; sources: Source[]; client: Senseplane; editable: boolean; onSaved: () => void; onRevoke: () => void;
 }) {
-  const app = agent.kind === "app";
+  const app = agent.kind === "app" || agent.kind === "channel";
   const [editing, setEditing] = useState<Access | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>();
@@ -179,7 +182,9 @@ function AgentCard({ agent, grants, sources, client, editable, onSaved, onRevoke
     }
   };
 
-  const meta = app
+  const meta = agent.kind === "channel"
+    ? ["Telegram chat", `Linked ${fmtDate(agent.created_at)}`, `Last asked ${since(agent.last_active_at)}`]
+    : app
     ? [`Connected ${fmtDate(agent.connected_at ?? agent.created_at)}`, `Last active ${since(agent.last_active_at)}`, agent.redirect_host ? `via ${agent.redirect_host}` : ""]
     : [agent.key_prefix ? `Key ${agent.key_prefix}…` : "Key", `Created ${fmtDate(agent.created_at)}`, `Last used ${since(agent.last_active_at)}`];
   return (

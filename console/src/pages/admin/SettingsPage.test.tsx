@@ -136,4 +136,41 @@ describe("SettingsPage", () => {
   it("describes unknown audit actions plainly", () => {
     expect(describeAudit({ id: "a", actor: "x", action: "GET /v1/things", target: "", occurred_at: "" }, (s) => s)).toBe("GET /v1/things");
   });
+  it("links a Telegram chat and changes how it is used", async () => {
+    const chat = { id: "chn_1", kind: "telegram", name: "Family", chat_type: "group", status: "active", snapshots: true, can_ask: true, muted_until: null, agent_id: "agt_9", created_at: "2026-10-19T08:00:00Z" };
+    let linked: unknown[] = [];
+    const { props, api } = setup(routes({
+      "GET /channels/telegram": { configured: true, mode: "polling", username: "MyHomeBot" },
+      "GET /channels": () => page(linked),
+      "POST /channels/telegram/link": () => ({ url: "https://t.me/MyHomeBot?start=abc", group_url: "https://t.me/MyHomeBot?startgroup=abc", bot_username: "MyHomeBot", expires_at: "2026-10-19T09:10:00Z" }),
+      "PATCH /channels/:id": (r: { body: object }) => ({ ...chat, ...r.body }),
+      "POST /channels/:id/test": { queued: true },
+      "DELETE /channels/:id": undefined,
+    }));
+    render(<SettingsPage {...props} />);
+    await screen.findByRole("heading", { level: 1, name: "Northwind Ops" });
+    openTab("Notifications");
+    expect(await screen.findByText("No chats linked yet.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Connect Telegram" }));
+    const dialog = await screen.findByRole("dialog", { name: "Connect Telegram" });
+    expect(within(dialog).getByRole("link", { name: "Open @MyHomeBot" }).getAttribute("href")).toBe("https://t.me/MyHomeBot?start=abc");
+    expect(within(dialog).getByRole("link", { name: "Add to a group" }).getAttribute("href")).toContain("startgroup=abc");
+    // The person presses Start in Telegram: the page sees the chat.
+    linked = [chat];
+    expect(await screen.findByText(/Linked\. Choose this chat/, undefined, { timeout: 5000 })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("switch", { name: "Snapshots in Family" }));
+    await waitFor(() => expect(api.called("PATCH", "/channels/chn_1")[0]?.body).toEqual({ snapshots: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("Test sent to Family.")).toBeTruthy();
+  }, 10_000);
+
+  it("explains how to set Telegram up when the server has no bot", async () => {
+    const { props } = setup(routes({ "GET /channels/telegram": { configured: false, mode: null, username: null }, "GET /channels": page([]) }));
+    render(<SettingsPage {...props} />);
+    await screen.findByRole("heading", { level: 1, name: "Northwind Ops" });
+    openTab("Notifications");
+    expect(await screen.findByText("Telegram isn't set up on this server.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect Telegram" })).toBeNull();
+  });
 });

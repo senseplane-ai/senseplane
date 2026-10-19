@@ -2,21 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Settings: workspace name and time zone, recording defaults, team and
-// invites, sign-in methods (read-only, from the server's auth config), the
-// audit log, and export / delete of everything.
+// invites, Telegram chats (ADR 0059), sign-in methods (read-only, from the
+// server's auth config), the audit log, and export / delete of everything.
 import { useEffect, useMemo, useState } from "react";
 import type { Senseplane } from "senseplane";
+import { useLocation } from "../../router";
 import {
-  type AccountX, type AuditEntry, type Invite, type Member, type Role, api, createInvite, errorText, getAccount,
-  getAuthProviders, listInvites, listMembers, patchAccount, removeMember, revokeInvite, unavailable, updateMember,
+  type AccountX, type AuditEntry, type Channel, type Invite, type Member, type Role, type TelegramLink, api, createInvite, deleteChannel, errorText, getAccount,
+  getAuthProviders, getTelegram, linkTelegram, listChannels, listInvites, listMembers, patchAccount, removeMember, revokeInvite, testChannel, unavailable,
+  updateChannel, updateMember,
 } from "./api";
 import {
-  type PageProps, Confirm, CopyButton, Dialog, ErrorNote, LoadState, Unavailable, can, ctxOf, dayLabel, fmtDate, fmtHm,
+  type PageProps, Confirm, CopyButton, Dialog, ErrorNote, LoadState, Switch, Unavailable, can, ctxOf, dayLabel, fmtDate, fmtHm,
   roleNote, useInterval, useLoad, useRole, useSources,
 } from "./kit";
 
-type Tab = "general" | "rec" | "team" | "signin" | "audit" | "data";
-const TABS: [Tab, string][] = [["general", "Workspace"], ["rec", "Recording defaults"], ["team", "Team"], ["signin", "Sign-in"], ["audit", "Audit log"], ["data", "Your data"]];
+type Tab = "general" | "rec" | "team" | "notifications" | "signin" | "audit" | "data";
+const TABS: [Tab, string][] = [["general", "Workspace"], ["rec", "Recording defaults"], ["team", "Team"], ["notifications", "Notifications"], ["signin", "Sign-in"], ["audit", "Audit log"], ["data", "Your data"]];
 const ROLES: Role[] = ["admin", "member", "viewer"];
 const roleName = (r: Role) => r[0]!.toUpperCase() + r.slice(1);
 
@@ -24,7 +26,9 @@ export function SettingsPage(p: PageProps) {
   const ctx = ctxOf(p);
   const { role } = useRole(ctx);
   const account = useLoad(() => getAccount(ctx), [p.apiUrl, p.apiKey]);
-  const [tab, setTab] = useState<Tab>("general");
+  const { search } = useLocation();
+  const asked = search.get("tab");
+  const [tab, setTab] = useState<Tab>(TABS.some(([id]) => id === asked) ? (asked as Tab) : "general");
   const refs: (HTMLButtonElement | null)[] = [];
   const key = (e: React.KeyboardEvent, i: number) => {
     const d = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
@@ -52,6 +56,7 @@ export function SettingsPage(p: PageProps) {
           {tab === "general" && <LoadState r={account} what="Workspace settings">{(a) => <Workspace p={p} a={a} editable={can.settings(role)} onSaved={(x) => account.setData(() => x)} />}</LoadState>}
           {tab === "rec" && <LoadState r={account} what="Recording defaults">{(a) => <Recording p={p} a={a} editable={can.settings(role)} onSaved={(x) => account.setData(() => x)} />}</LoadState>}
           {tab === "team" && <Team p={p} role={role} />}
+          {tab === "notifications" && <Notifications p={p} role={role} />}
           {tab === "signin" && <SignIn p={p} />}
           {tab === "audit" && <Audit p={p} />}
           {tab === "data" && <YourData p={p} a={account.data} role={role} />}
@@ -242,6 +247,111 @@ function Team({ p, role }: { p: PageProps; role: Role }) {
       {removing && (
         <Confirm title={`Remove ${removing.name || removing.email}?`} action="Remove" body="They lose access to this workspace at once." onClose={() => setRemoving(null)}
           onConfirm={async () => { await removeMember(ctx, removing.id); members.setData((l) => l?.filter((x) => x.id !== removing.id)); }} />
+      )}
+    </section>
+  );
+}
+
+const mutedText = (c: Channel) => (c.muted_until && Date.parse(c.muted_until) > Date.now() ? `Muted until ${fmtHm(c.muted_until)}` : "");
+
+function Notifications({ p, role }: { p: PageProps; role: Role }) {
+  const ctx = ctxOf(p);
+  const editable = can.settings(role);
+  const telegram = useLoad(() => getTelegram(ctx), [p.apiUrl, p.apiKey]);
+  const channels = useLoad(() => listChannels(ctx), [p.apiUrl, p.apiKey]);
+  const [link, setLink] = useState<TelegramLink | null>(null);
+  const [linked, setLinked] = useState<string[] | null>(null);
+  const [removing, setRemoving] = useState<Channel | null>(null);
+  const [err, setErr] = useState<unknown>();
+  const [msg, setMsg] = useState<string>("");
+  // While the link is open, look for the chat to appear.
+  useInterval(() => void channels.reload(), link ? 3000 : null);
+  useEffect(() => {
+    if (!link || !linked || !channels.data) return;
+    if (channels.data.some((c) => !linked.includes(c.id))) {
+      setLink(null);
+      setMsg("Linked. Choose this chat under Send to when you make a watch.");
+    }
+  }, [channels.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const connect = async () => {
+    setErr(undefined);
+    setMsg("");
+    try {
+      setLinked((channels.data ?? []).map((c) => c.id));
+      setLink(await linkTelegram(ctx));
+    } catch (e) {
+      setErr(e);
+    }
+  };
+  const change = async (c: Channel, body: Parameters<typeof updateChannel>[2]) => {
+    setErr(undefined);
+    try {
+      const u = await updateChannel(ctx, c.id, body);
+      channels.setData((l) => l?.map((x) => (x.id === c.id ? u : x)));
+    } catch (e) {
+      setErr(e);
+    }
+  };
+  if (telegram.missing) return (<section className="adm-stack"><h2 className="adm-h2-lg">Notifications</h2><Unavailable what="Telegram notifications" /></section>);
+  const t = telegram.data;
+  return (
+    <section className="adm-stack" aria-labelledby="notify-h">
+      <div className="adm-row" style={{ justifyContent: "space-between" }}>
+        <h2 id="notify-h" className="adm-h2-lg">Telegram</h2>
+        {t?.configured && <button type="button" className="adm-btn adm-btn-primary" style={{ height: 36, padding: "0 14px" }} disabled={!editable || !t.username} onClick={() => void connect()}>Connect Telegram</button>}
+      </div>
+      <p className="adm-small adm-muted">Watches you send to a chat post their alerts there, with a snapshot. People in the chat can also ask about the cameras, like the chat here.</p>
+      {t && !t.configured && (
+        <div className="adm-card" style={{ padding: 16 }}>
+          <p style={{ margin: 0 }}>Telegram isn't set up on this server.</p>
+          <p className="adm-small adm-muted" style={{ marginBottom: 0 }}>Message <b>@BotFather</b> in Telegram, send <code>/newbot</code>, then set the token it gives you as <code>TELEGRAM_BOT_TOKEN</code> in docker-compose.yml and run <code>docker compose up -d</code>.</p>
+        </div>
+      )}
+      {t?.error && <p role="alert" className="adm-error">{t.error}</p>}
+      {msg && <p role="status" className="adm-small adm-ok">{msg}</p>}
+      <ErrorNote error={err} />
+      <LoadState r={channels} what="Linked chats">
+        {(list) => (
+          <div className="adm-card" style={{ overflow: "hidden" }}>
+            {list.map((c) => (
+              <div key={c.id} className="adm-member" style={{ flexWrap: "wrap" }}>
+                <span className="adm-col" style={{ flex: 1, minWidth: 180 }}>
+                  <span>{c.name}</span>
+                  <span className="adm-small adm-muted">
+                    {c.chat_type === "group" ? "Group" : "Private chat"} · linked {fmtDate(c.created_at)}
+                    {c.status === "blocked" ? " · the bot was blocked or removed: connect it again" : mutedText(c) ? ` · ${mutedText(c)}` : ""}
+                  </span>
+                </span>
+                <label className="adm-row adm-small" style={{ gap: 6 }}>Snapshots <Switch label={`Snapshots in ${c.name}`} checked={c.snapshots} disabled={!editable} onChange={(v) => void change(c, { snapshots: v })} /></label>
+                <label className="adm-row adm-small" style={{ gap: 6 }}>Questions <Switch label={`Questions from ${c.name}`} checked={c.can_ask} disabled={!editable} onChange={(v) => void change(c, { can_ask: v })} /></label>
+                {mutedText(c) && <button type="button" className="adm-btn adm-btn-sm" disabled={!editable} onClick={() => void change(c, { muted_until: null })}>Unmute</button>}
+                <button type="button" className="adm-btn adm-btn-sm" disabled={!editable || c.status !== "active"} onClick={() => void testChannel(ctx, c.id).then(() => setMsg(`Test sent to ${c.name}.`)).catch(setErr)}>Send test</button>
+                <button type="button" className="adm-btn adm-btn-sm adm-btn-danger" disabled={!editable} aria-label={`Remove ${c.name}`} onClick={() => setRemoving(c)}>Remove</button>
+              </div>
+            ))}
+            {!list.length && <p className="adm-empty">{t?.configured ? "No chats linked yet." : "No chats linked."}</p>}
+          </div>
+        )}
+      </LoadState>
+      {!!channels.data?.length && (
+        <p className="adm-small adm-muted">Each chat asks as an agent with access to the cameras the workspace had when it was linked; change that on the Agents page. Snapshots sent to Telegram are kept by Telegram. In a group, anyone in it can ask.</p>
+      )}
+      {link && (
+        <Dialog title="Connect Telegram" onClose={() => setLink(null)}>
+          <div className="adm-stack">
+            <p style={{ margin: 0 }}>Open the link on a device with Telegram and press <b>Start</b>. This page updates when the chat is linked.</p>
+            <div className="adm-row">
+              <a className="adm-btn adm-btn-primary" href={link.url} target="_blank" rel="noreferrer">Open @{link.bot_username}</a>
+              <a className="adm-btn" href={link.group_url} target="_blank" rel="noreferrer">Add to a group</a>
+              <CopyButton text={link.url} label="Copy link" />
+            </div>
+            <span className="adm-small adm-muted">The link works once, until {fmtHm(link.expires_at)}.</span>
+          </div>
+        </Dialog>
+      )}
+      {removing && (
+        <Confirm title={`Remove ${removing.name}?`} action="Remove" body="No more alerts go there, and the chat can't ask any more." onClose={() => setRemoving(null)}
+          onConfirm={async () => { await deleteChannel(ctx, removing.id); channels.setData((l) => l?.filter((x) => x.id !== removing.id)); }} />
       )}
     </section>
   );

@@ -99,7 +99,7 @@ export async function listAll<T>(ctx: Ctx, path: string, max = 500): Promise<T[]
 
 // --- watch destinations and backtests ---------------------------------------
 
-export type Destination = { type: "webhook"; id: string } | { type: "agent"; id: string };
+export type Destination = { type: "webhook" | "agent" | "channel"; id: string };
 export type Day = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 export interface ActiveHours {
   days: Day[];
@@ -170,6 +170,21 @@ export const removeMember = (ctx: Ctx, id: string) => api<void>(ctx, "DELETE", `
 export const listInvites = (ctx: Ctx) => listAll<Invite>(ctx, "/invites");
 export const createInvite = (ctx: Ctx, email: string, role: Role) => api<Invite & { invite_url: string }>(ctx, "POST", "/invites", { email, role });
 export const revokeInvite = (ctx: Ctx, id: string) => api<void>(ctx, "DELETE", `/invites/${encodeURIComponent(id)}`);
+
+// Telegram chats (ADR 0059).
+export interface Channel {
+  id: string; kind: "telegram"; name: string; chat_type: "private" | "group"; status: "active" | "blocked";
+  snapshots: boolean; can_ask: boolean; muted_until: string | null; agent_id: string; created_at: string;
+}
+export interface TelegramStatus { configured: boolean; mode: "polling" | "webhook" | null; username: string | null; error?: string }
+export interface TelegramLink { url: string; group_url: string; bot_username: string; expires_at: string }
+export const getTelegram = (ctx: Ctx) => api<TelegramStatus>(ctx, "GET", "/channels/telegram");
+export const linkTelegram = (ctx: Ctx) => api<TelegramLink>(ctx, "POST", "/channels/telegram/link");
+export const listChannels = (ctx: Ctx) => api<{ data: Channel[] }>(ctx, "GET", "/channels").then((r) => r.data);
+export const updateChannel = (ctx: Ctx, id: string, body: Partial<Pick<Channel, "name" | "snapshots" | "can_ask" | "muted_until">>) =>
+  api<Channel>(ctx, "PATCH", `/channels/${encodeURIComponent(id)}`, body);
+export const deleteChannel = (ctx: Ctx, id: string) => api<void>(ctx, "DELETE", `/channels/${encodeURIComponent(id)}`);
+export const testChannel = (ctx: Ctx, id: string) => api<{ queued: boolean }>(ctx, "POST", `/channels/${encodeURIComponent(id)}/test`);
 
 // --- account, limits and usage -----------------------------------------------
 

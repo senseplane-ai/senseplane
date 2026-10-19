@@ -9,8 +9,8 @@ import { useMemo, useState } from "react";
 import { LABELS, type Source, type Trigger, type Webhook } from "senseplane";
 import { labelText } from "../../shell/sources";
 import {
-  type ActiveHours, type Day, type Destination, type WatchMode, type WatchPack, type WatchTestResult, type WatchX,
-  applyWatchPack, createWatch, errorText, listEvents, listWatchPacks, testWatch, unavailable, updateWatch,
+  type ActiveHours, type Channel, type Day, type Destination, type WatchMode, type WatchPack, type WatchTestResult, type WatchX,
+  applyWatchPack, createWatch, errorText, listChannels, listEvents, listWatchPacks, testWatch, unavailable, updateWatch,
 } from "./api";
 import {
   type PageProps, Chip, Confirm, Dialog, ErrorNote, Header, LoadState, Menu, MultiChips, Switch, Thumb, Unavailable, can,
@@ -96,27 +96,30 @@ interface Form {
   instruction: string;
   mode: WatchMode;
   cams: string[];
-  dests: string[]; // "webhook:<id>" | "agent:<id>"
+  dests: string[]; // "webhook:<id>" | "agent:<id>" | "channel:<id>"
   active: ActiveId;
   custom: { from: string; to: string };
 }
 const toNotify = (dests: string[]): Destination[] => dests.map((d) => {
   const [type, ...id] = d.split(":");
-  return { type: type as "webhook" | "agent", id: id.join(":") };
+  return { type: type as Destination["type"], id: id.join(":") };
 });
 
 interface Places {
   webhooks: Webhook[];
   agents: { id: string; name: string }[];
+  channels: Channel[];
   hooksMissing: boolean;
 }
 
 function destItems(pl: Places) {
   return [
+    ...pl.channels.filter((c) => c.status === "active").map((c) => ({ id: `channel:${c.id}`, label: c.name })),
     ...pl.webhooks.map((h) => ({ id: `webhook:${h.id}`, label: hostOf(h.url) })),
     ...pl.agents.map((a) => ({ id: `agent:${a.id}`, label: a.name })),
   ];
 }
+const kindOf = (id: string) => (id.startsWith("agent:") ? "AGENT" : id.startsWith("channel:") ? "TELEGRAM" : "WEBHOOK");
 
 function FormFields({ f, set, sources, places, disabled, navigate, idp }: { f: Form; set: (f: Form) => void; sources: Source[]; places: Places; disabled: boolean; navigate: (p: string) => void; idp: string }) {
   const items = destItems(places);
@@ -142,7 +145,8 @@ function FormFields({ f, set, sources, places, disabled, navigate, idp }: { f: F
       {f.mode === "alert" && (
         <fieldset className="adm-fieldset">
           <legend className="adm-legend">Send to <span className="adm-legend-count">{f.dests.length === 1 ? "1 place" : `${f.dests.length} places`}</span></legend>
-          <MultiChips items={items} value={f.dests} onChange={(dests) => set({ ...f, dests })} disabled={disabled} kindOf={(id) => (id.startsWith("agent:") ? "AGENT" : "WEBHOOK")}>
+          <MultiChips items={items} value={f.dests} onChange={(dests) => set({ ...f, dests })} disabled={disabled} kindOf={kindOf}>
+            <a href="/settings?tab=notifications" className="adm-chip adm-chip-add" onClick={(e) => { e.preventDefault(); navigate("/settings?tab=notifications"); }}>+ Connect Telegram</a>
             <a href="/webhooks" className="adm-chip adm-chip-add" onClick={(e) => { e.preventDefault(); navigate("/webhooks"); }}>+ Add webhook</a>
           </MultiChips>
           <span className="adm-note">Every fired watch also appears in Events.</span>
@@ -192,11 +196,13 @@ export function WatchesPage(p: PageProps) {
   }, [p.apiUrl, p.apiKey]);
   const places = useLoad(async (): Promise<Places> => {
     let hooksMissing = false;
-    const [webhooks, agents] = await Promise.all([
+    const [webhooks, agents, channels] = await Promise.all([
       (async () => { const l: Webhook[] = []; for await (const h of p.client.webhooks.list()) l.push(h); return l; })().catch((e) => { hooksMissing = unavailable(e); return [] as Webhook[]; }),
-      p.client.agents.list().then((r) => (r as { data: { id: string; name: string }[] }).data).catch(() => []),
+      // A linked chat's own agent isn't a place to send to: the chat is.
+      p.client.agents.list().then((r) => (r as { data: { id: string; name: string; kind?: string }[] }).data.filter((a) => a.kind !== "channel")).catch(() => []),
+      listChannels(ctx).catch(() => [] as Channel[]),
     ]);
-    return { webhooks, agents, hooksMissing };
+    return { webhooks, agents, channels, hooksMissing };
   }, [p.apiUrl, p.apiKey]);
   const tz = useLoad(() => p.client.account.get().then((a) => (a as { time_zone?: string }).time_zone || browserTz()), [p.apiUrl, p.apiKey]);
   // Last fired and counts come from the past week's watch.triggered events.
@@ -223,8 +229,10 @@ export function WatchesPage(p: PageProps) {
   const [packing, setPacking] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
-  const pl: Places = places.data ?? { webhooks: [], agents: [], hooksMissing: false };
-  const destName = (d: Destination) => (d.type === "agent" ? pl.agents.find((a) => a.id === d.id)?.name ?? "agent" : hostOf(pl.webhooks.find((h) => h.id === d.id)?.url ?? "webhook"));
+  const pl: Places = places.data ?? { webhooks: [], agents: [], channels: [], hooksMissing: false };
+  const destName = (d: Destination) => (d.type === "agent" ? pl.agents.find((a) => a.id === d.id)?.name ?? "agent"
+    : d.type === "channel" ? `Telegram (${pl.channels.find((c) => c.id === d.id)?.name ?? "chat"})`
+    : hostOf(pl.webhooks.find((h) => h.id === d.id)?.url ?? "webhook"));
   const camNames = (ids: string[]) => (sources.list.length > 1 && sources.list.every((s) => ids.includes(s.id)) ? "every camera" : joinAnd(ids.map(sources.name)));
   const ready = editable && form.instruction.trim().length >= 3 && form.cams.length > 0;
 

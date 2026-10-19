@@ -10,8 +10,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,7 +26,11 @@ import (
 func main() {
 	endpoint := flag.String("endpoint", "", "WHIP endpoint URL")
 	fps := flag.Float64("fps", 25, "stream frame rate (sets RTP timing)")
+	ca := flag.String("ca", "", "also trust this CA certificate (PEM), e.g. Caddy's local root for https://localhost")
 	flag.Parse()
+	if *ca != "" {
+		trustCA(*ca)
+	}
 	token := os.Getenv("WHIP_TOKEN")
 	if *endpoint == "" || token == "" {
 		log.Fatal("usage: WHIP_TOKEN=... whip-push -endpoint URL < stream.h264")
@@ -48,4 +55,20 @@ func main() {
 	if err != nil && ctx.Err() == nil {
 		log.Fatalf("whip: %v", err)
 	}
+}
+
+// trustCA adds a PEM certificate to the roots the WHIP client trusts.
+func trustCA(file string) {
+	pem, err := os.ReadFile(file)
+	if err != nil {
+		log.Fatalf("ca: %v", err)
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(pem) {
+		log.Fatalf("ca: no certificate in %s", file)
+	}
+	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: roots}
 }

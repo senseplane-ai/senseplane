@@ -14,6 +14,15 @@ happens.
 - **Measure:** "how many meals today?", "how long did she sleep?", "is it quieter than usual?", answered exactly from activities, with a daily summary if you want one.
 - **Replay:** any range within your retention period (7 days by default).
 
+<img src="docs/images/ask-and-watch.png" alt="Asking about the yard camera: a suggested watch for when the truck leaves, and how long it has been parked">
+
+<p>
+  <img src="docs/images/live-view.png" alt="Live view of three cameras: front door, yard and living room" width="49%">
+  <img src="docs/images/events.png" alt="Events: a parcel watch fired and was checked by the AI, with its snapshot" width="49%">
+</p>
+
+<sub>Demo footage: vpdonline, Museum of Municipal Engineering (Kraków) and Diego Torres Silvestre, via Wikimedia Commons (CC BY); see <a href="fixtures/README.md">fixtures</a>.</sub>
+
 Senseplane does perception, not decisions: it reports what it saw, how sure it
 is and the evidence, and your agent decides what to do. Agents connect through
 an MCP server, a REST API, webhooks and a TypeScript SDK.

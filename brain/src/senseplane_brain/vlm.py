@@ -10,7 +10,6 @@ import base64
 import json
 import logging
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -41,9 +40,13 @@ def _jpeg_data_url(rgb: np.ndarray) -> str:
 
 
 def _parse_json(text: str) -> dict:
+    """The first JSON object in a reply: models sometimes add prose, a code fence or a second object."""
     text = text.strip()
-    m = re.search(r"\{.*\}", text, re.S)
-    return json.loads(m.group(0) if m else text)
+    start = text.find("{")
+    if start < 0:
+        return json.loads(text)
+    out, _ = json.JSONDecoder().raw_decode(text, start)
+    return out
 
 
 class ModelClient:

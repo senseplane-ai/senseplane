@@ -29,6 +29,8 @@ already have; your agent sees, hears and remembers what happens.
 ## Run it yourself
 
 - **[Run Senseplane on a VM](self-host-vm.md):** the one-file setup.
+- **[Load-test your server](load-test.md):** how many cameras it takes, from
+  your own computer.
 - **[Self-hosting](self-host.md):** requirements, configuration, production
   secrets, TLS, storage, retention, backups and upgrades.
 - **[Test with a real phone](dev/phone-testing.md)** on your local network.

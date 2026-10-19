@@ -82,7 +82,7 @@ export function CameraPage({ id }: { id: string }) {
   const video = isVideo(source);
   const res = (source as Source & { max_resolution?: string }).max_resolution;
   const facts = [
-    source.location, ingestLong(source), video ? res : undefined,
+    source.location, ingestLong(source), video && res ? `Records up to ${res}` : undefined,
     video ? (source.record_audio ? "Audio recorded" : "Audio not recorded") : undefined,
     `Keeps ${keepsLabel(source, account)}`.replace("Keeps Until", "Keeps until"),
   ].filter(Boolean) as string[];

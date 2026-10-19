@@ -32,6 +32,9 @@ x-settings: &settings
   AI_MODEL_VISION: anthropic/claude-haiku-5.5
   AI_MODEL_TEXT: anthropic/claude-sonnet-5.5
   RAW_RETENTION_DAYS: "7"
+  # Optional: the largest video recorded, 720p or 1080p. A camera or encoder
+  # sending more is refused, so set OBS and similar to this size or lower.
+  MAX_RESOLUTION: 720p
   # Optional: the public IP browsers send video to. By default it is what
   # SENSEPLANE_DOMAIN resolves to; set it if that isn't this machine's address.
   MEDIA_ANNOUNCED_ADDRESS: ""

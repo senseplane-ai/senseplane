@@ -19,7 +19,7 @@ export function reactTo(e: { event: string; [k: string]: unknown }): Reaction {
         action: "stop",
         message: e.reason === "replaced" ? "This camera was opened on another device"
           : e.reason === "allowance_exhausted" ? "This account has used its camera time for now. Streaming resumes when the allowance resets or the plan changes."
-          : e.reason === "resolution_not_in_plan" ? "This camera sends a higher resolution than this account records. Lower the camera's resolution and try again."
+          : e.reason === "resolution_not_in_plan" ? "This camera sends a higher resolution than this server records. Lower the camera's resolution and try again."
           : "This camera was closed by the server.",
       };
     case "producerClosed":

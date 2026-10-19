@@ -63,6 +63,7 @@ x-settings: &settings
   AI_MODEL_VISION: anthropic/claude-haiku-5.5
   AI_MODEL_TEXT: anthropic/claude-sonnet-5.5
   RAW_RETENTION_DAYS: "7"
+  MAX_RESOLUTION: 720p
   MEDIA_ANNOUNCED_ADDRESS: ""
 ```
 
@@ -73,6 +74,7 @@ x-settings: &settings
 | `AI_BASE_URL`, `AI_API_KEY` | Your model endpoint and key. With no key, questions are off and watches fire without a model check. A local server that needs no key (Ollama) takes any value, such as `none` |
 | `AI_MODEL_VISION`, `AI_MODEL_TEXT` | The models, as your endpoint names them. The vision model must accept images |
 | `RAW_RETENTION_DAYS` | How long raw footage is kept by default |
+| `MAX_RESOLUTION` | The largest video recorded: `720p` (the default) or `1080p`. A camera or encoder sending more is disconnected and nothing is recorded |
 | `MEDIA_ANNOUNCED_ADDRESS` | Leave empty. Set it to the VM's public IP only if your domain doesn't resolve to it (see [Troubleshooting](#video-doesnt-connect)) |
 
 ### Secrets
@@ -248,6 +250,17 @@ The capture page stays on "Connecting…": the browser can't reach port 40000.
   (`docker compose logs init`). Behind a load balancer or a proxy such as
   Cloudflare's orange cloud, that isn't the VM: set `MEDIA_ANNOUNCED_ADDRESS`
   to the VM's public IP. Port 40000 can't go through a web proxy.
+- OBS and other WHIP encoders send video over UDP only (a browser falls back
+  to TCP), so a phone can work while OBS stays on "Connecting" when UDP is
+  blocked.
+
+### OBS connects, then disconnects every few seconds
+
+The stream is larger than `MAX_RESOLUTION`: the media log says
+`stream above maxResolution`. In OBS, set Settings → Video → **Output (Scaled)
+Resolution** to 1280x720 (or raise `MAX_RESOLUTION` to `1080p`), and check
+that the x264 lines in OBS's log show the new size. The camera page's
+"Records up to 720p" is the limit, not what is arriving.
 
 ### Watches and questions don't work
 

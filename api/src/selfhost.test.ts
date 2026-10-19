@@ -91,11 +91,12 @@ describe("self-host init", () => {
       API_CALLBACK_URL: "http://api:8080", MEDIA_CONTROL_URL: "http://media:8090", TRUST_PROXY: "1",
     });
     expect(api.SECRETS_ENCRYPTION_KEY.length).toBeGreaterThanOrEqual(32);
+    expect(api.QUOTA_MAX_RESOLUTION).toBe("720p");
     // Sign-in app secrets go to the API only; unset ones are left out.
     expect(api).toMatchObject({ AUTH_GITHUB_CLIENT_ID: "gh-id", AUTH_GITHUB_CLIENT_SECRET: "gh-secret-value" });
     expect(api.AUTH_GOOGLE_CLIENT_ID).toBeUndefined();
     const media = readEnv(join(dir, "media.env"));
-    expect(media).toMatchObject({ MEDIA_URL: "wss://cams.example.com/signal/", MEDIA_ANNOUNCED_ADDRESS: "203.0.113.7", MEDIA_RTC_PORT: "40000" });
+    expect(media).toMatchObject({ MEDIA_URL: "wss://cams.example.com/signal/", MEDIA_ANNOUNCED_ADDRESS: "203.0.113.7", MEDIA_RTC_PORT: "40000", MEDIA_WORKERS: "1" });
     expect(readEnv(join(dir, "mcp.env"))).toMatchObject({ MCP_PUBLIC_URL: "https://cams.example.com", MCP_CONSOLE_URL: "https://cams.example.com", SENSEPLANE_PUBLIC_API_URL: "https://cams.example.com", MCP_TRUSTED_REDIRECT_HOSTS: "claude.ai,claude.com" });
     expect(readEnv(join(dir, "brain.env"))).toMatchObject({ AI_API_KEY: "sk-or-secret", DETECTOR_THREADS: "2" });
     expect(readEnv(join(dir, "caddy.env"))).toEqual({ SENSEPLANE_DOMAIN: "cams.example.com", CADDY_ACME_EMAIL: "email ops@example.com" });
@@ -130,6 +131,13 @@ describe("self-host init", () => {
     expect(await announcedAddress({ domain: "cams.example.com", announcedAddress: "" }, { resolve: flaky, delayMs: 1 })).toBe("192.0.2.10");
     await expect(announcedAddress({ domain: "nope.example.com", announcedAddress: "" }, { resolve: async () => Promise.reject(new Error("ENOTFOUND")), attempts: 2, delayMs: 1 }))
       .rejects.toThrow(/DNS A record/);
+  });
+
+  it("takes the largest recorded resolution from the settings block", async () => {
+    const dir = tmp();
+    await init(dir, { SENSEPLANE_DOMAIN: "localhost", MAX_RESOLUTION: "1080P" }, () => {});
+    expect(readEnv(join(dir, "api.env")).QUOTA_MAX_RESOLUTION).toBe("1080p");
+    expect(() => settingsFromEnv({ SENSEPLANE_DOMAIN: "localhost", MAX_RESOLUTION: "4k" })).toThrow(/720p or 1080p/);
   });
 
   it("validates the domain setting", () => {

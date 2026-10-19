@@ -89,7 +89,9 @@ curl -X DELETE "https://media.example$LOCATION" -H "Authorization: Bearer $WHIP_
 - **Errors:** 401 bad or revoked token · 409 `source_limit_reached` · 415
   `unsupported_codec` (no H.264) · 429 `quota_exceeded` · 503 the node is
   draining or can't reach the API. A stream above the allowed resolution is
-  disconnected with `resolution_not_in_plan` and nothing is recorded.
+  disconnected with `resolution_not_in_plan` and nothing is recorded; OBS
+  shows this as a reconnect every few seconds. On the one-file self-host the
+  limit is the `MAX_RESOLUTION` setting.
 
 ## Self-hosting
 

@@ -122,6 +122,8 @@ export interface Settings {
   aiModelVision: string;
   aiModelText: string;
   retentionDays: string;
+  /** The largest video this server records (720p or 1080p); bigger streams are refused. */
+  maxResolution: "720p" | "1080p";
   /** Overrides the address resolved from the domain (MEDIA_ANNOUNCED_ADDRESS). */
   announcedAddress: string;
   /** "Sign in with GitHub / Google" OAuth apps (optional; both halves or nothing). */
@@ -153,6 +155,7 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): Settings 
     aiModelVision: (env.AI_MODEL_VISION ?? "").trim(),
     aiModelText: (env.AI_MODEL_TEXT ?? "").trim(),
     retentionDays: (env.RAW_RETENTION_DAYS ?? "").trim() || "7",
+    maxResolution: maxResolution(env.MAX_RESOLUTION),
     announcedAddress: (env.MEDIA_ANNOUNCED_ADDRESS ?? "").trim(),
     githubClientId: (env.AUTH_GITHUB_CLIENT_ID ?? "").trim(),
     githubClientSecret: (env.AUTH_GITHUB_CLIENT_SECRET ?? "").trim(),
@@ -162,6 +165,12 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): Settings 
     rtcPort: port(env.SENSEPLANE_RTC_PORT, 40000),
     cpus: Number(env.SENSEPLANE_CPUS) || availableParallelism(),
   };
+}
+
+function maxResolution(v: string | undefined): "720p" | "1080p" {
+  const r = (v ?? "").trim().toLowerCase() || "720p";
+  if (r !== "720p" && r !== "1080p") throw new Error(`MAX_RESOLUTION "${v}" must be 720p or 1080p`);
+  return r;
 }
 
 /** Whether Caddy should use its own CA instead of a public one (Let's Encrypt can't issue for these). */
@@ -248,6 +257,7 @@ export function serviceFiles(s: Settings, x: Secrets, address: string): ServiceF
         S3_ACCESS_KEY_ID: x.s3_access_key,
         S3_SECRET_ACCESS_KEY: x.s3_secret_key,
         RAW_RETENTION_DAYS: s.retentionDays,
+        QUOTA_MAX_RESOLUTION: s.maxResolution,
         AUTH_GITHUB_CLIENT_ID: s.githubClientId,
         AUTH_GITHUB_CLIENT_SECRET: s.githubClientSecret,
         AUTH_GOOGLE_CLIENT_ID: s.googleClientId,
@@ -278,6 +288,8 @@ export function serviceFiles(s: Settings, x: Secrets, address: string): ServiceF
         MEDIA_URL: `${wss}/signal/`,
         MEDIA_ANNOUNCED_ADDRESS: address,
         MEDIA_RTC_PORT: s.rtcPort,
+        // One worker: each worker listens on its own port (rtcPort + n), and only rtcPort is published.
+        MEDIA_WORKERS: 1,
         MEDIA_INTERNAL_ADDRESS: "auto",
         WHIP_TRUST_PROXY: "true",
       }),

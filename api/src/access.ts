@@ -119,6 +119,8 @@ const AGENT_ROUTES = new Set([
   "POST /v1/conversations/:id/messages/:mid/feedback",
   // Watch destinations (ADR 0043): backtests and the agent's own inbox.
   "POST /v1/watches/test", "GET /v1/inbox", "POST /v1/inbox/seen",
+  // Activities (ADR 0057): questions and intervals, within the agent's grants.
+  "POST /v1/activity/query", "GET /v1/activities", "POST /v1/activity/check",
 ]);
 
 /** Agent routes that need the `watch` ability on a grant (ADR 0048). */
@@ -129,6 +131,7 @@ const HISTORY_ROUTES = new Set([
   "GET /v1/sources/:id/playback", "GET /v1/sources/:id/timeline", "GET /v1/sources/:id/history",
   "GET /v1/clips", "POST /v1/clips", "GET /v1/clips/:id",
   "POST /v1/conversations", "GET /v1/conversations", "GET /v1/conversations/:id", "POST /v1/conversations/:id/messages",
+  "POST /v1/activity/query", "GET /v1/activities", "POST /v1/activity/check",
 ]);
 
 /**

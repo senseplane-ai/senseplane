@@ -58,7 +58,7 @@ function segmentsIn(s: AccountScope, sourceId: string, from: number, to: number)
 }
 
 /** Continuous recorded ranges (gaps-and-islands in SQL, so 7 days of segments never leave the database). */
-async function recordedRanges(s: AccountScope, sourceId: string, from: number, to: number) {
+export async function recordedRanges(s: AccountScope, sourceId: string, from: number, to: number) {
   const { rows } = await sql<{ from: Date; to: Date }>`
     select min(start_at) as "from", max(end_at) as "to" from (
       select start_at, end_at,

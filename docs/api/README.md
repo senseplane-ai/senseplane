@@ -183,8 +183,8 @@ watches for a use case in one step.
 A watch can cover several cameras (`sources` takes ids or names), run only at
 set times (`active_hours: {days, from, to, time_zone}`, overnight ranges such
 as 18:00–06:00 work) and send its events only where you say
-(`notify: [{type: "webhook", id}, {type: "agent", id}]`; without it, every
-webhook subscribed to `watch.triggered` gets them). Before saving one, try it on
+(`notify: [{type: "webhook", id}, {type: "agent", id}, {type: "channel", id}]`;
+without it, every webhook subscribed to `watch.triggered` gets them). Before saving one, try it on
 recorded history:
 
 ```sh
@@ -311,6 +311,21 @@ curl -N -X POST http://localhost:58080/v1/conversations/cnv_…/messages \
 - The TypeScript SDK has `sp.conversations.create/list/get/delete`,
   `send(id, {content})` for the whole answer, and `stream(id, {content})`,
   an async iterator of the events above.
+
+## Telegram channels
+
+A **channel** is a Telegram chat linked to the workspace
+([guide](../telegram.md)). Watches send to it with `notify: [{type: "channel", id}]`,
+and people in it can ask questions as the channel's own agent (kind `channel`).
+
+- `GET /v1/channels/telegram`: whether the server has a bot, and its username.
+- `POST /v1/channels/telegram/link`: a one-time link (10 minutes): `url` for a
+  private chat, `group_url` to add the bot to a group.
+- `GET /v1/channels`, `PATCH /v1/channels/{id}` (`name`, `snapshots`,
+  `can_ask`, `muted_until`), `DELETE /v1/channels/{id}` (unlinks and revokes
+  its agent), `POST /v1/channels/{id}/test`.
+
+Account keys and admins only; agent keys can't see channels.
 
 ## Webhooks
 

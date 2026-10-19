@@ -9,7 +9,7 @@ Connect the cameras, microphones and sensors you already have, and any agent
 happens.
 
 - **Look:** a snapshot of what's there now, and questions about it.
-- **Watch:** "tell me when a package is left at the door", with events by signed webhook or MCP.
+- **Watch:** "tell me when a package is left at the door", with events by signed webhook, MCP or Telegram.
 - **Ask:** "when did the courier come?", answered with the event, a snapshot and a clip.
 - **Measure:** "how many meals today?", "how long did she sleep?", "is it quieter than usual?", answered exactly from activities, with a daily summary if you want one.
 - **Replay:** any range within your retention period (7 days by default).

@@ -55,6 +55,7 @@ const pages = [
   ["docs/roadmap.md", "roadmap.html"],
   ["docs/watch-spec.md", "watch-spec.html"],
   ["docs/activity.md", "activity.html"],
+  ["docs/telegram.md", "telegram.html"],
   ["docs/load-test.md", "load-test.html"],
   ["docs/dev/phone-testing.md", "phone-testing.html"],
 ];

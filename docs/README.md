@@ -28,6 +28,8 @@ already have; your agent sees, hears and remembers what happens.
 - **[Asking about time](activity.md):** how long, how often, since when and
   compared with usual, from activities; tracking watches, condition and
   digest watches, and packs.
+- **[Telegram](telegram.md):** watch alerts in a Telegram chat, and questions
+  asked from it.
 
 ## Run it yourself
 

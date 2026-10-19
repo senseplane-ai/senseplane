@@ -30,6 +30,12 @@ Recordings keep the original picture, so for areas you must not record at all,
 **re-aim the camera** rather than relying on a mask. If Senseplane warns that
 "the view has changed", check that your masks still line up.
 
+**Alerts in Telegram leave your server.** A snapshot sent to a Telegram chat
+is stored by Telegram, and everyone in a group chat sees it and can ask about
+the cameras. Turn snapshots off for a chat that only needs the text, and link
+a group only if everyone in it should see the cameras
+([Telegram](telegram.md)).
+
 ## Tell people they're being recorded
 
 - **Guests, cleaners, babysitters and carers** should know about cameras in

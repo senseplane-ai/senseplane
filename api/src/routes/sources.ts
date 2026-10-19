@@ -156,7 +156,7 @@ export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
   const apiBase = (req: FastifyRequest) => (deps.apiPublicUrl ?? `${req.protocol}://${req.host}`).replace(/\/$/, "");
   /** The one-line install shown for a new bridge; `--rtsp` is a placeholder unless the camera URL is already stored. */
   const dockerCommand = (req: FastifyRequest, token: string, withRtsp: boolean) =>
-    `docker run -d --restart unless-stopped --name senseplane-bridge ${deps.bridgeImage ?? "ghcr.io/senseplane-ai/bridge:0.1"} --api ${apiBase(req)} --token ${token}` +
+    `docker run -d --restart unless-stopped --name senseplane-bridge ${deps.bridgeImage ?? "ghcr.io/senseplane-ai/bridge:0.2"} --api ${apiBase(req)} --token ${token}` +
     (withRtsp ? " --rtsp rtsp://USER:PASSWORD@CAMERA-IP:554/stream1" : "");
   /** Issues a fresh token for a bridge, or revokes it (`issue` false). The old token stops working at once. */
   const rotateBridgeToken = async (accountId: string, bridgeId: string, issue: boolean) => {

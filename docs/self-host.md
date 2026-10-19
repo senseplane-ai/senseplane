@@ -164,7 +164,7 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_EXPENSIVE_PER_MINUTE`, `RATE_LIMIT_ANONYMOUS_PER_MINUTE` | `600`, `30`, `600` | Requests per minute per key (or per IP without one), for model and search calls, and per IP for unauthenticated routes; `0` turns a limit off (ADR 0040) |
 | `LOG_LEVEL` | `info` | Log level (JSON logs) |
 | `MEDIA_PUBLIC_URL` | `http://localhost:58090` | The media plane's public URL; WHIP sources and bridges push to `<this>/whip/<source>` |
-| `BRIDGE_IMAGE` | `ghcr.io/senseplane-ai/bridge:0.1` | Image name in the `docker run` command shown for IP cameras |
+| `BRIDGE_IMAGE` | `ghcr.io/senseplane-ai/bridge:0.2` | Image name in the `docker run` command shown for IP cameras |
 | `SECRETS_ENCRYPTION_KEY` | generated outside production | Encrypts webhook secrets and camera RTSP URLs at rest (keep it with your backups) |
 
 ### Media plane (`media`)
@@ -287,7 +287,7 @@ Go program that runs next to the cameras and connects out to your Senseplane:
   the command a new `rtsp` source returns:
 
   ```sh
-  docker run -d --restart unless-stopped --name senseplane-bridge ghcr.io/senseplane-ai/bridge:0.1 \
+  docker run -d --restart unless-stopped --name senseplane-bridge ghcr.io/senseplane-ai/bridge:0.2 \
     --api https://senseplane.example.com --token brg_… --rtsp rtsp://user:pass@192.168.1.40:554/stream1
   ```
 

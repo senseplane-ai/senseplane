@@ -18,7 +18,7 @@ Senseplane does perception, not decisions: it reports what it saw, how sure it
 is and the evidence, and your agent decides what to do. Agents connect through
 an MCP server, a REST API, webhooks and a TypeScript SDK.
 
-> **Status:** early (v0.1). Expect rough edges, and please
+> **Status:** early (v0.2). Expect rough edges, and please
 > [report what breaks](https://github.com/senseplane-ai/senseplane/issues).
 
 ## Quick start

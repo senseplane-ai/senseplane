@@ -88,7 +88,7 @@ export interface CreateApiOptions {
   mediaIssuer?: string;
   /** Capture page URL, e.g. https://console.example.com/capture.html */
   captureUrl?: string;
-  /** The bridge image named in the `docker run` command for RTSP cameras (default `ghcr.io/senseplane-ai/bridge:0.1`, the release line, or BRIDGE_IMAGE). ADR 0045. */
+  /** The bridge image named in the `docker run` command for RTSP cameras (default `ghcr.io/senseplane-ai/bridge:0.2`, the release line, or BRIDGE_IMAGE). ADR 0045. */
   bridgeImage?: string;
   /** Valkey between the API, its brains and MCP (ADR 0051); omit to run without a brain. */
   valkeyUrl?: string;

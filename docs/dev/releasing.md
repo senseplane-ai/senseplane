@@ -86,13 +86,13 @@ tagged with the commit SHA only.
 
 ```sh
 # The signature: made by this repository's release workflow
-cosign verify ghcr.io/senseplane-ai/api:0.1 \
+cosign verify ghcr.io/senseplane-ai/api:0.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/senseplane-ai/senseplane/\.github/workflows/release\.yml@'
 
 # Its SBOM and build provenance
-docker buildx imagetools inspect ghcr.io/senseplane-ai/api:0.1 --format '{{ json .SBOM }}'
-docker buildx imagetools inspect ghcr.io/senseplane-ai/api:0.1 --format '{{ json .Provenance }}'
+docker buildx imagetools inspect ghcr.io/senseplane-ai/api:0.2 --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/senseplane-ai/api:0.2 --format '{{ json .Provenance }}'
 ```
 
 ## Build the images locally

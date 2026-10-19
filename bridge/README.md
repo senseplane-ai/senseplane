@@ -17,7 +17,7 @@ Create a source with `"type":"rtsp"` (the console's "IP camera"); it returns a
 bridge token and this command:
 
 ```sh
-docker run -d --restart unless-stopped --name senseplane-bridge ghcr.io/senseplane-ai/bridge:0.1 \
+docker run -d --restart unless-stopped --name senseplane-bridge ghcr.io/senseplane-ai/bridge:0.2 \
   --api https://senseplane.example.com --token brg_… --rtsp rtsp://user:pass@192.168.1.40:554/stream1
 ```
 

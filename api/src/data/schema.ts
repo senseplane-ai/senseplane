@@ -68,6 +68,29 @@ export interface SourcesTable {
   bridge_detail: ColumnType<string | null, string | null | undefined, string | null>;
   /** When `status` last changed (set by a trigger). */
   status_since: ColumnType<Date | null, never, never>;
+  /** A place the source belongs to, for grouping questions across places (ADR 0057). */
+  site: ColumnType<string | null, string | null | undefined, string | null>;
+}
+
+/** One thing, in one place, from a start to an end (ADR 0057). */
+export interface ActivitiesTable {
+  id: string;
+  account_id: string;
+  source_id: string;
+  activity_key: string;
+  kind: "presence" | "sound" | "watch";
+  label: string;
+  zone: string | null;
+  watch_id: string | null;
+  started_at: ColumnType<Date, Date | string, Date | string>;
+  last_seen_at: ColumnType<Date, Date | string, Date | string>;
+  ended_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  peak_count: ColumnType<number, number | undefined, number>;
+  confidence: number | null;
+  verified: boolean | null;
+  summary: string | null;
+  checked: ColumnType<boolean, boolean | undefined, boolean>;
+  created_at: Timestamp;
 }
 
 export interface BridgesTable {
@@ -430,6 +453,7 @@ export interface Database {
   watches: WatchesTable;
   usage_records: UsageRecordsTable;
   events: EventsTable;
+  activities: ActivitiesTable;
   webhooks: WebhooksTable;
   webhook_deliveries: WebhookDeliveriesTable;
   sensor_readings: SensorReadingsTable;

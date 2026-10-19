@@ -4,7 +4,9 @@
 // Persists brain output (spec/brain/valkey.json): events with their
 // snapshots, and episode ends (which move the event clip window).
 import type { FastifyBaseLogger } from "fastify";
+import { sql } from "kysely";
 import type { DataAccess } from "./data/access.js";
+import { newId } from "./data/ids.js";
 import { createEvent } from "./events.js";
 import type { ObjectStorage } from "./storage.js";
 
@@ -83,6 +85,8 @@ export async function handleBrainEvent(
         dedupe_key: typeof payload.id === "string" ? `brain:${payload.id}` : null,
       }).onConflict((oc) => oc.columns(["account_id", "dedupe_key"]).where("dedupe_key", "is not", null).doNothing()).execute(),
     );
+  } else if (subject === "brain.activity") {
+    await storeActivity(data, accountId, sourceId, payload, log);
   } else if (subject === "brain.episode.closed") {
     const endedAt = new Date(String(payload.ended_at));
     await data.withAccount(accountId, (s) =>
@@ -99,4 +103,43 @@ export async function handleBrainEvent(
         ),
     );
   }
+}
+
+const KINDS = new Set(["presence", "sound", "watch"]);
+
+/**
+ * One row per activity (ADR 0057): the open message creates it, heartbeats move last_seen_at, and the close
+ * sets ended_at. Messages can arrive late or twice, so each field only moves forward; an activity the sweeper
+ * closed while its brain was merely behind opens again on the next heartbeat.
+ */
+export async function storeActivity(data: DataAccess, accountId: string, sourceId: string, p: Record<string, unknown>, log: FastifyBaseLogger) {
+  const kind = String(p.kind);
+  const started = new Date(String(p.started_at));
+  const lastSeen = new Date(String(p.last_seen_at ?? p.started_at));
+  if (!KINDS.has(kind) || !p.activity_key || !p.label || Number.isNaN(started.getTime()) || Number.isNaN(lastSeen.getTime())) {
+    return log.warn({ kind }, "malformed brain activity ignored");
+  }
+  const ended = typeof p.ended_at === "string" ? new Date(p.ended_at) : null;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  await data.withAccount(accountId, async (s) => {
+    if (!(await s.sources.get(sourceId))) return log.warn({ sourceId }, "brain activity for unknown source ignored");
+    await s.db.insertInto("activities").values({
+      id: newId("act"), account_id: accountId, source_id: sourceId, activity_key: String(p.activity_key), kind: kind as "presence",
+      label: String(p.label).slice(0, 200), zone: str(p.zone), watch_id: str(p.watch_id), started_at: started, last_seen_at: lastSeen,
+      ended_at: ended, peak_count: Math.max(0, Math.trunc(Number(p.peak_count) || 0)),
+      confidence: typeof p.confidence === "number" ? p.confidence : null, verified: typeof p.verified === "boolean" ? p.verified : null,
+      summary: str(p.summary)?.slice(0, 2000) ?? null,
+    }).onConflict((oc) => oc.columns(["account_id", "activity_key"]).doUpdateSet({
+      started_at: sql`least(activities.started_at, excluded.started_at)`,
+      last_seen_at: sql`greatest(activities.last_seen_at, excluded.last_seen_at)`,
+      // A close only moves the end later; a heartbeat newer than the end (the sweeper closed it while the brain
+      // was only behind) opens it again; anything older changes nothing.
+      ended_at: sql`CASE WHEN excluded.ended_at IS NOT NULL THEN greatest(activities.ended_at, excluded.ended_at, activities.started_at)
+        WHEN excluded.last_seen_at > coalesce(activities.ended_at, activities.last_seen_at) THEN NULL ELSE activities.ended_at END`,
+      peak_count: sql`greatest(activities.peak_count, excluded.peak_count)`,
+      confidence: sql`greatest(activities.confidence, excluded.confidence)`,
+      verified: sql`coalesce(excluded.verified, activities.verified)`,
+      summary: sql`coalesce(excluded.summary, activities.summary)`,
+    })).execute();
+  });
 }

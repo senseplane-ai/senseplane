@@ -19,5 +19,5 @@ export function ulid(now = Date.now()): string {
   return time + r;
 }
 
-export type IdPrefix = "usr" | "src" | "wat" | "evt" | "clp" | "agt" | "grt" | "whk" | "key" | "dlv" | "inv" | "cnv" | "msg" | "inb";
+export type IdPrefix = "usr" | "src" | "wat" | "evt" | "clp" | "agt" | "grt" | "whk" | "key" | "dlv" | "inv" | "cnv" | "msg" | "inb" | "act";
 export const newId = (prefix: IdPrefix) => `${prefix}_${ulid()}`;

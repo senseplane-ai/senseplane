@@ -38,6 +38,8 @@ import { registerAccountRoutes } from "./routes/account.js";
 import { registerSourceRoutes } from "./routes/sources.js";
 import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
 import { markSilentBridges, registerBridgeRoutes } from "./routes/bridges.js";
+import { closeStaleActivities } from "./activity.js";
+import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
 import { createMediaGuard, mediaClaims } from "./media-access.js";
@@ -370,6 +372,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   registerWatchRoutes(app, { data, bus, storage, urls: eventUrls });
   registerConversationRoutes(app, { data, bus, storage, urls: eventUrls });
   registerInboxRoutes(app, { data, urls: eventUrls });
+  registerActivityRoutes(app, { data });
   // The media driver (ADR 0049): rooms, feeds and viewers through the control API, callbacks back here.
   const callbackBase = (options.media?.callbackUrl ?? options.apiPublicUrl ?? `http://localhost:${process.env.PORT ?? 8080}`).replace(/\/$/, "");
   const mediaDriver = options.media
@@ -459,6 +462,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       void sweepDemos({ data, bus, media: mediaControl, storage }, demo, app.log).catch((err) => app.log.error({ err }, "demo sweep failed"));
       void expireWatches(data, bus).catch((err) => app.log.error({ err }, "watch expiry failed"));
       void markSilentBridges(data, app.log).catch((err) => app.log.error({ err }, "bridge sweep failed"));
+      void closeStaleActivities(data).catch((err) => app.log.error({ err }, "activity sweep failed"));
       void purgeDeletedAccounts({ data, bus, storage }, app.log).catch((err) => app.log.error({ err }, "account deletion failed"));
       // Live sessions the media plane stopped reporting (3 missed minute reports) are closed and metered.
       void mediaDriver?.sweepFeeds().catch((err) => app.log.error({ err }, "feed sweep failed"));

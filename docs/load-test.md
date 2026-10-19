@@ -65,6 +65,12 @@ Each step prints one line, and the full numbers go to `load-report.json`:
 - **cpu:** percent of one core per service, so 260% is 2.6 cores. Detection
   (the brain) usually runs out first. A busy camera costs it much more than a
   quiet one.
+- **this computer:** the sending machine's CPU (all cores) and upload. A
+  step that fails while this computer was flat out and the server wasn't is
+  marked "limited by this computer": that is the sender's limit, not the
+  server's. Run from a stronger machine, or a second server near yours, to
+  push further. `load-report.json` also has the CPU of the test's own ffmpeg
+  and WHIP processes, and the three cameras that recorded least.
 - **disk:** how fast recordings fill the disk, per camera. Multiply by your
   retention in days to size the disk. Real cameras at higher resolution or
   bitrate use more: about 16 GB a day at 1.5 Mbps.

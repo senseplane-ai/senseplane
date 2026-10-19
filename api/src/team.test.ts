@@ -308,9 +308,10 @@ describe("teams, roles and invites (ADR 0044)", () => {
     expect(k).toMatchObject({ name: "My app", key_prefix: k.api_key.slice(0, 7), last_used_at: null });
     // It adds cameras, which agent keys can't.
     expect((await call("POST", "/v1/sources", k.api_key, { name: "Shed", type: "browser" })).statusCode).toBe(201);
-    const listed = (await call("GET", "/v1/keys", owner)).json().data.find((x: { id: string }) => x.id === k.id);
-    expect(listed.api_key).toBeUndefined();
-    expect(listed.last_used_at).not.toBeNull();
+    const listed = async () => (await call("GET", "/v1/keys", owner)).json().data.find((x: { id: string }) => x.id === k.id);
+    expect((await listed()).api_key).toBeUndefined();
+    // The audit log is written as the response goes out.
+    await expect.poll(async () => (await listed()).last_used_at).not.toBeNull();
     // Console sessions and agent keys aren't workspace keys: neither listed nor revocable here.
     const ids = (await call("GET", "/v1/keys", owner)).json().data.map((x: { key_prefix: string }) => x.key_prefix);
     expect(ids).not.toContain(owner.slice(0, 7));

@@ -13,7 +13,7 @@ horizontally.
 | Media plane | `media/` | WebRTC and WHIP ingest (mediasoup), live view, and each camera's feed egress: H.264 copied into ~6 s fMP4 segments (never transcoded) and analysis frames and audio | Only the callbacks the API gives it (presigned uploads, frames, events); its control API for the API |
 | Brain | `brain/` | Motion, objects, sounds, episodes, watches, the model adapter, embeddings | Valkey |
 | API | `api/` | Public `/v1` REST API, auth, webhooks, playback, privacy masks, the brain balancer, the only owner of Postgres | Postgres, Valkey, object store, media control API |
-| MCP server | `mcp/` | 8 tools for agents over stdio or remote HTTP | API |
+| MCP server | `mcp/` | 10 tools for agents over stdio or remote HTTP | API |
 | SDK | `sdk/typescript/` | `npm i senseplane`, generated from the spec | API |
 | Console | `console/` | Web UI for sources, playback, watches, search, access | API, media signalling |
 | Bridge | `bridge/` | Outbound-only relay for RTSP cameras (ADR 0045) | API (config, health), media plane (WHIP) |

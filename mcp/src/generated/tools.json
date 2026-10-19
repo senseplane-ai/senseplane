@@ -1,6 +1,6 @@
 {
   "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "tools": [
     {
       "name": "list_senses",

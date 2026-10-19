@@ -29,7 +29,8 @@ A watch is one plain-language sentence. The compiler turns it into a cheap trigg
   "warnings": []
 }
 ```
-- **`mode`:** only `alert` in v1. Count, duration, first/last and absence come later without breaking changes.
+- **`mode`:** `alert` (the default) posts `watch.triggered` events to the watch's destinations. `track` only records the watch's activities, while its condition holds and has passed its check, so questions can measure them later ("how many meals today?"). It sends nothing, and a check that says no is asked again at most every 2 minutes while the condition holds. Both modes record activities ([Asking about time](activity.md), ADR 0057).
+- **`compiled` on create:** `POST /v1/watches` takes a compiled form to use as it is instead of compiling the sentence. It is validated against the spec.
 - **`verify`:** optional. When it's absent, the trigger alone fires the event (useful for `sensor` and `sound`).
 - **`compiled.active_hours`:** what the compiler read from the sentence. `null` means always on. Otherwise a list of `{days, from, to}` in UTC.
 - **`status`:** `active`, `paused` or `needs_zone`.
@@ -84,6 +85,13 @@ maximum 50) candidate snapshots, each metered as an AI check. The reply has
 | `sensor` | `sense` (temperature, humidity), `above?`, `below?`, `rate_per_min?`, `min_duration_s` | The threshold or rate of change is crossed |
 | `schedule` | `every_min` (minimum 5), within `active_hours` | Always. A snapshot is taken and `verify` is required |
 | `sequence` | `steps`: a list of other triggers, `within_s` | The steps happen in order within the time window |
+| `condition` | `query` (an [activity question](activity.md)), `test` `{op: lt/lte/gt/gte/eq/ne, value, of?: value/ratio/delta}`, `at` (HH:MM) or `every_min` (default 10), `days?`, `time_zone?` | Checked by the API, not on frames. A daily check (`at`) fires each day the test holds; a repeated one (`every_min`) fires when the test starts to hold. Not while less than half the time asked about was recorded |
+| `digest` | `at` (HH:MM), `items`: up to 12 `{label, query}`, `days?`, `time_zone?` | At that time every day: each question is answered, and all of them go out as one event |
+
+Condition and digest watches have no `verify` and no frames. They can't be
+tested on recorded history (`POST /watches/test`), but their question can be
+tried with `POST /activity/query`. Times are in `time_zone`, else the
+watch's `active_hours.time_zone`, else the workspace's.
 
 ### Everyday objects
 - Every COCO class besides people, vehicles and animals is its own label, so a
@@ -129,4 +137,17 @@ The package watch is a `sequence`:
 | Cabinet left open / machine fault light red | `schedule` every 5–15 min, then verify |
 | Server room above 28 °C | `sensor` temperature, above 28, for 300 s (no verify) |
 | Glass breaking | `sound` glass_break (no verify) |
+| Track when someone is eating at the table (`mode: track`) | `objects` person `present` in `table` for 60 s, then verify "Is the person eating?", recorded as activities only |
+| Nobody in the kitchen by 10am | `condition`: `count` of person in `kitchen` today, `eq 0`, at 10:00 |
+| No movement in the hallway for 3 hours | `condition`: `since_last` person in `hallway`, `gte 10800`, every 10 min |
+| Eating less than usual (checked at 20:00) | `condition`: `count` of the meal watch with `compare: last_14_days`, `of: ratio`, `lt 0.7`, at 20:00 |
+| A summary of Mum's day at 8pm | `digest` at 20:00: first seen, last seen, time seen, longest quiet spell, and a count for each tracking watch |
+
+### Packs
+
+`GET /watch-packs` lists ready-made sets of watches (eldercare, home, shop,
+site), and `POST /watch-packs/{id}/apply` with `{sources, items?, time_zone?}`
+adds them. Sentences are compiled like any watch, and conditions and digests
+are added compiled. A pack's digest summarises its own tracking watches. See
+[Asking about time](activity.md#packs).
 

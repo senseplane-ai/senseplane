@@ -173,8 +173,12 @@ A watch is one plain-language sentence (`POST /v1/watches`). Senseplane
 compiles it into a cheap trigger plus an optional vision-model check, and
 returns the compiled form so you can read and edit it
 (`PATCH /v1/watches/{id}`). See the [watch spec](../watch-spec.md) for trigger
-types (`objects`, `motion`, `sound`, `sensor`, `schedule`, `sequence`) and
-examples. `duration_minutes` stops a watch automatically.
+types (`objects`, `motion`, `sound`, `sensor`, `schedule`, `sequence`,
+`condition`, `digest`) and examples. `duration_minutes` stops a watch
+automatically. `mode: "track"` makes a watch that only records when its
+condition holds, to answer questions later, and sends no notifications.
+Packs (`GET /v1/watch-packs`, `POST /v1/watch-packs/{id}/apply`) add a set of
+watches for a use case in one step.
 
 A watch can cover several cameras (`sources` takes ids or names), run only at
 set times (`active_hours: {days, from, to, time_zone}`, overnight ranges such
@@ -192,6 +196,28 @@ curl -s http://localhost:58080/v1/watches/test -H "authorization: Bearer $KEY" -
 
 An agent reads events sent to it with `GET /v1/inbox?unseen=true` and marks
 them read with `POST /v1/inbox/seen` (MCP `what_happened` does both).
+
+## Activities and questions
+
+Activities are one thing, in one place, from a start to an end: presence of
+a person, vehicle, animal or object (in each zone), sounds, and a watch's
+condition while it held ([Asking about time](../activity.md)).
+`POST /v1/activity/query` answers count, duration, first and last, how long
+since, absence, order, per-hour, per-camera and per-site questions, and
+compares them with what is usual:
+
+```sh
+curl -s http://localhost:58080/v1/activity/query -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -d '{"measure":"total_duration","what":{"label":"person","zone":"bed"},"period":"last_24_hours",
+       "between":{"from":"21:00","to":"09:00"},"time_zone":"Europe/London","compare":"last_14_days"}'
+# {"value":27900,"unit":"seconds","baseline":{"mean":28800,"ratio":0.97,…},"trend":{…},
+#  "coverage":{"recorded":1,"complete":true,"gaps":[]},"evidence":[…],"notes":[]}
+```
+
+`GET /v1/activities` lists them, newest first (`source`, `kind`, `label`,
+`zone`, `from`, `to`). `POST /v1/activity/check` runs a watch's model check
+over recorded footage for something nothing tracked at the time; with a
+`watch_id`, what it finds is kept as that watch's activities.
 
 ## Events
 

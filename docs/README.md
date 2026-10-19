@@ -21,10 +21,13 @@ already have; your agent sees, hears and remembers what happens.
 - **API reference:** every endpoint with sample requests and responses,
   generated from [`spec/openapi.yaml`](../spec/openapi.yaml). Build it with
   `pnpm docs:build` and open `docs/site/api.html`.
-- **[MCP tools](api/mcp-tools.md):** the 8 tools agents use.
+- **[MCP tools](api/mcp-tools.md):** the 10 tools agents use.
 - **[Detector labels](api/labels.md):** what the cameras spot by themselves: people, vehicles, animals and 64 everyday objects.
 - **[Watch spec](watch-spec.md):** how a plain-language watch becomes a
   trigger.
+- **[Asking about time](activity.md):** how long, how often, since when and
+  compared with usual, from activities; tracking watches, condition and
+  digest watches, and packs.
 
 ## Run it yourself
 

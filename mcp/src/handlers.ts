@@ -210,7 +210,7 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
 /** An MCP server bound to one caller's Senseplane credentials. */
 export function createMcpServer(client: Senseplane, fetchImpl?: typeof fetch): Server {
   // logging and resources carry inbox notifications (ADR 0043, inbox.ts).
-  const server = new Server({ name: "senseplane", version: "0.3.0" }, { capabilities: { tools: {}, logging: {}, resources: { subscribe: true } } });
+  const server = new Server({ name: "senseplane", version: "0.4.0" }, { capabilities: { tools: {}, logging: {}, resources: { subscribe: true } } });
   const call = createHandlers(client, fetchImpl);
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema as { type: "object" } })),

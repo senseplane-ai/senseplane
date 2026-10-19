@@ -1,8 +1,8 @@
 # Connect an agent with MCP
 
-Senseplane's MCP server gives an agent 8 tools: `list_senses`, `look`,
-`listen`, `read_environment`, `watch_for`, `what_happened`, `replay` and
-`stop_watching`. See [MCP tools](api/mcp-tools.md) for their inputs and
+Senseplane's MCP server gives an agent 10 tools: `list_senses`, `look`,
+`listen`, `read_environment`, `watch_for`, `what_happened`, `measure`,
+`check_history`, `replay` and `stop_watching`. See [MCP tools](api/mcp-tools.md) for their inputs and
 outputs.
 
 There are two ways to run it:

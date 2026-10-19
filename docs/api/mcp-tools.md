@@ -2,7 +2,7 @@
 
 # MCP tools
 
-Senseplane's MCP server exposes 8 tools (tool spec version 0.3.0).
+Senseplane's MCP server exposes 10 tools (tool spec version 0.4.0).
 Each call runs with the agent's grants: a tool that needs a sense the agent
 isn't granted fails with `forbidden_sense`. See [MCP setup](../mcp-setup.md)
 to connect a client.
@@ -59,6 +59,7 @@ Start watching one or more cameras for something described in plain language. Pe
 | `duration_minutes` | integer | no | min 1 |
 | `notify_me` | boolean | no | Send this watch's events to your inbox only (true, the default for agent keys), or to the account's webhooks (false); default `true` |
 | `active_hours` | object | no | Only watch at these times, e.g. {from: "18:00", to: "06:00", time_zone: "Europe/London"}; fields: `days`, `from`, `to`, `time_zone` |
+| `mode` | `alert`, `track` | no | alert (default): you get events when it happens. track: only keep a record, to measure later (meals, sleep, medication), with no events |
 
 **Returns:** The watch id, its compiled trigger, any warnings, where events go and when it expires.
 
@@ -74,6 +75,44 @@ Ask what happened, in plain language, over a time range (people, vehicles, anima
 | `source` | string | no | Source id or name |
 
 **Returns:** New inbox events from your watches, then matching events with summaries, snapshots and clips.
+
+## `measure`
+
+Measure what happened, exactly: how many times, how long, when first or last, how long since, the longest time without, per hour/day/camera/site, and compared with what is usual (trends). Use it for counts, durations, absence and comparisons instead of adding up events. Measures presence of a label (person, vehicle, animal, an everyday object; optionally in a zone), a watch's activities (watch_id; a watch made with mode track records them without alerting), a sound, or a sensor threshold. The answer says how much of the time was recorded.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `measure` | `exists`, `count`, `first`, `last`, `since_last`, `total_duration`, `longest`, `average_duration`, `longest_gap`, `timeline`, `sequence`, `average_value`, `min_value`, `max_value` | yes | exists/count/first/last: activities that began in the window; since_last: seconds since the last one ended (0 if one is going on; looks back 30 days); total_duration/longest/average_duration: seconds inside the window; longest_gap: the longest stretch with none; timeline: the activities; sequence: `what` followed by `then` within within_s; *_value: sensor readings |
+| `what` | object | yes | The thing measured: exactly one of label, watch_id, sound or sensor.; fields: `label`, `watch_id`, `sound`, `sensor`, `zone`, `min_count`, `min_duration_s` |
+| `then` | object | no | sequence only: what follows; fields: `label`, `watch_id`, `sound`, `sensor`, `zone`, `min_count`, `min_duration_s` |
+| `within_s` | number | no | sequence only: how soon after `what` ends `then` must start (default 3600); min 0 |
+| `sources` | array of string | no | Source ids or names (default: every source you may use) |
+| `sites` | array of string | no | Only sources at these sites |
+| `period` | `today`, `yesterday`, `this_week`, `last_hour`, `last_24_hours`, `last_7_days`, `last_30_days` | no | The window, in time_zone (default today) |
+| `from` | string | no | Window start, instead of period |
+| `to` | string | no | Window end (default now) |
+| `time_zone` | string | no | IANA time zone for today, days and hours (default: the workspace's) |
+| `between` | object | no | Only this part of each day, HH:MM; to before from runs overnight (22:00–06:00); fields: `from`, `to` |
+| `group_by` | `hour`, `day`, `weekday`, `source`, `zone`, `site` | no | Also answer per hour, day, weekday, camera, zone or site |
+| `compare` | `previous_period`, `same_weekday`, `last_14_days`, `last_28_days` | no | Also compare with what is usual: the same window shifted back (days the camera was mostly off are left out) |
+| `limit` | integer | no | Evidence items to return (default 10); min 1; max 200 |
+
+**Returns:** The value (count, seconds, a time or a reading), the activities it is based on, what is usual and a trend when compared, and the share of the time recorded.
+
+## `check_history`
+
+Look through recorded footage for something no watch was tracking at the time ('did someone take pills at the kitchen table this morning?'). Checks at most max_checks moments where a person, vehicle, animal, object or sound was detected (each an AI check). With a watch_id, what it finds is kept as that watch's activities so measure counts it.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `instruction` | string | no | What to look for, as a watch is written |
+| `watch_id` | string | no | Check an existing watch instead |
+| `sources` | array of string | no | Source ids or names |
+| `from` | string | no | Default 24 h ago (at most 7 days) |
+| `to` | string | no | Default now |
+| `max_checks` | integer | no | Default 10; min 0; max 50 |
+
+**Returns:** Moments that matched (camera, time, what the model saw, snapshot link), how many were checked and how many were not.
 
 ## `replay`
 

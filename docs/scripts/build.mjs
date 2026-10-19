@@ -54,6 +54,8 @@ const pages = [
   ["docs/architecture.md", "architecture.html"],
   ["docs/roadmap.md", "roadmap.html"],
   ["docs/watch-spec.md", "watch-spec.html"],
+  ["docs/activity.md", "activity.html"],
+  ["docs/load-test.md", "load-test.html"],
   ["docs/dev/phone-testing.md", "phone-testing.html"],
 ];
 const outFor = new Map(pages.map(([src, out]) => [resolve(root, src), out]));

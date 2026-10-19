@@ -8,7 +8,7 @@ senseplane/
 ├── api/               # Fastify REST API (/v1), webhooks, auth; only Postgres owner
 ├── media/             # Open-source mediasoup media plane (ingress + egress roles, one image)
 ├── brain/             # Python: signal, perception, episodes, watches, VLM, memory
-├── mcp/               # MCP server (8 tools)
+├── mcp/               # MCP server (10 tools)
 ├── console/           # Web console (React), also the capture page
 ├── sdk/
 │   └── typescript/    # npm: senseplane

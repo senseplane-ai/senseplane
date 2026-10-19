@@ -298,6 +298,26 @@ describe("teams, roles and invites (ADR 0044)", () => {
       await t.drop();
     }
   }, 30_000); // a fresh database
+  it("lets owners make workspace keys for their own apps, and nobody else", async () => {
+    const admin = await join("keys-admin@example.test", "admin");
+    expect((await call("POST", "/v1/keys", admin, { name: "My app" })).json().error.code).toBe("forbidden_role");
+    expect((await call("GET", "/v1/keys", admin)).statusCode).toBe(200);
+    const made = await call("POST", "/v1/keys", owner, { name: "My app" });
+    expect(made.statusCode).toBe(201);
+    const k = made.json();
+    expect(k).toMatchObject({ name: "My app", key_prefix: k.api_key.slice(0, 7), last_used_at: null });
+    // It adds cameras, which agent keys can't.
+    expect((await call("POST", "/v1/sources", k.api_key, { name: "Shed", type: "browser" })).statusCode).toBe(201);
+    const listed = (await call("GET", "/v1/keys", owner)).json().data.find((x: { id: string }) => x.id === k.id);
+    expect(listed.api_key).toBeUndefined();
+    expect(listed.last_used_at).not.toBeNull();
+    // Console sessions and agent keys aren't workspace keys: neither listed nor revocable here.
+    const ids = (await call("GET", "/v1/keys", owner)).json().data.map((x: { key_prefix: string }) => x.key_prefix);
+    expect(ids).not.toContain(owner.slice(0, 7));
+    expect((await call("DELETE", `/v1/keys/${k.id}`, admin)).statusCode).toBe(403);
+    expect((await call("DELETE", `/v1/keys/${k.id}`, owner)).statusCode).toBe(204);
+    expect((await call("GET", "/v1/sources", k.api_key)).statusCode).toBe(401);
+  });
 });
 
 describe("migration 0020 on existing data", () => {

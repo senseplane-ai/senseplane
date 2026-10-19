@@ -105,6 +105,41 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
     return reply.code(204).send();
   });
 
+  // --- workspace keys --------------------------------------------------------------
+  // Full-access keys for a developer's own scripts and apps (adding cameras, managing watches and webhooks).
+  // They act as the workspace, above every role, so only owners make or revoke them (roles.ts).
+  const workspaceKeys = (db: Kysely<Database>, accountId: string) => db.selectFrom("api_keys")
+    .select(["api_keys.id", "api_keys.name", "api_keys.prefix", "api_keys.created_at"])
+    .select((eb) => eb.selectFrom("audit_log").select((e) => e.fn.max("audit_log.occurred_at").as("m")).where("audit_log.account_id", "=", accountId)
+      .where(sql<boolean>`audit_log.actor = 'owner:' || api_keys.prefix`).as("last_used_at"))
+    .where("api_keys.agent_id", "is", null).where("api_keys.user_id", "is", null).where("api_keys.revoked_at", "is", null)
+    .orderBy("api_keys.created_at");
+  const toKey = (k: { id: string; name: string; prefix: string; created_at: Date | string; last_used_at?: Date | string | null }) => ({
+    id: k.id, name: k.name, key_prefix: k.prefix, created_at: iso(k.created_at), last_used_at: iso(k.last_used_at) ?? null,
+  });
+  app.get("/v1/keys", async (req) => {
+    const rows = await deps.data.withAccount(req.accountId!, (s) => workspaceKeys(s.db, req.accountId!).execute());
+    return { data: rows.map(toKey), next_cursor: null };
+  });
+  app.post<{ Body: { name: string } }>(
+    "/v1/keys",
+    { schema: { body: { type: "object", required: ["name"], additionalProperties: false, properties: { name: { type: "string", minLength: 1, maxLength: 120 } } } } },
+    async (req, reply) => {
+      const out = await deps.data.withAccount(req.accountId!, async (s) => {
+        const k = await s.apiKeys.create(req.body.name.trim());
+        const row = await s.db.selectFrom("api_keys").select(["id", "name", "prefix", "created_at"]).where("id", "=", k.id).executeTakeFirstOrThrow();
+        return { ...toKey(row), api_key: k.key };
+      });
+      return reply.code(201).send(out);
+    },
+  );
+  app.delete<{ Params: { id: string } }>("/v1/keys/:id", async (req, reply) => {
+    const r = await deps.data.withAccount(req.accountId!, (s) => s.db.updateTable("api_keys").set({ revoked_at: new Date() })
+      .where("id", "=", req.params.id).where("agent_id", "is", null).where("user_id", "is", null).where("revoked_at", "is", null).executeTakeFirst());
+    if (!r.numUpdatedRows) throw new ApiError(404, "not_found", "key not found");
+    return reply.code(204).send();
+  });
+
   // --- grants ------------------------------------------------------------------
   app.post<{ Body: AccessBody & { agent_id: string } }>(
     "/v1/grants",

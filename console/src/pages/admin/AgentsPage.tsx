@@ -94,7 +94,7 @@ export function AgentsPage(p: PageProps) {
                   <summary className="adm-small adm-muted" style={{ cursor: "pointer" }}>Use a key with the SDK</summary>
                   <div style={{ marginTop: 10 }}><CodeLine code={sdkSnippet(p.apiUrl)} /></div>
                 </details>
-                <p className="adm-note">Owner keys from the setup tool have full account access and aren&apos;t listed here. Never give one to an agent.</p>
+                <WorkspaceKeys client={p.client} owner={role === "owner"} />
               </section>
             </>
           );
@@ -229,6 +229,98 @@ function AgentCard({ agent, grants, sources, client, editable, onSaved, onRevoke
 }
 
 /** Create an API key (an agent with one grant); the key is shown once. */
+type WorkspaceKey = { id: string; name: string; key_prefix: string; created_at: string; last_used_at: string | null };
+
+/**
+ * Full-access keys for a developer's own apps and scripts: adding cameras, managing watches and webhooks.
+ * They act above every role, so only owners make or revoke them; admins see the list.
+ */
+function WorkspaceKeys({ client, owner }: { client: Senseplane; owner: boolean }) {
+  const keys = useLoad(() => client.keys.list() as Promise<WorkspaceKey[]>, [client]);
+  const [name, setName] = useState("");
+  const [making, setMaking] = useState(false);
+  const [shown, setShown] = useState("");
+  const [revoking, setRevoking] = useState<WorkspaceKey | null>(null);
+  const [err, setErr] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const create = async () => {
+    setBusy(true);
+    setErr(undefined);
+    try {
+      const k = (await client.keys.create(name.trim())) as WorkspaceKey & { api_key: string };
+      setShown(k.api_key);
+      keys.setData((l) => [...(l ?? []), k]);
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (keys.missing) return null;
+  return (
+    <div className="adm-stack" style={{ gap: 8 }}>
+      <div className="adm-row" style={{ justifyContent: "space-between" }}>
+        <h3 className="adm-h2" style={{ fontSize: 14 }}>Workspace keys</h3>
+        <button type="button" className="adm-btn" style={{ height: 32, padding: "0 12px" }} disabled={!owner} onClick={() => { setMaking(true); setName(""); setShown(""); }}>Create workspace key</button>
+      </div>
+      <p className="adm-muted adm-small">
+        Full access to this workspace, for your own apps and scripts: adding cameras, watches, webhooks and Telegram chats. Never give one to an AI agent; give agents an API key above.
+        {!owner && " Only owners can create or revoke them."}
+      </p>
+      <LoadState r={keys} what="Workspace keys">
+        {(list) => list.length ? (
+          <ul className="adm-apps" aria-label="Workspace keys" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {list.map((k) => (
+              <li key={k.id} className="adm-card adm-app" aria-label={k.name}>
+                <div className="adm-app-top">
+                  <div className="adm-col" style={{ gap: 2 }}>
+                    <span className="adm-app-name">{k.name}</span>
+                    <span className="adm-app-meta">{[`Key ${k.key_prefix}…`, `Created ${fmtDate(k.created_at)}`, `Last used ${since(k.last_used_at)}`].join(" · ")}</span>
+                  </div>
+                  <div className="adm-app-actions">
+                    <button type="button" className="adm-btn adm-btn-sm adm-btn-danger" disabled={!owner} aria-label={`Revoke workspace key ${k.name}`} onClick={() => setRevoking(k)}>Revoke</button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="adm-note">No workspace keys yet.</p>}
+      </LoadState>
+      {making && (
+        <Dialog title={shown ? "Your new workspace key" : "Create a workspace key"} onClose={() => setMaking(false)}>
+          {shown ? (
+            <>
+              <div className="adm-secret" role="status">
+                <span>Copy it now. It is shown only once.</span>
+                <div className="adm-code"><code>{shown}</code><CopyButton text={shown} /></div>
+              </div>
+              <p className="adm-muted adm-small">Send it as a Bearer token from your code. Anyone with it can do anything in this workspace; keep it secret.</p>
+              <div className="adm-dialog-foot"><button type="button" className="adm-btn adm-btn-primary" onClick={() => setMaking(false)}>Done</button></div>
+            </>
+          ) : (
+            <>
+              <label className="adm-field">
+                <span className="adm-small adm-muted">Name</span>
+                <input className="adm-input adm-input-dark adm-input-lg" value={name} maxLength={120} placeholder="My app" onChange={(e) => setName(e.target.value)} />
+              </label>
+              <p className="adm-muted adm-small">This key can add and delete cameras and change everything in the workspace, above any team role.</p>
+              <ErrorNote error={err} />
+              <div className="adm-dialog-foot">
+                <button type="button" className="adm-btn" onClick={() => setMaking(false)}>Cancel</button>
+                <button type="button" className="adm-btn adm-btn-primary" disabled={!name.trim() || busy} onClick={() => void create()}>{busy ? "Creating…" : "Create key"}</button>
+              </div>
+            </>
+          )}
+        </Dialog>
+      )}
+      {revoking && (
+        <Confirm title={`Revoke ${revoking.name}?`} action="Revoke" body="Apps and scripts using it stop working on their next request." onClose={() => setRevoking(null)}
+          onConfirm={async () => { await client.keys.delete(revoking.id); keys.setData((l) => l?.filter((x) => x.id !== revoking.id)); }} />
+      )}
+    </div>
+  );
+}
+
 function CreateKeyDialog({ client, sources, onClose }: { client: Senseplane; sources: Source[]; onClose: () => void }) {
   const [name, setName] = useState("");
   const [access, setAccess] = useState<Access>({ sources: [], permissions: ["look"] });

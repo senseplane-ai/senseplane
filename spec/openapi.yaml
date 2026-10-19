@@ -1394,6 +1394,65 @@ paths:
                 properties:
                   queued: {type: boolean}
         default: {$ref: '#/components/responses/Error'}
+  /keys:
+    get:
+      operationId: listKeys
+      summary: List workspace keys (admins and owners)
+      tags: [agents]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/WorkspaceKey'}}
+                  next_cursor: {type: 'null'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createKey
+      summary: Create a workspace key (owners only)
+      description: >-
+        A key with full access to the workspace, for your own scripts and apps: adding cameras,
+        managing watches, webhooks and channels. It acts above every role, so only an owner can make
+        one. Never give it to an AI agent; agents get agent keys with grants. Shown once.
+      tags: [agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 120}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/WorkspaceKey'}
+                  - type: object
+                    required: [api_key]
+                    properties:
+                      api_key: {type: string, description: The key (sk_…). Shown only once.}
+        default: {$ref: '#/components/responses/Error'}
+  /keys/{id}:
+    delete:
+      operationId: deleteKey
+      summary: Revoke a workspace key (owners only)
+      tags: [agents]
+      parameters:
+        - {name: id, in: path, required: true, description: Key ID, schema: {type: string}}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
   /agents:
     post:
       operationId: createAgent
@@ -2012,6 +2071,15 @@ components:
     Grant: {$ref: './schemas/grant.json'}
     Webhook: {$ref: './schemas/webhook.json'}
     Channel: {$ref: './schemas/channel.json'}
+    WorkspaceKey:
+      type: object
+      required: [id, name, key_prefix, created_at, last_used_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        key_prefix: {type: string, description: The first characters of the key}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: [string, 'null'], format: date-time}
     Usage: {$ref: './schemas/usage.json'}
     Reading: {$ref: './schemas/reading.json'}
     Error: {$ref: './schemas/error.json'}

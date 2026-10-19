@@ -107,6 +107,35 @@ describe("AgentsPage", () => {
     expect(api.called("POST", "/grants").at(-1)!.body).toEqual({ agent_id: agent(3, "x").id, source_ids: [SRC.front], senses: ["video", "audio"], abilities: [] });
   });
 
+  it("lets an owner create and revoke a workspace key, shown once", async () => {
+    let keys = [{ id: "key_1", name: "Load test", key_prefix: "sk_abcd", created_at: "2026-10-18T00:00:00Z", last_used_at: null }];
+    const { props, api } = setup(routes({
+      "GET /keys": () => page(keys),
+      "POST /keys": (r: { body: { name: string } }) => ({ id: "key_2", name: r.body.name, key_prefix: "sk_newk", created_at: "2026-10-19T00:00:00Z", last_used_at: null, api_key: "sk_newkey_secret" }),
+      "DELETE /keys/:id": (r: { params: { id: string } }) => { keys = keys.filter((k) => k.id !== r.params.id); return undefined; },
+    }));
+    render(<AgentsPage {...props} />);
+    const list = await screen.findByRole("list", { name: "Workspace keys" });
+    expect(within(list).getByText(/Key sk_abcd…/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create workspace key" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create a workspace key" });
+    fireEvent.change(within(dialog).getByPlaceholderText("My app"), { target: { value: "My app" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+    expect(await screen.findByText("sk_newkey_secret")).toBeTruthy();
+    expect(api.called("POST", "/keys")[0]!.body).toEqual({ name: "My app" });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revoke workspace key Load test" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(api.called("DELETE", "/keys/key_1")).toHaveLength(1));
+  });
+
+  it("shows workspace keys to admins without letting them make one", async () => {
+    const { props } = setup(routes({ "GET /me": me("admin"), "GET /keys": page([]) }));
+    render(<AgentsPage {...props} />);
+    expect(await screen.findByText(/Only owners can create or revoke them/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Create workspace key" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("disables changes for members", async () => {
     const { props } = setup(routes({ "GET /me": me("member") }));
     render(<AgentsPage {...props} />);

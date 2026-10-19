@@ -401,6 +401,19 @@ def verify_webhook(raw_body: bytes, header: str, secret: str, tolerance: int = 3
 # Flask: event = verify_webhook(request.get_data(), request.headers["Senseplane-Signature"], SECRET)
 ```
 
+## Workspace keys and agent keys
+
+There are two kinds of API key:
+
+- **Workspace keys** have full access to the workspace: adding and deleting
+  cameras, watches, webhooks and Telegram chats. Use one for your own app or
+  script. Owners make them in the console (**Agents → Workspace keys**) or with
+  `POST /v1/keys`; `GET /v1/keys` lists them and `DELETE /v1/keys/{id}`
+  revokes one. A workspace key acts above every team role, so never give one
+  to an AI agent.
+- **Agent keys** see only what their grants allow, and can't add cameras or
+  change settings. Give one to each agent.
+
 ## Agents and grants
 
 Give each agent its own key, and grant only what it needs:

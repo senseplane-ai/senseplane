@@ -901,6 +901,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List workspace keys (admins and owners) */
+        get: operations["listKeys"];
+        put?: never;
+        /**
+         * Create a workspace key (owners only)
+         * @description A key with full access to the workspace, for your own scripts and apps: adding cameras, managing watches, webhooks and channels. It acts above every role, so only an owner can make one. Never give it to an AI agent; agents get agent keys with grants. Shown once.
+         */
+        post: operations["createKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke a workspace key (owners only) */
+        delete: operations["deleteKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents": {
         parameters: {
             query?: never;
@@ -1284,6 +1322,16 @@ export interface components {
         Grant: components["schemas"]["grant"];
         Webhook: components["schemas"]["webhook"];
         Channel: components["schemas"]["channel"];
+        WorkspaceKey: {
+            id: string;
+            name: string;
+            /** @description The first characters of the key */
+            key_prefix: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_used_at: string | null;
+        };
         Usage: components["schemas"]["usage"];
         Reading: components["schemas"]["reading"];
         Error: components["schemas"]["error"];
@@ -4489,6 +4537,82 @@ export interface operations {
                         queued: boolean;
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["WorkspaceKey"][];
+                        next_cursor: null;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceKey"] & {
+                        /** @description The key (sk_…). Shown only once. */
+                        api_key: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Key ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

@@ -243,6 +243,14 @@ export class Senseplane {
     verify: verifyWebhook,
   };
 
+  /** Workspace keys: full access, for your own scripts and apps; owners make and revoke them. */
+  readonly keys = {
+    list: async () => (await unwrap(this.raw.GET("/keys"))).data,
+    /** The key is in `api_key`, shown only this once. */
+    create: (name: string) => unwrap(this.raw.POST("/keys", { body: { name } })),
+    delete: (id: string) => unwrap(this.raw.DELETE("/keys/{id}", { params: { path: { id } } })),
+  };
+
   /** Telegram chats that watches send to and that can ask (ADR 0059). */
   readonly channels = {
     list: async () => (await unwrap(this.raw.GET("/channels"))).data,

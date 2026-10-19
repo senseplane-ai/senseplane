@@ -669,6 +669,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/activity/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Look through recorded footage for something no watch tracked at the time
+         * @description Runs a watch's cheap trigger and model check over stored history (the same as POST /watches/test). With a watch_id, what it finds is kept as that watch's activities (marked `checked`), so later questions count it. Each model check is metered as an AI check.
+         */
+        post: operations["checkActivityHistory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/activities": {
         parameters: {
             query?: never;
@@ -1553,6 +1573,29 @@ export interface components {
         Activity: components["schemas"]["activity"];
         ActivityQuery: components["schemas"]["activity-query"];
         ActivityAnswer: components["schemas"]["activity-answer"];
+        ActivityCheckRequest: {
+            /** @description What to look for, as a watch is written */
+            instruction?: string;
+            /** @description Check an existing watch, and keep what is found as its activities */
+            watch_id?: string;
+            sources?: string[];
+            /**
+             * Format: date-time
+             * @description Default 24 h before `to` (at most 7 days)
+             */
+            from?: string;
+            /**
+             * Format: date-time
+             * @description Default now
+             */
+            to?: string;
+            /** @description Model checks to run at most (default 10) */
+            max_checks?: number;
+        };
+        ActivityCheckResult: components["schemas"]["WatchTestResult"] & {
+            /** @description Matches kept as the watch's activities */
+            stored: number;
+        };
         ActivityList: {
             data: components["schemas"]["activity"][];
         };
@@ -1647,6 +1690,11 @@ export interface components {
             snapshot_url?: string;
             /** @description The stored detection the match came from */
             event_id?: string;
+            /**
+             * Format: date-time
+             * @description When that detection's episode ended
+             */
+            ended_at?: string;
             /** @description true: the model check said yes; false: the watch has a check but no model ran; null: the watch has no check */
             verified: boolean | null;
             confidence?: number | null;
@@ -2474,6 +2522,11 @@ export interface components {
             source_name: string;
             /** Format: date-time */
             at: string;
+            /**
+             * Format: date-time
+             * @description A span (an activity an answer is based on): when it ended. Its clip plays the span.
+             */
+            until?: string;
             /** @description What happened, in one short sentence. */
             label: string;
             /**
@@ -3747,6 +3800,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["activity-answer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    checkActivityHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityCheckResult"];
                 };
             };
             default: components["responses"]["Error"];

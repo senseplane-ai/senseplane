@@ -1094,6 +1094,28 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ActivityAnswer'}
         default: {$ref: '#/components/responses/Error'}
+  /activity/check:
+    post:
+      operationId: checkActivityHistory
+      summary: Look through recorded footage for something no watch tracked at the time
+      description: >-
+        Runs a watch's cheap trigger and model check over stored history (the
+        same as POST /watches/test). With a watch_id, what it finds is kept as
+        that watch's activities (marked `checked`), so later questions count it.
+        Each model check is metered as an AI check.
+      tags: [activity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ActivityCheckRequest'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ActivityCheckResult'}
+        default: {$ref: '#/components/responses/Error'}
   /activities:
     get:
       operationId: listActivities
@@ -2260,6 +2282,23 @@ components:
     Activity: {$ref: './schemas/activity.json'}
     ActivityQuery: {$ref: './schemas/activity-query.json'}
     ActivityAnswer: {$ref: './schemas/activity-answer.json'}
+    ActivityCheckRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        instruction: {type: string, minLength: 3, maxLength: 500, description: 'What to look for, as a watch is written'}
+        watch_id: {type: string, description: 'Check an existing watch, and keep what is found as its activities'}
+        sources: {type: array, minItems: 1, maxItems: 50, items: {type: string}}
+        from: {type: string, format: date-time, description: 'Default 24 h before `to` (at most 7 days)'}
+        to: {type: string, format: date-time, description: Default now}
+        max_checks: {type: integer, minimum: 0, maximum: 50, description: 'Model checks to run at most (default 10)'}
+    ActivityCheckResult:
+      allOf:
+        - {$ref: '#/components/schemas/WatchTestResult'}
+        - type: object
+          required: [stored]
+          properties:
+            stored: {type: integer, description: Matches kept as the watch's activities}
     ActivityList:
       type: object
       required: [data]
@@ -2344,6 +2383,7 @@ components:
         summary: {type: string}
         snapshot_url: {type: string, format: uri, description: Signed, 15-minute expiry; absent without a snapshot or a video grant}
         event_id: {type: string, description: The stored detection the match came from}
+        ended_at: {type: string, format: date-time, description: When that detection's episode ended}
         verified: {type: [boolean, 'null'], description: 'true: the model check said yes; false: the watch has a check but no model ran; null: the watch has no check'}
         confidence: {type: [number, 'null']}
     WatchTestResult:

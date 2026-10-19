@@ -418,7 +418,9 @@ export interface ConversationsTable {
 /** A moment as stored: a reference, signed into links when read (ADR 0041). */
 export type StoredMoment =
   | { kind: "event"; event_id: string; source_id: string; at: string; label: string }
-  | { kind: "look"; source_id: string; at: string; label: string; snapshot_key: string | null };
+  | { kind: "look"; source_id: string; at: string; label: string; snapshot_key: string | null }
+  /** A span of an activity an answer is based on (ADR 0057); plays from `at` to `until`. */
+  | { kind: "range"; source_id: string; at: string; until: string; label: string };
 
 export interface MessagesTable {
   id: string;

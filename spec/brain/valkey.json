@@ -720,6 +720,54 @@
                 "can_look": {
                   "type": "boolean",
                   "description": "The caller may see this camera now (video grant)"
+                },
+                "site": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "zones": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Zone names, for questions about a place in the view"
+                }
+              }
+            }
+          },
+          "watches": {
+            "type": "array",
+            "description": "Watches on these sources, so a question can measure one (query_activity with watch_id, ADR 0057)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "instruction",
+                "mode"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "mode": {
+                  "enum": [
+                    "alert",
+                    "track"
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -837,7 +885,7 @@
               },
               "name": {
                 "type": "string",
-                "description": "tool: search_history, list_events or event_snapshot"
+                "description": "tool: search_history, list_events, event_snapshot, query_activity or check_history"
               },
               "args": {
                 "type": "object",
@@ -858,7 +906,9 @@
                   "enum": [
                     "search_history",
                     "list_events",
-                    "event_snapshot"
+                    "event_snapshot",
+                    "query_activity",
+                    "check_history"
                   ]
                 },
                 "args": {
@@ -888,6 +938,17 @@
                     "event_id": {
                       "type": "string",
                       "description": "event_snapshot: the event to read"
+                    },
+                    "activity_query": {
+                      "description": "query_activity: the args are an ActivityQuery (spec/schemas/activity-query.json)"
+                    },
+                    "instruction": {
+                      "type": "string",
+                      "description": "check_history: what to look for, in plain words"
+                    },
+                    "watch_id": {
+                      "type": "string",
+                      "description": "check_history: check an existing watch instead"
                     }
                   }
                 }

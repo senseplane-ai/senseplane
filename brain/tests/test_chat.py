@@ -34,6 +34,21 @@ class FakeTools:
         self.calls.append(("look", {"source_id": source_id, "question": question}))
         return {"answer": "A parcel is on the doormat.", "at": "2026-10-16T11:59:58Z", "jpeg_b64": "AAAA"}
 
+    def query_activity(self, args):
+        self.calls.append(("query_activity", args))
+        return {"measure": args["measure"], "value": 2 if args["measure"] == "count" else 5100, "unit": "count" if args["measure"] == "count" else "seconds",
+                "window": {"from": "2026-10-15T23:00:00Z", "to": "2026-10-16T12:00:00Z", "time_zone": "Europe/London"}, "matched": 2,
+                "baseline": {"compare": "last_14_days", "windows": 14, "mean": 3.0, "ratio": 0.67, "delta": -1, "values": []},
+                "coverage": {"recorded": 0.9, "complete": False, "gaps": [{"source_id": "src_door", "from": "2026-10-16T08:00:00Z", "to": "2026-10-16T09:00:00Z"}]},
+                "evidence": [{"id": "act_1", "source_id": "src_door", "source_name": "Front door", "zone": None, "started_at": "2026-10-16T07:10:00Z",
+                              "ended_at": "2026-10-16T07:31:00Z", "duration_s": 1260, "summary": "Eating at the table."}],
+                "notes": ["recorded 90% of the time asked about: what happened in the gaps isn't known"]}
+
+    def check_history(self, args):
+        self.calls.append(("check_history", args))
+        return {"matches": [{"event_id": "evt_9", "source_id": "src_door", "source_name": "Front door", "at": "2026-10-16T08:02:00Z",
+                             "summary": "A person takes a pill with water.", "verified": True}], "checks_used": 4, "candidates": 6, "unchecked": 2}
+
     def view_event(self, event_id, question):
         self.calls.append(("view_event", {"event_id": event_id, "question": question}))
         return {"answer": "A person in a red coat holding a black phone."}
@@ -124,6 +139,47 @@ def test_views_a_past_events_snapshot_by_ref_and_keeps_confidence_apart_from_mat
     (m,) = [e["moment"] for e in events if e["type"] == "moment"]
     assert m == {"kind": "event", "source_id": "src_door", "at": HIT["at"], "label": "A person in a red coat holding a black phone.", "event_id": "evt_1"}
     assert content == "They were holding a black phone [1]."
+
+
+def test_measures_with_query_activity_and_cites_the_span_it_was_based_on():
+    model = scripted(
+        [("tool", "query_activity", {"measure": "count", "what": {"watch_id": "wat_eat"}, "sources": ["front door"], "compare": "last_14_days"})],
+        [("delta", "Two meals so far today [m1], fewer than the usual three. The camera missed 09:00–10:00.")],
+    )
+    tools = FakeTools()
+    content, events = run({**REQ, "question": "How many times has she eaten today?", "watches": [{"id": "wat_eat", "instruction": "Track meals at the table", "mode": "track"}]},
+                          model, tools)
+    (name, q) = tools.calls[0]
+    assert name == "query_activity" and q["sources"] == ["src_door"] and q["time_zone"] == "Europe/London" and q["compare"] == "last_14_days"
+    sent = json.loads(model.seen[1]["messages"][-1]["content"])
+    assert sent["value"] == 2 and sent["usual"]["mean"] == 3.0 and sent["recorded_share"] == 0.9
+    assert sent["not_recorded"] == ["Front door Fri 16 Oct 09:00:00–Fri 16 Oct 10:00:00"]
+    assert sent["evidence"][0] == {"ref": "m1", "source": "Front door", "from": "Fri 16 Oct 08:10:00", "to": "Fri 16 Oct 08:31:00", "duration": "21 min"}
+    assert "Never count or add up events yourself" in model.seen[0]["messages"][0]["content"]
+    assert 'wat_eat: "Track meals at the table" (track)' in model.seen[0]["messages"][0]["content"]
+    (m,) = [e["moment"] for e in events if e["type"] == "moment"]
+    assert m == {"kind": "range", "source_id": "src_door", "at": "2026-10-16T07:10:00Z", "until": "2026-10-16T07:31:00Z", "label": "Eating at the table."}
+    assert content.startswith("Two meals so far today [1]")
+
+
+def test_durations_read_as_people_say_them():
+    from senseplane_brain.chat import duration_text
+
+    assert [duration_text(x) for x in (45, 720, 5100, 3600, 200_000, None)] == ["45 s", "12 min", "1 h 25 min", "1 h", "2 days 7 h", "unknown"]
+
+
+def test_checks_history_when_nothing_tracked_it():
+    model = scripted(
+        [("tool", "check_history", {"instruction": "a person taking pills at the table"})],
+        [("delta", "Yes, at 09:02 [m1]; I checked 4 moments.")],
+    )
+    tools = FakeTools()
+    content, events = run({**REQ, "question": "Did she take her pills this morning?"}, model, tools)
+    assert tools.calls[0] == ("check_history", {"instruction": "a person taking pills at the table", "sources": ["src_door", "src_rec"]})
+    sent = json.loads(model.seen[1]["messages"][-1]["content"])
+    assert sent["found"][0]["ref"] == "m1" and sent["moments_checked"] == 4 and sent["moments_not_checked"] == 2
+    (m,) = [e["moment"] for e in events if e["type"] == "moment"]
+    assert m["kind"] == "event" and m["event_id"] == "evt_9"
 
 
 def test_suggests_a_watch_once_with_resolved_sources():

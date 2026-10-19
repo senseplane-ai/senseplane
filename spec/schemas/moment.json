@@ -23,6 +23,11 @@
       "type": "string",
       "format": "date-time"
     },
+    "until": {
+      "type": "string",
+      "format": "date-time",
+      "description": "A span (an activity an answer is based on): when it ended. Its clip plays the span."
+    },
     "label": {
       "type": "string",
       "description": "What happened, in one short sentence."

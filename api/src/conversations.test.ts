@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type ApiBus, type BrainStreamHandlers, createApi, handleBrainEvent, type SenseplaneApi } from "./index.js";
 import type { ObjectStorage } from "./storage.js";
 import { createTestDatabase } from "./testdb.js";
+import { storeActivity } from "./brain-events.js";
 
 const log = { warn() {}, error() {}, info() {} } as never;
 const vec = (hot: number) => [...new Array(384).fill(0).map((_, i) => (i === hot ? 1 : 0))];
@@ -243,6 +244,40 @@ describe("conversations", () => {
     await call(agent.api_key, "POST", `/v1/conversations/${ac.id}/messages`, { content: "What was the person holding?" });
     expect(got.door).toEqual({ error: "event not found" });
     expect(got.yard).toEqual({ error: "event not found" });
+  });
+
+  it("measures activities for the brain (ADR 0057) and keeps the spans it cites", async () => {
+    const t = Date.now() - 2 * 3600_000;
+    await storeActivity(api.data, acc, door, { activity_key: "door-p1", kind: "presence", label: "person", started_at: new Date(t).toISOString(),
+      last_seen_at: new Date(t + 600_000).toISOString(), ended_at: new Date(t + 600_000).toISOString(), peak_count: 1 }, log);
+    let got: Record<string, any> = {};
+    script = async (p, on) => {
+      got = (await on.tool("query_activity", { measure: "total_duration", what: { label: "person" }, period: "last_24_hours", sources: [door] })) as Record<string, any>;
+      got.watches = p.watches;
+      got.zones = p.sources.find((x: { id: string }) => x.id === door).zones;
+      const e = got.evidence[0];
+      await on.event({ type: "moment", moment: { kind: "range", source_id: door, at: e.started_at, until: e.ended_at, label: "At the door for 10 min" } });
+      await on.event({ type: "moment", moment: { kind: "range", source_id: "src_elsewhere", at: e.started_at, until: e.ended_at, label: "x" } });
+      await on.event({ type: "done", content: "About 10 minutes [1]." });
+    };
+    const c = (await call(owner, "POST", "/v1/conversations")).json();
+    const msg = (await call(owner, "POST", `/v1/conversations/${c.id}/messages`, { content: "How long was someone at the door?" })).json();
+    expect(got.value).toBe(600);
+    expect(got.time_zone ?? got.window.time_zone).toBeDefined();
+    expect(Array.isArray(got.watches)).toBe(true);
+    expect(got.zones).toEqual([]); // zone names go to the brain (none set here)
+    expect(msg.moments).toHaveLength(1);
+    expect(msg.moments[0]).toMatchObject({ source_id: door, label: "At the door for 10 min", until: new Date(t + 600_000).toISOString(), snapshot_url: null,
+      clip_url: expect.stringContaining("/playback/") });
+    const bad = await (async () => {
+      script = async (_p, on) => {
+        got = (await on.tool("query_activity", { measure: "count", what: {} })) as Record<string, any>;
+        await on.event({ type: "done", content: "?" });
+      };
+      await call(owner, "POST", `/v1/conversations/${c.id}/messages`, { content: "?" });
+      return got;
+    })();
+    expect(bad.error).toMatch(/exactly one of/);
   });
 
   it("fails cleanly when the brain can't answer, and drops the question", async () => {

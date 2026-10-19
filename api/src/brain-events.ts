@@ -128,7 +128,7 @@ export async function storeActivity(data: DataAccess, accountId: string, sourceI
       label: String(p.label).slice(0, 200), zone: str(p.zone), watch_id: str(p.watch_id), started_at: started, last_seen_at: lastSeen,
       ended_at: ended, peak_count: Math.max(0, Math.trunc(Number(p.peak_count) || 0)),
       confidence: typeof p.confidence === "number" ? p.confidence : null, verified: typeof p.verified === "boolean" ? p.verified : null,
-      summary: str(p.summary)?.slice(0, 2000) ?? null,
+      summary: str(p.summary)?.slice(0, 2000) ?? null, checked: p.checked === true,
     }).onConflict((oc) => oc.columns(["account_id", "activity_key"]).doUpdateSet({
       started_at: sql`least(activities.started_at, excluded.started_at)`,
       last_seen_at: sql`greatest(activities.last_seen_at, excluded.last_seen_at)`,

@@ -18,6 +18,12 @@ class Moment(BaseModel):
     source_id: str
     source_name: str
     at: AwareDatetime
+    until: Annotated[
+        AwareDatetime | None,
+        Field(
+            description='A span (an activity an answer is based on): when it ended. Its clip plays the span.'
+        ),
+    ] = None
     label: Annotated[str, Field(description='What happened, in one short sentence.')]
     snapshot_url: Annotated[
         AnyUrl | None,

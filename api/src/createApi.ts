@@ -369,8 +369,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     claims: (sourceId: string, from: number, to: number) => mediaClaims(req, keyRefs, sourceId, from, to),
   });
   registerEventRoutes(app, { data, urls: eventUrls });
-  registerWatchRoutes(app, { data, bus, storage, urls: eventUrls });
-  registerConversationRoutes(app, { data, bus, storage, urls: eventUrls });
+  const watchRoutes = registerWatchRoutes(app, { data, bus, storage, urls: eventUrls });
+  registerConversationRoutes(app, { data, bus, storage, urls: eventUrls, checkHistory: watchRoutes.test });
   registerInboxRoutes(app, { data, urls: eventUrls });
   registerActivityRoutes(app, { data });
   // The media driver (ADR 0049): rooms, feeds and viewers through the control API, callbacks back here.

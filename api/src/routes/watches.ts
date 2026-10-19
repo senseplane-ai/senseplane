@@ -24,6 +24,7 @@ import destinationSchemaJson from "../generated/destination.schema.json" with { 
 import scheduleSchemaJson from "../generated/watch-schedule.schema.json" with { type: "json" };
 import type { ApiBus } from "../indexer.js";
 import { type ObjectStorage, readObject } from "../storage.js";
+import { storeActivity } from "../brain-events.js";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 (addFormatsModule as unknown as (a: Ajv2020) => void)(ajv);
@@ -245,6 +246,115 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     return reply.code(204).send();
   });
 
+  type TestBody = {
+    instruction?: string; watch_id?: string; compiled?: Compiled; sources?: string[]; from: string; to: string;
+    active_hours?: WatchSchedule | null; max_checks?: number;
+  };
+  /** Replays a watch's cheap trigger over stored history and runs its model check on candidates (ADR 0043). */
+  async function runTest(req: FastifyRequest, b: TestBody) {
+    const accountId = req.accountId!;
+    const from = new Date(b.from).getTime();
+    const to = new Date(b.to).getTime();
+    if (!(from < to)) throw new ApiError(400, "validation_failed", "from must be before to");
+    if (to - from > MAX_RANGE_MS) throw new ApiError(400, "validation_failed", "test at most 7 days at a time");
+    const existing = b.watch_id
+      ? await deps.data.withAccount(accountId, (s) => s.db.selectFrom("watches").selectAll().where("id", "=", b.watch_id!).executeTakeFirst())
+      : undefined;
+    if (b.watch_id && (!existing || !existing.sources.every((id) => seesSource(req, id)))) throw new ApiError(404, "not_found", "watch not found");
+    const sources = b.sources ? await resolveSources(req, b.sources) : [...(existing?.sources ?? [])];
+    if (!sources.length) throw new ApiError(400, "validation_failed", "sources is required");
+    for (const id of sources) if (!seesSource(req, id)) throw new ApiError(404, "not_found", `source not found: ${id}`);
+    let compiled: Compiled;
+    if (b.compiled) {
+      if (!validateCompiled(b.compiled)) throw new ApiError(400, "validation_failed", ajv.errorsText(validateCompiled.errors), { errors: validateCompiled.errors });
+      compiled = b.compiled;
+    } else if (b.instruction) {
+      compiled = (await compile(accountId, b.instruction, sources)).compiled as unknown as Compiled;
+    } else if (existing) {
+      compiled = existing.compiled as unknown as Compiled;
+    } else {
+      throw new ApiError(400, "validation_failed", "give an instruction, a compiled watch or a watch_id");
+    }
+    const schedule = "active_hours" in b ? checkSchedule(b.active_hours) : (existing?.active_hours ?? null);
+    const maxChecks = b.max_checks ?? DEFAULT_CHECKS;
+
+    // The stored detections and sounds (and readings for sensor triggers), as this caller may see them.
+    const granted = grantFilter<Database, "events">(req, "occurred_at");
+    const loaded = await deps.data.withAccount(accountId, async (s) => {
+      const srcs = new Map((await s.sources.list()).filter((x) => sources.includes(x.id)).map((x) => [x.id, x]));
+      const missing = sources.filter((id) => !srcs.has(id));
+      if (missing.length) throw new ApiError(404, "not_found", `source(s) not found: ${missing.join(", ")}`);
+      // Episodes that started up to an hour before `from` can still end (or hold) inside it.
+      let q = s.db.selectFrom("events").selectAll().where("source_id", "in", sources)
+        .where("occurred_at", ">=", new Date(from - 3600_000)).where("occurred_at", "<=", new Date(to))
+        .where((eb) => eb.or([eb("type", "like", "detection.%"), eb("type", "=", "sound.detected")]))
+        .orderBy("occurred_at").limit(MAX_EVENTS);
+      if (granted) q = q.where(granted);
+      const events = await q.execute();
+      const sensor = compiled.trigger.type === "sensor" ? String(compiled.trigger.sense) : undefined;
+      const readings = sensor
+        ? await s.db.selectFrom("sensor_readings").select(["source_id", "sense", "value", "unit", "measured_at"]).where("source_id", "in", sources)
+          .where("sense", "=", sensor).where("measured_at", ">=", new Date(from)).where("measured_at", "<=", new Date(to)).orderBy("measured_at").limit(MAX_EVENTS).execute()
+        : [];
+      return { srcs, events, readings };
+    });
+    const bySource = new Map(sources.map((id) => [id, {
+      events: loaded.events.filter((e) => e.source_id === id),
+      readings: loaded.readings.filter((r) => r.source_id === id && canSense(req, id, r.sense, new Date(r.measured_at))) as Reading[],
+    }]));
+    const found = candidates(compiled, schedule, bySource, { from, to });
+
+    const urls = deps.urls(req);
+    const verify = compiled.verify;
+    let checksUsed = 0;
+    let noModel = false;
+    const matches: Record<string, unknown>[] = [];
+    for (const c of found) {
+      if (matches.length >= MAX_MATCHES) break;
+      const src = loaded.srcs.get(c.source_id)!;
+      const media = c.event ? toEvent(c.event, src, urls).media : {};
+      const base = { source_id: c.source_id, source_name: src.name, at: new Date(c.at).toISOString(), ...(c.event ? { event_id: c.event.id } : {}),
+        ...(media.snapshot_url ? { snapshot_url: media.snapshot_url } : {}) };
+      const cheap = c.event?.summary ?? (c.reading ? `${c.reading.sense} was ${c.reading.value} ${c.reading.unit}.` : "The trigger fired.");
+      if (!verify) {
+        matches.push({ ...base, summary: cheap, verified: null, confidence: null });
+        continue;
+      }
+      if (noModel || checksUsed >= maxChecks || !c.event?.snapshot_key || !deps.storage) continue;
+      const jpeg = await readObject(deps.storage, c.event.snapshot_key).catch(() => undefined);
+      if (!jpeg) continue;
+      type CheckReply = { yes?: boolean | null; answer?: string; confidence?: number; error?: string };
+      const out: CheckReply = await bus()
+        .request<CheckReply>("rpc.brain.check", { account_id: accountId, source_id: c.source_id, prompt: verify.prompt, jpeg_b64: jpeg.toString("base64") }, 45_000)
+        .catch((): CheckReply => ({ error: "timeout" }));
+      if (out.error === "no_model") {
+        noModel = true;
+        continue;
+      }
+      if (out.error) throw new ApiError(503, "service_unavailable", "the brain could not check the candidates; try again");
+      checksUsed++;
+      if (out.yes === true && (out.confidence ?? 0) >= verify.min_confidence) {
+        matches.push({ ...base, summary: out.answer || cheap, verified: true, confidence: Math.round((out.confidence ?? 0) * 1000) / 1000 });
+      }
+    }
+    if (noModel) {
+      // No vision model on this instance: report the cheap trigger's candidates, unverified (as live watches do, ADR 0028).
+      matches.length = 0;
+      for (const c of found.slice(0, MAX_MATCHES)) {
+        const src = loaded.srcs.get(c.source_id)!;
+        const media = c.event ? toEvent(c.event, src, urls).media : {};
+        matches.push({ source_id: c.source_id, source_name: src.name, at: new Date(c.at).toISOString(), ...(c.event ? { event_id: c.event.id } : {}),
+          ...(media.snapshot_url ? { snapshot_url: media.snapshot_url } : {}), summary: c.event?.summary ?? "The trigger fired.", verified: false, confidence: null });
+      }
+    }
+    const checkable = verify && !noModel ? found.filter((c) => c.event?.snapshot_key).length : 0;
+    return {
+      matches, checks_used: checksUsed, candidates: found.length,
+      unchecked: verify && !noModel ? Math.max(0, checkable - checksUsed) + (found.length - checkable) : 0,
+      compiled,
+    };
+  }
+
   // --- backtest (ADR 0043) -------------------------------------------------------
   app.post<{ Body: {
     instruction?: string; watch_id?: string; compiled?: Compiled; sources?: string[]; from: string; to: string;
@@ -257,109 +367,36 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" },
       active_hours: { ...scheduleSchema, type: ["object", "null"] }, max_checks: { type: "integer", minimum: 0, maximum: MAX_CHECKS },
     } } } },
+    async (req) => runTest(req, req.body),
+  );
+
+  // Checking history after the fact (ADR 0057): a watch's check over stored footage. With a watch_id, what it
+  // finds is kept as that watch's activities (marked `checked`), so later questions count them too.
+  app.post<{ Body: { watch_id?: string; instruction?: string; sources?: string[]; from?: string; to?: string; max_checks?: number } }>(
+    "/v1/activity/check",
+    { schema: { body: { type: "object", additionalProperties: false, properties: {
+      instruction: { type: "string", minLength: 3, maxLength: 500 }, watch_id: { type: "string" },
+      sources: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } },
+      from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" }, max_checks: { type: "integer", minimum: 0, maximum: MAX_CHECKS },
+    } } } },
     async (req) => {
-      const accountId = req.accountId!;
-      const b = req.body;
-      const from = new Date(b.from).getTime();
-      const to = new Date(b.to).getTime();
-      if (!(from < to)) throw new ApiError(400, "validation_failed", "from must be before to");
-      if (to - from > MAX_RANGE_MS) throw new ApiError(400, "validation_failed", "test at most 7 days at a time");
-      const existing = b.watch_id
-        ? await deps.data.withAccount(accountId, (s) => s.db.selectFrom("watches").selectAll().where("id", "=", b.watch_id!).executeTakeFirst())
-        : undefined;
-      if (b.watch_id && (!existing || !existing.sources.every((id) => seesSource(req, id)))) throw new ApiError(404, "not_found", "watch not found");
-      const sources = b.sources ? await resolveSources(req, b.sources) : [...(existing?.sources ?? [])];
-      if (!sources.length) throw new ApiError(400, "validation_failed", "sources is required");
-      for (const id of sources) if (!seesSource(req, id)) throw new ApiError(404, "not_found", `source not found: ${id}`);
-      let compiled: Compiled;
-      if (b.compiled) {
-        if (!validateCompiled(b.compiled)) throw new ApiError(400, "validation_failed", ajv.errorsText(validateCompiled.errors), { errors: validateCompiled.errors });
-        compiled = b.compiled;
-      } else if (b.instruction) {
-        compiled = (await compile(accountId, b.instruction, sources)).compiled as unknown as Compiled;
-      } else if (existing) {
-        compiled = existing.compiled as unknown as Compiled;
-      } else {
-        throw new ApiError(400, "validation_failed", "give an instruction, a compiled watch or a watch_id");
-      }
-      const schedule = "active_hours" in b ? checkSchedule(b.active_hours) : (existing?.active_hours ?? null);
-      const maxChecks = b.max_checks ?? DEFAULT_CHECKS;
-
-      // The stored detections and sounds (and readings for sensor triggers), as this caller may see them.
-      const granted = grantFilter<Database, "events">(req, "occurred_at");
-      const loaded = await deps.data.withAccount(accountId, async (s) => {
-        const srcs = new Map((await s.sources.list()).filter((x) => sources.includes(x.id)).map((x) => [x.id, x]));
-        const missing = sources.filter((id) => !srcs.has(id));
-        if (missing.length) throw new ApiError(404, "not_found", `source(s) not found: ${missing.join(", ")}`);
-        // Episodes that started up to an hour before `from` can still end (or hold) inside it.
-        let q = s.db.selectFrom("events").selectAll().where("source_id", "in", sources)
-          .where("occurred_at", ">=", new Date(from - 3600_000)).where("occurred_at", "<=", new Date(to))
-          .where((eb) => eb.or([eb("type", "like", "detection.%"), eb("type", "=", "sound.detected")]))
-          .orderBy("occurred_at").limit(MAX_EVENTS);
-        if (granted) q = q.where(granted);
-        const events = await q.execute();
-        const sensor = compiled.trigger.type === "sensor" ? String(compiled.trigger.sense) : undefined;
-        const readings = sensor
-          ? await s.db.selectFrom("sensor_readings").select(["source_id", "sense", "value", "unit", "measured_at"]).where("source_id", "in", sources)
-            .where("sense", "=", sensor).where("measured_at", ">=", new Date(from)).where("measured_at", "<=", new Date(to)).orderBy("measured_at").limit(MAX_EVENTS).execute()
-          : [];
-        return { srcs, events, readings };
-      });
-      const bySource = new Map(sources.map((id) => [id, {
-        events: loaded.events.filter((e) => e.source_id === id),
-        readings: loaded.readings.filter((r) => r.source_id === id && canSense(req, id, r.sense, new Date(r.measured_at))) as Reading[],
-      }]));
-      const found = candidates(compiled, schedule, bySource, { from, to });
-
-      const urls = deps.urls(req);
-      const verify = compiled.verify;
-      let checksUsed = 0;
-      let noModel = false;
-      const matches: Record<string, unknown>[] = [];
-      for (const c of found) {
-        if (matches.length >= MAX_MATCHES) break;
-        const src = loaded.srcs.get(c.source_id)!;
-        const media = c.event ? toEvent(c.event, src, urls).media : {};
-        const base = { source_id: c.source_id, source_name: src.name, at: new Date(c.at).toISOString(), ...(c.event ? { event_id: c.event.id } : {}),
-          ...(media.snapshot_url ? { snapshot_url: media.snapshot_url } : {}) };
-        const cheap = c.event?.summary ?? (c.reading ? `${c.reading.sense} was ${c.reading.value} ${c.reading.unit}.` : "The trigger fired.");
-        if (!verify) {
-          matches.push({ ...base, summary: cheap, verified: null, confidence: null });
-          continue;
-        }
-        if (noModel || checksUsed >= maxChecks || !c.event?.snapshot_key || !deps.storage) continue;
-        const jpeg = await readObject(deps.storage, c.event.snapshot_key).catch(() => undefined);
-        if (!jpeg) continue;
-        type CheckReply = { yes?: boolean | null; answer?: string; confidence?: number; error?: string };
-        const out: CheckReply = await bus()
-          .request<CheckReply>("rpc.brain.check", { account_id: accountId, source_id: c.source_id, prompt: verify.prompt, jpeg_b64: jpeg.toString("base64") }, 45_000)
-          .catch((): CheckReply => ({ error: "timeout" }));
-        if (out.error === "no_model") {
-          noModel = true;
-          continue;
-        }
-        if (out.error) throw new ApiError(503, "service_unavailable", "the brain could not check the candidates; try again");
-        checksUsed++;
-        if (out.yes === true && (out.confidence ?? 0) >= verify.min_confidence) {
-          matches.push({ ...base, summary: out.answer || cheap, verified: true, confidence: Math.round((out.confidence ?? 0) * 1000) / 1000 });
+      if (!req.body.watch_id && !req.body.instruction) throw new ApiError(400, "validation_failed", "give an instruction or a watch_id");
+      const to = req.body.to ?? new Date().toISOString();
+      const from = req.body.from ?? new Date(Date.parse(to) - 86_400_000).toISOString();
+      const out = await runTest(req, { ...req.body, from, to });
+      let stored = 0;
+      if (req.body.watch_id) {
+        for (const m of out.matches as { source_id: string; at: string; ended_at?: string; event_id?: string; summary: string; verified: boolean | null; confidence: number | null }[]) {
+          if (m.verified === false) continue; // no model ran: not known to be the thing
+          await storeActivity(deps.data, req.accountId!, m.source_id, {
+            activity_key: `chk:${req.body.watch_id}:${m.event_id ?? m.at}`, kind: "watch", label: req.body.watch_id, watch_id: req.body.watch_id,
+            started_at: m.at, last_seen_at: m.ended_at ?? m.at, ended_at: m.ended_at ?? m.at, verified: m.verified, confidence: m.confidence ?? undefined,
+            summary: m.summary, checked: true,
+          }, req.log);
+          stored++;
         }
       }
-      if (noModel) {
-        // No vision model on this instance: report the cheap trigger's candidates, unverified (as live watches do, ADR 0028).
-        matches.length = 0;
-        for (const c of found.slice(0, MAX_MATCHES)) {
-          const src = loaded.srcs.get(c.source_id)!;
-          const media = c.event ? toEvent(c.event, src, urls).media : {};
-          matches.push({ source_id: c.source_id, source_name: src.name, at: new Date(c.at).toISOString(), ...(c.event ? { event_id: c.event.id } : {}),
-            ...(media.snapshot_url ? { snapshot_url: media.snapshot_url } : {}), summary: c.event?.summary ?? "The trigger fired.", verified: false, confidence: null });
-        }
-      }
-      const checkable = verify && !noModel ? found.filter((c) => c.event?.snapshot_key).length : 0;
-      return {
-        matches, checks_used: checksUsed, candidates: found.length,
-        unchecked: verify && !noModel ? Math.max(0, checkable - checksUsed) + (found.length - checkable) : 0,
-        compiled,
-      };
+      return { ...out, stored };
     },
   );
 
@@ -413,4 +450,5 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     const urls = deps.urls(req);
     return { data: rows.map(({ h, src }) => ({ event: toEvent(h, src, urls), score: Number(Number(h.score).toFixed(4)) })) };
   });
+  return { test: runTest };
 }

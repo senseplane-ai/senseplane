@@ -502,6 +502,12 @@ class Worker:
             def view_event(self, event_id, question):
                 return worker.chat_view_event(call("event_snapshot", {"event_id": event_id}), question, meta)
 
+            def query_activity(self, args):
+                return call("query_activity", args)
+
+            def check_history(self, args):
+                return call("check_history", args)
+
         complete = (lambda messages, tools: self.model.chat(messages, tools, meta)) if self.model else None
 
         def run():

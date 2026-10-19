@@ -16,6 +16,8 @@ import { ApiError, errorBody } from "../errors.js";
 import { type EventRow, type EventUrls, toEvent, typeFilter } from "../events.js";
 import type { ApiBus } from "../indexer.js";
 import { type ObjectStorage, readObject } from "../storage.js";
+import type { ActivityQuery } from "../activity-query.js";
+import { ask as askActivity } from "./activity.js";
 
 /** Earlier turns sent to the brain with each question. */
 const HISTORY_TURNS = 12;
@@ -25,7 +27,7 @@ type ConversationRow = Selectable<ConversationsTable>;
 type MessageRow = Selectable<MessagesTable>;
 type SuggestedWatch = { instruction: string; sources: string[] };
 type Moment = {
-  source_id: string; source_name: string; at: string; label: string; snapshot_url: string | null; clip_url?: string; event_id?: string;
+  source_id: string; source_name: string; at: string; until?: string; label: string; snapshot_url: string | null; clip_url?: string; event_id?: string;
 };
 
 const toConversation = (c: ConversationRow) => ({
@@ -64,6 +66,8 @@ function visibleEvents(req: FastifyRequest, s: AccountScope, sourceIds: string[]
 
 export function registerConversationRoutes(app: FastifyInstance, deps: {
   data: DataAccess; bus?: ApiBus; storage?: ObjectStorage; urls: (req: FastifyRequest) => EventUrls;
+  /** Checking history after the fact (the watch backtest, ADR 0057), for the chat's check_history tool. */
+  checkHistory?: (req: FastifyRequest, body: { instruction?: string; watch_id?: string; sources?: string[]; from: string; to: string; max_checks?: number }) => Promise<Record<string, unknown>>;
 }) {
   /** Account keys see the account's conversations; an agent key only the ones it started. */
   const mine = (req: FastifyRequest, s: AccountScope) => {
@@ -98,6 +102,14 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         return { ...base, snapshot_url: media.snapshot_url ?? null, ...(media.clip_url ? { clip_url: media.clip_url } : {}), event_id: e.id };
       }
       const t = Date.parse(m.at);
+      if (m.kind === "range") {
+        // A span plays from a little before it starts to a little after it ends, at most an hour.
+        const end = Math.min(Date.parse(m.until), t + 3600_000);
+        const claims = u.claims ? u.claims(m.source_id, t - 5000, end + 5000) : {};
+        if (!claims || !src) return { ...base, until: m.until, snapshot_url: null };
+        const clip = { kind: "range" as const, accountId: s.accountId, sourceId: m.source_id, from: t - 5000, to: end + 5000, ...claims };
+        return { ...base, until: m.until, snapshot_url: null, clip_url: `${u.base}/playback/${u.signer.sign(clip, u.ttlSeconds).token}/index.m3u8` };
+      }
       const claims = u.claims ? u.claims(m.source_id, t - 10_000, t + 10_000) : {};
       if (!claims || !src) return { ...base, snapshot_url: null };
       const snapshot_url = m.snapshot_key
@@ -212,10 +224,14 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
       });
       const allowed = new Map(chosen.map((x) => [x.id, x]));
       const brainSources = chosen.map((x) => ({
-        id: x.id, name: x.name, location: x.location, type: x.type, status: x.status,
+        id: x.id, name: x.name, location: x.location, type: x.type, status: x.status, site: x.site ?? null,
+        zones: (x.zones ?? []).map((z) => z.name),
         senses: x.senses.filter((sense) => canSense(req, x.id, sense)),
         can_look: x.senses.includes("video") && canSense(req, x.id, "video"),
       }));
+      // Watches the answer may measure (query_activity with watch_id, ADR 0057).
+      const brainWatches = (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("watches").select(["id", "instruction", "mode", "sources", "status"]).execute()))
+        .filter((w) => w.sources.some((id) => allowed.has(id))).map((w) => ({ id: w.id, instruction: w.instruction, mode: w.mode, status: w.status, sources: w.sources.filter((id) => allowed.has(id)) }));
 
       const userMsg = await deps.data.withAccount(accountId, async (s) => {
         const m = await s.db.insertInto("messages").values({ id: newId("msg"), account_id: accountId, conversation_id: conversation.id, role: "user", content })
@@ -281,6 +297,31 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
           if (!jpeg) return { error: "the snapshot is gone" };
           return { ...out(e), jpeg_b64: jpeg.toString("base64") };
         }
+        if (name === "query_activity") {
+          // The question's sources stay inside this conversation's; numbers come from the API, not the model (ADR 0057).
+          const ids = Array.isArray(args.sources) ? scope : [...allowed.keys()];
+          const q = { ...(args as unknown as ActivityQuery), sources: ids, time_zone: typeof args.time_zone === "string" ? args.time_zone : timeZone };
+          try {
+            return await askActivity(deps.data, accountId, req, q) as unknown as Record<string, unknown>;
+          } catch (err) {
+            return { error: err instanceof ApiError ? err.message : "the question could not be answered" };
+          }
+        }
+        if (name === "check_history" && deps.checkHistory) {
+          const instruction = String(args.instruction ?? "").slice(0, 500);
+          if (instruction.length < 3 && typeof args.watch_id !== "string") return { error: "give an instruction (what to look for)" };
+          const tTo = Math.min(Date.now(), date(typeof args.to === "string" ? args.to : undefined, "to")?.getTime() ?? Date.now());
+          const tFrom = Math.max(from.getTime(), tTo - 7 * DAY, date(typeof args.from === "string" ? args.from : undefined, "from")?.getTime() ?? tTo - DAY);
+          try {
+            const out = await deps.checkHistory(req, { ...(typeof args.watch_id === "string" ? { watch_id: args.watch_id } : { instruction }), sources: scope,
+              from: new Date(tFrom).toISOString(), to: new Date(tTo).toISOString(), max_checks: 10 });
+            const matches = (out.matches as Record<string, unknown>[]).map((m) => ({ event_id: m.event_id, source_id: m.source_id, source_name: m.source_name, at: m.at,
+              ended_at: m.ended_at, summary: m.summary, verified: m.verified }));
+            return { matches, checks_used: out.checks_used, candidates: out.candidates, unchecked: out.unchecked };
+          } catch (err) {
+            return { error: err instanceof ApiError ? err.message : "the check could not run" };
+          }
+        }
         return { error: `unknown tool ${name}` };
       };
 
@@ -318,6 +359,12 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
           const e = await deps.data.withAccount(accountId, (s) => visibleEvents(req, s, [...allowed.keys()]).where("id", "=", m.event_id as string).executeTakeFirst());
           return e ? { kind: "event", event_id: e.id, source_id: e.source_id, at: new Date(e.occurred_at).toISOString(), label: e.summary } : undefined;
         }
+        if (m.kind === "range" && typeof m.source_id === "string" && typeof m.at === "string" && typeof m.until === "string" && allowed.has(m.source_id)) {
+          const at = date(m.at, "at");
+          const until = date(m.until, "until");
+          if (!at || !until || until < at || !canSense(req, m.source_id, "video", at)) return undefined;
+          return { kind: "range", source_id: m.source_id, at: at.toISOString(), until: until.toISOString(), label: String(m.label ?? "Activity").slice(0, 300) };
+        }
         if (m.kind === "look" && typeof m.source_id === "string" && brainSources.find((x) => x.id === m.source_id)?.can_look) {
           const at = date(typeof m.at === "string" ? m.at : undefined, "at") ?? new Date();
           let key: string | null = null;
@@ -333,7 +380,7 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
       try {
         await deps.bus.stream("rpc.brain.chat", {
           account_id: accountId, conversation_id: conversation.id, question: content, history,
-          sources: brainSources, from: from.toISOString(), to: to.toISOString(), now: new Date().toISOString(), time_zone: timeZone,
+          sources: brainSources, watches: brainWatches, from: from.toISOString(), to: to.toISOString(), now: new Date().toISOString(), time_zone: timeZone,
         }, { event, tool });
       } catch (err) {
         req.log.warn({ err }, "chat answer failed");

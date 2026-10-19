@@ -5,8 +5,9 @@ tool-using loop over the OpenAI-compatible client.
 
 Tools: search history, list events and view an event's snapshot (served by
 the API, which applies the caller's grants; the vision model answers about the
-snapshot), look at a camera now (the latest masked frame to the vision model),
-list sources, and propose a watch. Everything the model may cite
+snapshot), measure activities and check history after the fact (ADR 0057: the
+API does the counting, so numbers are exact), look at a camera now (the latest
+masked frame to the vision model), list sources, and propose a watch. Everything the model may cite
 comes from a tool result and carries a ref (m1, m2, …); the answer cites refs
 as [m1], which are rewritten to [1], [2], … in the order they are first cited,
 and each cited ref becomes a moment. Refs the model made up are dropped, so
@@ -41,6 +42,8 @@ class Tools(Protocol):
     def list_events(self, args: dict) -> dict: ...
     def look(self, source_id: str, question: str) -> dict: ...
     def view_event(self, event_id: str, question: str) -> dict: ...
+    def query_activity(self, args: dict) -> dict: ...
+    def check_history(self, args: dict) -> dict: ...
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -50,6 +53,16 @@ def _fn(name: str, description: str, properties: dict, required: list[str] | Non
 
 _SOURCES = {"type": "array", "items": {"type": "string"}, "description": "Source names or ids; omit for the default sources"}
 _TIME = {"type": "string", "description": "RFC 3339 time"}
+_MEASURES = ["exists", "count", "first", "last", "since_last", "total_duration", "longest", "average_duration", "longest_gap", "timeline",
+             "sequence", "average_value", "min_value", "max_value"]
+_WHAT = {"type": "object", "description": "Exactly one of watch_id, label, sound or sensor",
+         "properties": {"watch_id": {"type": "string", "description": "A watch's id (see Watches)"},
+                        "label": {"type": "string", "description": "person, vehicle, animal or an everyday object"},
+                        "zone": {"type": "string", "description": "With label: only in this zone of the camera"},
+                        "sound": {"type": "string", "enum": ["crying", "glass_break", "alarm", "dog", "speech_present"]},
+                        "sensor": {"type": "object", "properties": {"sense": {"type": "string"}, "above": {"type": "number"}, "below": {"type": "number"}}},
+                        "min_count": {"type": "integer", "description": "At least this many at once"},
+                        "min_duration_s": {"type": "number", "description": "Only activities at least this long"}}}
 TOOL_SPECS = [
     _fn("search_history", "Search what the sources saw and heard (events) by meaning. Use for 'when did…', 'did anyone…', 'what happened…'.",
         {"query": {"type": "string", "description": "What to look for, in plain words"}, "sources": _SOURCES, "from": _TIME, "to": _TIME,
@@ -63,6 +76,29 @@ TOOL_SPECS = [
         ["ref", "question"]),
     _fn("look", "Look at one camera right now and answer a question about the current view.",
         {"source": {"type": "string", "description": "Source name or id"}, "question": {"type": "string"}}, ["source", "question"]),
+    _fn("query_activity", "Measure activities exactly: how many times, how long, when first or last, how long since, the longest time without, "
+        "per hour/day/camera, and compared with what is usual. Use it for every question about counts, durations, times, absence, order or "
+        "trends; never count events yourself. Something tracked by a watch is measured with its watch_id; otherwise use label (presence of "
+        "person, vehicle, animal or an everyday object, optionally in a zone), sound, or sensor.",
+        {"measure": {"type": "string", "enum": _MEASURES, "description": "exists, count, first, last, since_last (seconds since it last ended), total_duration, "
+                     "longest, average_duration, longest_gap (longest time with none), timeline (the list), sequence (what, then `then` within within_s), "
+                     "average_value/min_value/max_value (sensors)"},
+         "what": _WHAT, "then": {**_WHAT, "description": "sequence only: what follows"},
+         "within_s": {"type": "number", "description": "sequence only: seconds allowed between the end of `what` and the start of `then` (default 3600)"},
+         "sources": _SOURCES,
+         "period": {"type": "string", "enum": ["today", "yesterday", "this_week", "last_hour", "last_24_hours", "last_7_days", "last_30_days"],
+                    "description": "Default today"},
+         "from": _TIME, "to": _TIME,
+         "between": {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}},
+                     "description": "Only this part of each day, HH:MM; overnight like 22:00–07:00 is allowed (sleep, nights)"},
+         "group_by": {"type": "string", "enum": ["hour", "day", "weekday", "source", "zone", "site"]},
+         "compare": {"type": "string", "enum": ["previous_period", "same_weekday", "last_14_days", "last_28_days"],
+                     "description": "Compare with what is usual (more or less than usual, later than usual, trends)"}},
+        ["measure", "what"]),
+    _fn("check_history", "Look through recorded footage for something no watch was tracking at the time (\"did she take her pills this morning?\"). "
+        "Slower, checks at most 10 moments, and only covers moments a person, vehicle, animal, object or sound was detected.",
+        {"instruction": {"type": "string", "description": "What to look for, as a watch would be written: 'a person taking pills at the kitchen table'"},
+         "sources": _SOURCES, "from": _TIME, "to": _TIME}, ["instruction"]),
     _fn("list_sources", "List the sources you may use: name, id, location, status and senses.", {}),
     _fn("propose_watch", "Suggest a watch when the user wants to know about something in the future (e.g. 'tell me if…', 'is the door left open at night?'). The user decides whether to turn it on.",
         {"instruction": {"type": "string", "description": "One plain-language sentence, e.g. 'Tell me if a package is left at the front door'"}, "sources": _SOURCES},
@@ -72,12 +108,30 @@ TOOL_SPECS = [
 
 @dataclass
 class Ref:
-    kind: str  # event | look
+    kind: str  # event | look | range
     source_id: str
     at: str
     label: str
     event_id: str | None = None
     snapshot_jpeg_b64: str | None = None
+    until: str | None = None
+
+
+def duration_text(s: float | None) -> str:
+    """Seconds as people say them: 45 s, 12 min, 1 h 25 min, 2 days 3 h."""
+    if s is None:
+        return "unknown"
+    s = int(round(s))
+    if s < 60:
+        return f"{s} s"
+    m = s // 60
+    if m < 60:
+        return f"{m} min"
+    h, m = divmod(m, 60)
+    if h < 48:
+        return f"{h} h" + (f" {m} min" if m else "")
+    d, h = divmod(h, 24)
+    return f"{d} days" + (f" {h} h" if h else "")
 
 
 @dataclass
@@ -109,6 +163,8 @@ class Session:
         if ref not in self.cited:
             self.cited.append(ref)
             m = {"kind": r.kind, "source_id": r.source_id, "at": r.at, "label": r.label}
+            if r.until:
+                m["until"] = r.until
             if r.event_id:
                 m["event_id"] = r.event_id
             if r.snapshot_jpeg_b64:
@@ -176,6 +232,23 @@ class Session:
                                 "type": e.get("type"), "what": e["summary"],
                                 **{k: e[k] for k in ("confidence", "match") if e.get(k) is not None}})
             return {"results": results} if results else {"results": [], "note": "Nothing found."}
+        if name == "query_activity":
+            return self._query_activity(args)
+        if name == "check_history":
+            ids = self.resolve(args.get("sources")) or self.scope
+            self.status(f"Checking recordings on {self.names(ids)}…")
+            out = self.tools.check_history({k: v for k, v in args.items() if k in ("instruction", "from", "to", "watch_id")} | {"sources": ids})
+            if out.get("error"):
+                return {"error": out["error"]}
+            found = []
+            for m in out.get("matches", []):
+                if not m.get("event_id"):
+                    continue
+                ref = self.add_ref(Ref("event", m["source_id"], m["at"], m.get("summary") or "", event_id=m["event_id"]))
+                found.append({"ref": ref, "time": self.local(m["at"]), "source": m.get("source_name"), "saw": m.get("summary"),
+                              "checked_by_model": m.get("verified") is True})
+            return {"found": found, "moments_checked": out.get("checks_used"), "moments_not_checked": out.get("unchecked"),
+                    **({"note": "Nothing matching was found in the moments checked."} if not found else {})}
         if name == "view_event":
             r = self.refs.get(str(args.get("ref", "")).strip())
             if r is None or r.kind != "event" or not r.event_id:
@@ -213,21 +286,78 @@ class Session:
             return {"ok": True, "note": "Shown to the user as a suggestion; nothing is watching until they turn it on."}
         return {"error": f"unknown tool {name}"}
 
+    def _query_activity(self, args: dict) -> dict:
+        q = {k: v for k, v in args.items() if k in ("measure", "what", "then", "within_s", "period", "from", "to", "between", "group_by", "compare")}
+        q["sources"] = self.resolve(args.get("sources")) or self.scope
+        q["time_zone"] = self.tz.key
+        self.status(f"Measuring on {self.names(q['sources'])}…")
+        out = self.tools.query_activity(q)
+        if out.get("error"):
+            return {"error": out["error"]}
+        unit, value = out.get("unit"), out.get("value")
+        res: dict = {"measure": out.get("measure"), "value": value}
+        if unit == "seconds" and isinstance(value, (int, float)):
+            res["value_text"] = duration_text(value)
+        elif unit == "time" and isinstance(value, str):
+            res["value_text"] = self.local(value)
+        win = out.get("window") or {}
+        res["window"] = f"{self.local(win['from'])} to {self.local(win['to'])}" if win.get("from") else None
+        if out.get("groups"):
+            res["groups"] = out["groups"]
+        if out.get("baseline"):
+            b = out["baseline"]
+            res["usual"] = {k: b.get(k) for k in ("compare", "mean", "ratio", "delta", "windows")}
+            if unit == "time" and isinstance(b.get("mean"), (int, float)):
+                h, mnt = divmod(int(b["mean"]) // 60, 60)
+                res["usual"]["mean_text"] = f"{h:02d}:{mnt:02d}"
+            elif unit == "seconds" and isinstance(b.get("mean"), (int, float)):
+                res["usual"]["mean_text"] = duration_text(b["mean"])
+        if out.get("trend"):
+            res["trend"] = out["trend"]
+        cov = out.get("coverage") or {}
+        if cov.get("recorded") is not None:
+            res["recorded_share"] = cov["recorded"]
+            if cov.get("gaps"):
+                res["not_recorded"] = [f"{self.by_id.get(g['source_id'], {}).get('name', g['source_id'])} {self.local(g['from'])}–{self.local(g['to'])}"
+                                       for g in cov["gaps"][:5]]
+        evidence = []
+        for e in out.get("evidence", [])[:10]:
+            until = e.get("ended_at") or e["started_at"]
+            label = e.get("summary") or f"{e.get('source_name')}: {duration_text(e.get('duration_s'))}"
+            ref = self.add_ref(Ref("range", e["source_id"], e["started_at"], label, until=until))
+            evidence.append({"ref": ref, "source": e.get("source_name"), "from": self.local(e["started_at"]),
+                             "to": self.local(e["ended_at"]) if e.get("ended_at") else "still going", "duration": duration_text(e.get("duration_s"))})
+        if evidence:
+            res["evidence"] = evidence
+        if out.get("notes"):
+            res["notes"] = out["notes"]
+        return res
+
     # --- the loop -----------------------------------------------------------------------------
     def system(self) -> str:
         now = self.local(self.req.get("now") or datetime.now(self.tz).isoformat())
-        lines = [f"- {s['name']} (id {s['id']}{', ' + s['location'] if s.get('location') else ''}; {s.get('status') or 'unknown'}"
+        lines = [f"- {s['name']} (id {s['id']}{', ' + s['location'] if s.get('location') else ''}{', site ' + s['site'] if s.get('site') else ''}; "
+                 f"{s.get('status') or 'unknown'}{'; zones ' + ', '.join(s['zones']) if s.get('zones') else ''}"
                  f"{'; can look now' if s.get('can_look') else ''})" for s in self.sources]
+        watches = [f"- {w['id']}: \"{w['instruction']}\" ({w.get('mode', 'alert')}{', paused' if w.get('status') == 'paused' else ''})"
+                   for w in self.req.get("watches") or []]
         span = (f"History you can search covers {self.local(self.req['from'])} to {self.local(self.req['to'])}. "
                 if self.req.get("from") and self.req.get("to") else "")
         return (
             "You answer questions about what a person's cameras and sensors saw and heard. "
             f"It is now {now} ({self.tz.key}); give times in that zone. {span}"
             "\nSources you may use:\n" + ("\n".join(lines) or "(none)") +
+            ("\nWatches (measure what they track with query_activity and their id):\n" + "\n".join(watches) if watches else "") +
             f"\nUnless the user names sources, use: {self.names(self.scope) or 'none'}.\n"
             "Rules:\n"
             "- Use the tools before answering: search_history or list_events for the past, look for right now. Call tools before writing anything.\n"
             "- Event summaries are short labels. For details they don't give (what someone wore or held, a vehicle's colour), call view_event on the event.\n"
+            "- How many, how long, when first or last, how long since, nothing for how long, more or less than usual, trends: call query_activity and "
+            "use its numbers. Never count or add up events yourself. Prefer a watch that tracks the thing; otherwise presence of a label (in a zone).\n"
+            "- If query_activity says part of the time wasn't recorded, say so: what happened then isn't known. Never say something didn't happen "
+            "when the camera wasn't recording.\n"
+            "- If no watch tracks what is asked about (\"did she take her pills?\"), use check_history, and say it checked a limited number of moments.\n"
+            "- People aren't identified: \"she\" or \"Mum\" only means a person seen in that place.\n"
             "- confidence is how sure the detector was (0 to 1); match is only how close an event is to your search words. Never call match a confidence.\n"
             "- Every result has a ref like m1. Cite each thing you mention as [m1] right after it. Never mention an event without its ref.\n"
             "- Only state what the tool results say. Never invent events, times or people. If nothing relevant was found, say so plainly.\n"

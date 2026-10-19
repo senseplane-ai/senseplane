@@ -14,7 +14,7 @@ SOURCES = [
 REQ = {"account_id": "acc", "inbox": "_INBOX.x", "question": "When did someone come to the door?", "sources": SOURCES,
        "history": [], "from": "2026-10-09T00:00:00Z", "to": "2026-10-16T12:00:00Z", "now": "2026-10-16T12:00:00Z", "time_zone": "Europe/London"}
 HIT = {"event_id": "evt_1", "source_id": "src_door", "source_name": "Front door", "at": "2026-10-16T10:02:00Z",
-       "type": "detection.person", "summary": "A person walked up to the front door.", "score": 0.71}
+       "type": "detection.person", "summary": "A person walked up to the front door.", "confidence": 0.82, "match": 0.71}
 
 
 class FakeTools:
@@ -33,6 +33,10 @@ class FakeTools:
     def look(self, source_id, question):
         self.calls.append(("look", {"source_id": source_id, "question": question}))
         return {"answer": "A parcel is on the doormat.", "at": "2026-10-16T11:59:58Z", "jpeg_b64": "AAAA"}
+
+    def view_event(self, event_id, question):
+        self.calls.append(("view_event", {"event_id": event_id, "question": question}))
+        return {"answer": "A person in a red coat holding a black phone."}
 
 
 def scripted(*turns):
@@ -101,6 +105,25 @@ def test_look_now_uses_only_cameras_the_caller_may_see():
     (m,) = [e["moment"] for e in events if e["type"] == "moment"]
     assert m == {"kind": "look", "source_id": "src_door", "at": "2026-10-16T11:59:58Z", "label": "A parcel is on the doormat.", "snapshot_jpeg_b64": "AAAA"}
     assert content.endswith("[1].")
+
+
+def test_views_a_past_events_snapshot_by_ref_and_keeps_confidence_apart_from_match():
+    model = scripted(
+        [("tool", "search_history", {"query": "person at the door"})],
+        [("tool", "view_event", {"ref": "m9", "question": "What were they holding?"}), ("tool", "view_event", {"ref": "m1", "question": "What were they holding?"})],
+        [("delta", "They were holding a black phone [m2].")],
+    )
+    tools = FakeTools()
+    content, events = run({**REQ, "question": "What was the person at the door holding?"}, model, tools)
+    first = json.loads(model.seen[1]["messages"][-1]["content"])["results"][0]
+    assert first["confidence"] == 0.82 and first["match"] == 0.71 and "score" not in first
+    assert "Never call match a confidence" in model.seen[0]["messages"][0]["content"]
+    assert [c for c in tools.calls if c[0] == "view_event"] == [("view_event", {"event_id": "evt_1", "question": "What were they holding?"})]
+    replies = [json.loads(m["content"]) for m in model.seen[2]["messages"] if m["role"] == "tool"][-2:]
+    assert "unknown ref" in replies[0]["error"] and replies[1]["saw"].startswith("A person in a red coat")
+    (m,) = [e["moment"] for e in events if e["type"] == "moment"]
+    assert m == {"kind": "event", "source_id": "src_door", "at": HIT["at"], "label": "A person in a red coat holding a black phone.", "event_id": "evt_1"}
+    assert content == "They were holding a black phone [1]."
 
 
 def test_suggests_a_watch_once_with_resolved_sources():

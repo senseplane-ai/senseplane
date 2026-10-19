@@ -96,7 +96,7 @@ describe("self-host init", () => {
     expect(api.AUTH_GOOGLE_CLIENT_ID).toBeUndefined();
     const media = readEnv(join(dir, "media.env"));
     expect(media).toMatchObject({ MEDIA_URL: "wss://cams.example.com/signal/", MEDIA_ANNOUNCED_ADDRESS: "203.0.113.7", MEDIA_RTC_PORT: "40000" });
-    expect(readEnv(join(dir, "mcp.env"))).toMatchObject({ MCP_PUBLIC_URL: "https://cams.example.com", MCP_CONSOLE_URL: "https://cams.example.com", SENSEPLANE_PUBLIC_API_URL: "https://cams.example.com" });
+    expect(readEnv(join(dir, "mcp.env"))).toMatchObject({ MCP_PUBLIC_URL: "https://cams.example.com", MCP_CONSOLE_URL: "https://cams.example.com", SENSEPLANE_PUBLIC_API_URL: "https://cams.example.com", MCP_TRUSTED_REDIRECT_HOSTS: "claude.ai,claude.com" });
     expect(readEnv(join(dir, "brain.env"))).toMatchObject({ AI_API_KEY: "sk-or-secret", DETECTOR_THREADS: "2" });
     expect(readEnv(join(dir, "caddy.env"))).toEqual({ SENSEPLANE_DOMAIN: "cams.example.com", CADDY_ACME_EMAIL: "email ops@example.com" });
     for (const f of ["api.env", "mcp.env", "media.env", "postgres.env", "valkey.env", "valkey.conf", "s3.env", "caddy.env"]) {

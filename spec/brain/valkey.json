@@ -751,7 +751,7 @@
               },
               "name": {
                 "type": "string",
-                "description": "tool: search_history or list_events"
+                "description": "tool: search_history, list_events or event_snapshot"
               },
               "args": {
                 "type": "object",
@@ -771,7 +771,8 @@
                 "name": {
                   "enum": [
                     "search_history",
-                    "list_events"
+                    "list_events",
+                    "event_snapshot"
                   ]
                 },
                 "args": {
@@ -797,6 +798,10 @@
                     },
                     "limit": {
                       "type": "integer"
+                    },
+                    "event_id": {
+                      "type": "string",
+                      "description": "event_snapshot: the event to read"
                     }
                   }
                 }
@@ -838,14 +843,27 @@
                     "summary": {
                       "type": "string"
                     },
-                    "score": {
-                      "type": "number"
+                    "confidence": {
+                      "type": "number",
+                      "description": "the detector's confidence, 0 to 1, when it has one"
+                    },
+                    "match": {
+                      "type": "number",
+                      "description": "search_history: how close the event is to the query (cosine similarity), not a confidence"
                     }
                   }
                 }
               },
               "error": {
                 "type": "string"
+              },
+              "event_id": {
+                "type": "string",
+                "description": "event_snapshot: the event (with source_id, source_name, at, type, summary, confidence as in results)"
+              },
+              "jpeg_b64": {
+                "type": "string",
+                "description": "event_snapshot: the event's stored snapshot, a base64 JPEG"
               }
             }
           }

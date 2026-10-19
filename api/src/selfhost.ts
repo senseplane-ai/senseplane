@@ -263,6 +263,7 @@ export function serviceFiles(s: Settings, x: Secrets, address: string): ServiceF
         MCP_PUBLIC_URL: url,
         MCP_CONSOLE_URL: url,
         MCP_TOKEN_SECRET: x.mcp_token_secret,
+        MCP_TRUSTED_REDIRECT_HOSTS: "claude.ai,claude.com",
         VALKEY_URL: valkeyUrl,
         TRUST_PROXY: 1,
       }),

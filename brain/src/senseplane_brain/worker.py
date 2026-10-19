@@ -495,6 +495,9 @@ class Worker:
             def look(self, source_id, question):
                 return worker.chat_look(account, source_id, question, meta)
 
+            def view_event(self, event_id, question):
+                return worker.chat_view_event(call("event_snapshot", {"event_id": event_id}), question, meta)
+
         complete = (lambda messages, tools: self.model.chat(messages, tools, meta)) if self.model else None
 
         def run():
@@ -520,6 +523,17 @@ class Worker:
         snap = p.latest_jpeg()
         a = self.model.ask(frame, question, meta)
         return {"answer": a.answer, "at": iso(t), **({"jpeg_b64": base64.b64encode(snap).decode()} if snap else {})}
+
+    def chat_view_event(self, snap: dict, question: str, meta: dict) -> dict:
+        """A past event's stored snapshot (from the API, within the caller's grants) to the vision model."""
+        if snap.get("error"):
+            return {"error": snap["error"]}
+        if self.model is None:
+            return {"error": "no vision model is configured"}
+        rgb = decode_jpeg(base64.b64decode(snap.get("jpeg_b64") or ""))
+        if rgb is None:
+            return {"error": "the snapshot could not be read"}
+        return {"answer": self.model.ask(rgb, question, meta).answer}
 
     # --- the main pass ------------------------------------------------------
     async def view_check(self, key: str, frame, t: float):

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Conversations (Ask, ADR 0041). The brain answers with a small tool-using loop
-// (rpc.brain.chat): it searches history and lists events through tools served
-// here, so grants are applied in one place, and looks at cameras itself (masked
-// frames). Answers stream as Server-Sent Events or return as one JSON message.
+// (rpc.brain.chat): it searches history, lists events and reads an event's
+// snapshot through tools served here, so grants are applied in one place, and
+// looks at cameras itself (masked frames). Answers stream as Server-Sent Events or return as one JSON message.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { sql } from "kysely";
 import type { Selectable } from "kysely";
@@ -15,7 +15,7 @@ import type { ConversationsTable, Database, MessagesTable, StoredMoment } from "
 import { ApiError, errorBody } from "../errors.js";
 import { type EventRow, type EventUrls, toEvent, typeFilter } from "../events.js";
 import type { ApiBus } from "../indexer.js";
-import type { ObjectStorage } from "../storage.js";
+import { type ObjectStorage, readObject } from "../storage.js";
 
 /** Earlier turns sent to the brain with each question. */
 const HISTORY_TURNS = 12;
@@ -241,9 +241,12 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         const tFrom = new Date(Math.max(from.getTime(), date(typeof args.from === "string" ? args.from : undefined, "from")?.getTime() ?? 0));
         const tTo = new Date(Math.min(to.getTime(), date(typeof args.to === "string" ? args.to : undefined, "to")?.getTime() ?? Infinity));
         const limit = Math.min(Math.max(Number(args.limit ?? 10) || 10, 1), name === "list_events" ? 30 : 20);
-        const out = (e: EventRow, score?: number) => ({
+        // `match` is how close the event is to the search query; `confidence` is the detector's.
+        const out = (e: EventRow, match?: number) => ({
           event_id: e.id, source_id: e.source_id, source_name: allowed.get(e.source_id)?.name ?? e.source_id,
-          at: new Date(e.occurred_at).toISOString(), type: e.type, summary: e.summary, ...(score !== undefined ? { score: Number(Number(score).toFixed(4)) } : {}),
+          at: new Date(e.occurred_at).toISOString(), type: e.type, summary: e.summary,
+          ...(e.confidence !== null ? { confidence: Number(Number(e.confidence).toFixed(2)) } : {}),
+          ...(match !== undefined ? { match: Number(Number(match).toFixed(4)) } : {}),
         });
         if (name === "search_history") {
           const q = String(args.query ?? content).slice(0, 500);
@@ -251,10 +254,10 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
           if (!vec) return { error: "search is unavailable right now" };
           const v = `[${vec.join(",")}]`;
           const rows = await deps.data.withAccount(accountId, (s) =>
-            visibleEvents(req, s, scope).select(sql<number>`1 - (embedding <=> ${v}::vector)`.as("score"))
+            visibleEvents(req, s, scope).select(sql<number>`1 - (embedding <=> ${v}::vector)`.as("match"))
               .where("embedding", "is not", null).where("occurred_at", ">=", tFrom).where("occurred_at", "<", tTo)
               .orderBy(sql`embedding <=> ${v}::vector`).limit(limit).execute());
-          return { results: rows.map((r) => out(r, r.score)) };
+          return { results: rows.map((r) => out(r, r.match)) };
         }
         if (name === "list_events") {
           const rows = await deps.data.withAccount(accountId, (s) => {
@@ -266,6 +269,17 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
             return q.orderBy("occurred_at", "desc").limit(limit).execute();
           });
           return { results: rows.map((r) => out(r)) };
+        }
+        if (name === "event_snapshot") {
+          const id = String(args.event_id ?? "");
+          const e = await deps.data.withAccount(accountId, (s) =>
+            visibleEvents(req, s, scope).where("id", "=", id).where("occurred_at", ">=", tFrom).where("occurred_at", "<", tTo).executeTakeFirst());
+          if (!e) return { error: "event not found" };
+          if (!canSense(req, e.source_id, "video")) return { error: "no video grant for this camera" };
+          if (!e.snapshot_key || !deps.storage) return { error: "this event has no snapshot" };
+          const jpeg = await readObject(deps.storage, e.snapshot_key).catch(() => undefined);
+          if (!jpeg) return { error: "the snapshot is gone" };
+          return { ...out(e), jpeg_b64: jpeg.toString("base64") };
         }
         return { error: `unknown tool ${name}` };
       };

@@ -94,3 +94,11 @@ export function createObjectStorage(cfg: StorageConfig): ObjectStorage {
     },
   };
 }
+
+/** Reads a whole object into memory (snapshots and other small files). */
+export async function readObject(storage: ObjectStorage, key: string): Promise<Buffer> {
+  const { body } = await storage.get(key);
+  const chunks: Buffer[] = [];
+  for await (const c of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(c));
+  return Buffer.concat(chunks);
+}

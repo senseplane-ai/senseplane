@@ -86,8 +86,9 @@ claude mcp add senseplane \
 In claude.ai, open Settings → Connectors → **Add custom connector** and enter
 your server's public `https://…/mcp` URL. Claude opens Senseplane's consent
 page; sign in, choose what Claude may use and press **Allow**. `localhost` URLs
-don't work here, because claude.ai connects from the internet. Add `claude.ai`
-to `MCP_TRUSTED_REDIRECT_HOSTS` so the consent page shows it as verified.
+don't work here, because claude.ai connects from the internet. The one-file
+self-host ([VM guide](self-host-vm.md)) shows claude.ai as verified on the
+consent page; elsewhere, add `claude.ai` to `MCP_TRUSTED_REDIRECT_HOSTS`.
 
 ## Cursor
 

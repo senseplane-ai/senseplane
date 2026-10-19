@@ -3,9 +3,10 @@
 """Ask (ADR 0041): answers a question about the sources with a small
 tool-using loop over the OpenAI-compatible client.
 
-Tools: search history and list events (served by the API, which applies the
-caller's grants), look at a camera now (the latest masked frame to the vision
-model), list sources, and propose a watch. Everything the model may cite
+Tools: search history, list events and view an event's snapshot (served by
+the API, which applies the caller's grants; the vision model answers about the
+snapshot), look at a camera now (the latest masked frame to the vision model),
+list sources, and propose a watch. Everything the model may cite
 comes from a tool result and carries a ref (m1, m2, …); the answer cites refs
 as [m1], which are rewritten to [1], [2], … in the order they are first cited,
 and each cited ref becomes a moment. Refs the model made up are dropped, so
@@ -39,6 +40,7 @@ class Tools(Protocol):
     def search_history(self, args: dict) -> dict: ...
     def list_events(self, args: dict) -> dict: ...
     def look(self, source_id: str, question: str) -> dict: ...
+    def view_event(self, event_id: str, question: str) -> dict: ...
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -55,6 +57,10 @@ TOOL_SPECS = [
     _fn("list_events", "List recent events newest first, optionally of one type: watch.triggered, sound.detected, or detection.<label> where label is "
         "person, vehicle, animal or an everyday object (" + ", ".join(labels.OBJECTS) + "; e.g. a mug is detection.cup, a sofa detection.couch).",
         {"sources": _SOURCES, "type": {"type": "string"}, "from": _TIME, "to": _TIME, "limit": {"type": "integer"}}),
+    _fn("view_event", "Look at the snapshot saved with a past event and answer a question about it (what someone wore or held, what a vehicle "
+        "looked like). Use it when the user asks for details the event's summary doesn't give.",
+        {"ref": {"type": "string", "description": "The event's ref from search_history or list_events, e.g. m3"}, "question": {"type": "string"}},
+        ["ref", "question"]),
     _fn("look", "Look at one camera right now and answer a question about the current view.",
         {"source": {"type": "string", "description": "Source name or id"}, "question": {"type": "string"}}, ["source", "question"]),
     _fn("list_sources", "List the sources you may use: name, id, location, status and senses.", {}),
@@ -167,8 +173,19 @@ class Session:
             for e in out.get("results", []):
                 ref = self.add_ref(Ref("event", e["source_id"], e["at"], e["summary"], event_id=e["event_id"]))
                 results.append({"ref": ref, "time": self.local(e["at"]), "source": e.get("source_name") or e["source_id"],
-                                "type": e.get("type"), "what": e["summary"], **({"score": e["score"]} if "score" in e else {})})
+                                "type": e.get("type"), "what": e["summary"],
+                                **{k: e[k] for k in ("confidence", "match") if e.get(k) is not None}})
             return {"results": results} if results else {"results": [], "note": "Nothing found."}
+        if name == "view_event":
+            r = self.refs.get(str(args.get("ref", "")).strip())
+            if r is None or r.kind != "event" or not r.event_id:
+                return {"error": "unknown ref: pass the ref of an event from search_history or list_events"}
+            self.status(f"Looking at the {self.local(r.at)} snapshot…")
+            out = self.tools.view_event(r.event_id, str(args.get("question") or self.req.get("question", "")))
+            if out.get("error"):
+                return {"error": out["error"]}
+            ref = self.add_ref(Ref("event", r.source_id, r.at, out.get("answer") or r.label, event_id=r.event_id))
+            return {"ref": ref, "time": self.local(r.at), "saw": out.get("answer", "")}
         if name == "look":
             ids = self.resolve([args.get("source", "")])
             src = self.by_id.get(ids[0]) if ids else None
@@ -210,6 +227,8 @@ class Session:
             f"\nUnless the user names sources, use: {self.names(self.scope) or 'none'}.\n"
             "Rules:\n"
             "- Use the tools before answering: search_history or list_events for the past, look for right now. Call tools before writing anything.\n"
+            "- Event summaries are short labels. For details they don't give (what someone wore or held, a vehicle's colour), call view_event on the event.\n"
+            "- confidence is how sure the detector was (0 to 1); match is only how close an event is to your search words. Never call match a confidence.\n"
             "- Every result has a ref like m1. Cite each thing you mention as [m1] right after it. Never mention an event without its ref.\n"
             "- Only state what the tool results say. Never invent events, times or people. If nothing relevant was found, say so plainly.\n"
             "- Mention only results that answer the question; leave out unrelated ones (a vehicle when asked about people).\n"
@@ -266,7 +285,7 @@ class Session:
     def fallback(self):
         """No model on this instance: show the closest moments from history, plainly."""
         out = self.run_tool("search_history", {"query": self.req["question"], "limit": 5})
-        hits = [r for r in out.get("results", []) if r.get("score", 1) >= 0.3]
+        hits = [r for r in out.get("results", []) if r.get("match", 1) >= 0.3]
         if not hits:
             self.write("I couldn't find anything matching that in the history I can see.")
         else:

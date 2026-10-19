@@ -20,8 +20,11 @@ event up.
 - **The brain runs the loop** (`brain/senseplane_brain/chat.py`): a small
   tool-using loop over the OpenAI-compatible client (ADR 0008), at most 6
   model calls per answer, streamed. Tools: `search_history` (memory search),
-  `list_events`, `look` (the latest frame to the vision model), `list_sources`
-  and `propose_watch`. The last few turns (12 messages) go with each question.
+  `list_events`, `view_event` (an event's stored snapshot to the vision
+  model), `look` (the latest frame to the vision model), `list_sources` and
+  `propose_watch`. Results carry the detector's `confidence` and, from a
+  search, a separate `match` (closeness to the query), so the model doesn't
+  mistake one for the other. The last few turns (12 messages) go with each question.
   The chat model is `AI_MODEL_CHAT`, defaulting to `AI_MODEL_TEXT`; it must
   support tool calls.
 - **Transport.** `rpc.brain.chat` is acked at once; the brain then publishes

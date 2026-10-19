@@ -23,7 +23,7 @@ import watchSchema from "../generated/watch.schema.json" with { type: "json" };
 import destinationSchemaJson from "../generated/destination.schema.json" with { type: "json" };
 import scheduleSchemaJson from "../generated/watch-schedule.schema.json" with { type: "json" };
 import type { ApiBus } from "../indexer.js";
-import type { ObjectStorage } from "../storage.js";
+import { type ObjectStorage, readObject } from "../storage.js";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 (addFormatsModule as unknown as (a: Ajv2020) => void)(ajv);
@@ -41,13 +41,6 @@ const MAX_CHECKS = 50;
 const MAX_RANGE_MS = 7 * 86400_000;
 const MAX_EVENTS = 5000;
 const MAX_MATCHES = 100;
-
-async function readObject(storage: ObjectStorage, key: string): Promise<Buffer> {
-  const { body } = await storage.get(key);
-  const chunks: Buffer[] = [];
-  for await (const c of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(c));
-  return Buffer.concat(chunks);
-}
 
 export const toWatch = (w: WatchRow) => ({
   id: w.id, instruction: w.instruction, sources: w.sources, mode: w.mode, compiled: w.compiled, estimate: w.estimate,

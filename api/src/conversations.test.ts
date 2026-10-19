@@ -33,7 +33,11 @@ describe("conversations", () => {
     async deleteMany(keys) { keys.forEach((k) => objects.delete(k)); return keys.length; },
     async deletePrefix() { return 0; },
     async presign() { return undefined; },
-    async get() { throw new Error("unused"); },
+    async get(key) {
+      const body = objects.get(key);
+      if (!body) throw new Error("no such key");
+      return { body: (async function* () { yield body; })() } as never;
+    },
   };
   const bus: ApiBus = {
     async putSourceConfig() {},
@@ -205,6 +209,40 @@ describe("conversations", () => {
     expect(msg.content).toBe(`found 1, listed ${door}, sources ${door}`);
     expect(msg.moments.map((m: { event_id: string }) => m.event_id)).toEqual([doorEvent]);
     expect(streams.at(-1)!.payload.sources[0]).toMatchObject({ id: door, senses: ["video"], can_look: true });
+  });
+
+  it("gives the detector's confidence apart from the search match, and serves an event's snapshot within grants", async () => {
+    await api.data.withAccount(acc, (s) => s.db.updateTable("events").set({ snapshot_key: "snapshots/door-1.jpg" }).where("id", "=", doorEvent).execute());
+    objects.set("snapshots/door-1.jpg", Buffer.from("door jpeg"));
+    let got: Record<string, any> = {};
+    script = async (_p, on) => {
+      got = {
+        found: await on.tool("search_history", { query: "person at the door" }),
+        door: await on.tool("event_snapshot", { event_id: doorEvent }),
+        yard: await on.tool("event_snapshot", { event_id: yardEvent }),
+        missing: await on.tool("event_snapshot", { event_id: "evt_nope" }),
+      };
+      await on.event({ type: "done", content: "ok" });
+    };
+    const c = (await call(owner, "POST", "/v1/conversations")).json();
+    await call(owner, "POST", `/v1/conversations/${c.id}/messages`, { content: "What was the person holding?" });
+    expect(got.found.results[0]).toMatchObject({ confidence: 0.9, match: expect.any(Number) });
+    expect(got.found.results[0].score).toBeUndefined();
+    expect(got.door).toMatchObject({ event_id: doorEvent, source_id: door, confidence: 0.9, jpeg_b64: Buffer.from("door jpeg").toString("base64") });
+    expect(got.door.match).toBeUndefined();
+    expect(got.yard).toEqual({ error: "this event has no snapshot" });
+    expect(got.missing).toEqual({ error: "event not found" });
+    // An agent granted only the door's temperature sees neither camera's events, so neither picture.
+    const agent = (await call(owner, "POST", "/v1/agents", { name: "Doorsensor" })).json();
+    await call(owner, "POST", "/v1/grants", { agent_id: agent.id, source_ids: [door], senses: ["temperature"] });
+    const ac = (await call(agent.api_key, "POST", "/v1/conversations")).json();
+    script = async (_p, on) => {
+      got = { door: await on.tool("event_snapshot", { event_id: doorEvent }), yard: await on.tool("event_snapshot", { event_id: yardEvent }) };
+      await on.event({ type: "done", content: "ok" });
+    };
+    await call(agent.api_key, "POST", `/v1/conversations/${ac.id}/messages`, { content: "What was the person holding?" });
+    expect(got.door).toEqual({ error: "event not found" });
+    expect(got.yard).toEqual({ error: "event not found" });
   });
 
   it("fails cleanly when the brain can't answer, and drops the question", async () => {

@@ -6,11 +6,13 @@ TEST_VALKEY_URL (default redis://127.0.0.1:47379/15) is flushed: point it at a
 throwaway database. Skipped when nothing answers there."""
 
 import asyncio
+import base64
 import json
 import os
 import time
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace as NS
 
 import cv2
 import numpy as np
@@ -177,10 +179,15 @@ def test_requests_are_answered_and_late_ones_dropped(r):
 
 
 class ScriptedModel:
-    """chat() plays one scripted turn per call."""
+    """chat() plays one scripted turn per call; ask() records the picture it was shown."""
 
     def __init__(self, *turns):
         self.turns = iter(turns)
+        self.asked: list[tuple[tuple, str]] = []
+
+    def ask(self, rgb, question, meta=None):
+        self.asked.append((rgb.shape, question))
+        return NS(yes=None, answer="A person in a red coat.", confidence=0.9)
 
     def chat(self, messages, tools, meta):
         for i, step in enumerate(next(self.turns)):
@@ -192,13 +199,15 @@ class ScriptedModel:
 
 @needs_valkey
 def test_chat_streams_events_and_asks_the_api_for_tools(r):
-    model = ScriptedModel([("tool", "search_history", {"query": "door"})], [("delta", "Someone came to the door [m1].")])
+    model = ScriptedModel([("tool", "search_history", {"query": "door"})], [("tool", "view_event", {"ref": "m1", "question": "What were they wearing?"})],
+                          [("delta", "Someone in a red coat came to the door [m2].")])
     w = worker(model=model)
     stream = f"sp:chat:{uuid.uuid4().hex[:8]}"
     req = {"account_id": "acc", "stream": stream, "question": "Who came?", "history": [], "now": "2026-10-16T12:00:00Z", "time_zone": "UTC",
            "sources": [{"id": "src_door", "name": "Front door", "location": None, "type": "browser", "status": "online", "senses": ["video"], "can_look": True}]}
     hit = {"event_id": "evt_1", "source_id": "src_door", "source_name": "Front door", "at": "2026-10-16T10:02:00Z",
-           "type": "detection.person", "summary": "A person walked up to the front door.", "score": 0.7}
+           "type": "detection.person", "summary": "A person walked up to the front door.", "confidence": 0.8, "match": 0.7}
+    jpeg = base64.b64encode(cv2.imencode(".jpg", np.zeros((36, 64, 3), np.uint8))[1].tobytes()).decode()
 
     async def body(w):
         r.lpush(RPC, json.dumps({"id": "c", "method": "chat", "reply_to": "sp:rpc:reply:none", "deadline": time.time() * 1000 + 5000, "payload": req}))
@@ -210,9 +219,12 @@ def test_chat_streams_events_and_asks_the_api_for_tools(r):
                 continue
             e = json.loads(got[1])
             seen.append(e)
-            if e["type"] == "tool":
-                assert e["name"] == "search_history" and e["args"]["query"] == "door"
+            if e["type"] == "tool" and e["name"] == "search_history":
+                assert e["args"]["query"] == "door"
                 r.rpush(f"{stream}:tool:{e['call_id']}", json.dumps({"results": [hit]}))
+            elif e["type"] == "tool":
+                assert e["name"] == "event_snapshot" and e["args"] == {"event_id": "evt_1"}
+                r.rpush(f"{stream}:tool:{e['call_id']}", json.dumps({**hit, "jpeg_b64": jpeg}))
             if e["type"] in ("done", "error"):
                 break
         return seen
@@ -221,6 +233,7 @@ def test_chat_streams_events_and_asks_the_api_for_tools(r):
     types = [e["type"] for e in seen]
     assert "tool" in types and types[-1] == "done", types
     assert any(e["type"] == "moment" and e["moment"]["event_id"] == "evt_1" for e in seen)
+    assert model.asked == [((36, 64, 3), "What were they wearing?")]  # the event's snapshot went to the vision model
 
 
 @needs_valkey

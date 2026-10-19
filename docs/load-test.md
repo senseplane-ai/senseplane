@@ -13,7 +13,7 @@ does: HTTPS, the WebRTC port, recording, then detection.
   of yours. On the server, in the folder with `docker-compose.yml`:
 
   ```sh
-  docker compose exec api node dist/cli.js create-account "Load test"
+  docker compose exec api sh -c 'set -a && . /secrets/api.env && set +a && node dist/cli.js create-account "Load test"'
   ```
 
   It prints the new workspace's `api_key`. (Keys from the Agents page are

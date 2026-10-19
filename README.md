@@ -11,6 +11,7 @@ happens.
 - **Look:** a snapshot of what's there now, and questions about it.
 - **Watch:** "tell me when a package is left at the door", with events by signed webhook or MCP.
 - **Ask:** "when did the courier come?", answered with the event, a snapshot and a clip.
+- **Measure:** "how many meals today?", "how long did she sleep?", "is it quieter than usual?", answered exactly from activities, with a daily summary if you want one.
 - **Replay:** any range within your retention period (7 days by default).
 
 Senseplane does perception, not decisions: it reports what it saw, how sure it
@@ -44,7 +45,7 @@ backups and upgrades: [Run Senseplane on a VM](docs/self-host-vm.md).
 | Media plane | `media/` | TypeScript (mediasoup) | Ingest, continuous recording, playback, analysis feed |
 | Brain | `brain/` | Python | Motion, objects, sounds, episodes, watches, memory |
 | API | `api/` | TypeScript (Fastify) | Public `/v1` REST API, webhooks, auth |
-| MCP server | `mcp/` | TypeScript | 8 tools for agents |
+| MCP server | `mcp/` | TypeScript | 10 tools for agents |
 | SDK | `sdk/typescript/` | TypeScript | `npm i senseplane` |
 | Console | `console/` | TypeScript (React) | Web UI for sources, playback, watches, chat, access |
 | Bridge | `bridge/` | Go | RTSP cameras, outbound only |

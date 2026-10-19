@@ -20,11 +20,14 @@ has a test that says when it is done; results are in [`milestones/`](milestones/
 | M8 | **Bridge:** RTSP cameras over WHIP, outbound only, with health reports and a Docker image, and the Home Assistant integration for climate sensors (done, ADR 0045); next: pairing codes, ONVIF discovery, remote updates | An ONVIF camera records within 2 min of pairing, with no router changes |
 | T | **Telegram** (ADR 0059, done, [guide](telegram.md)): link a chat with a one-time code, watch alerts with a snapshot and buttons, mute, and questions from the chat as its own agent; one bot per server, polling (no public URL) or by webhook for several API processes; background work shared through Postgres (ADR 0058) | An alert reaches a linked chat with its snapshot, and a question asked there is answered within the chat's grants (on a fake Bot API) |
 | A | **Activity timeline** (ADR 0057, done, [results](milestones/activity.md)): presence, sound and watch activities with a start and an end, recording coverage, `mode: track` watches and packs, one query engine for count, duration, absence, first/last, order and trends (REST, chat, MCP), checking history after the fact, `condition` and `digest` watches, sites | "How many meals today?", "How long did she sleep?" and "Is it quieter than usual?" are answered exactly, with evidence and coverage, on the fixtures |
+| H | **Home box and more sensors:** readings beyond climate (on/off states, events, and any number with a unit) for doors, windows, motion, presence, leaks, smoke and CO, plugs and power, locks and buttons; the Home Assistant integration forwards all of them; the bridge as a Home Assistant add-on, so one always-on box (such as a Home Assistant Green, no radio sticks needed) relays IP cameras and forwards sensors; one pairing code for both; watches and questions across cameras and sensors ("the door opened and no one was on the porch camera", "the fridge wasn't opened by 10am"); a box or integration that goes offline shows as missing coverage, never as "nothing happened" | On a Home Assistant Green with no radio sticks, an RTSP camera and a Wi-Fi door sensor are linked with one code; "has the fridge been opened today?" is answered from the sensor; an absence watch says it can't be checked while the box is off |
 
 ## Planned features
 
 - **Storage:** optional batched uploads (keep ~6 s segments for playback, upload them grouped into ~1-minute objects with a byte-range index) to cut object-store write operations about 10×.
-- **Ingest:** SRT; an Android app (camera mode, then relay); push cameras and the bridge pick the camera stream that fits `max_resolution` (substream or ONVIF profile), never transcoding.
+- **Ingest:** SRT; an Android app (camera mode, then relay for IP cameras on the same network, and a sensor hub: the phone's own motion, light and charging state, and Bluetooth sensors in the open BTHome format); push cameras and the bridge pick the camera stream that fits `max_resolution` (substream or ONVIF profile), never transcoding.
+- **More sensors:** a Matter controller in the bridge and the Android app (devices shared from Apple Home, Google Home, Alexa or a hub such as Aqara's with a pairing code; Wi-Fi Matter devices paired directly; Thread through the home's existing border router); a documented, signed readings webhook for IFTTT, n8n, Zapier, ESPHome, Shelly and scripts; MQTT in and out. Zigbee, Z-Wave and Thread radios stay with Home Assistant.
+- **Open bridge outputs:** the bridge speaks only open standards and sends to any WHIP server, re-serves RTSP locally and publishes sensors over MQTT (in Home Assistant's discovery format) or a webhook, with Senseplane as one output among them.
 - **Privacy:** per-account encryption keys; face and plate redaction before the model.
 - **SDKs:** Python SDK.
 - **Understanding:** image embeddings; a "check history" tool in the chat. Count, duration, absence, first/last and trend questions and watches come with the activity timeline (milestone A).
@@ -37,5 +40,6 @@ has a test that says when it is done; results are in [`milestones/`](milestones/
 ## Never in scope
 
 Face recognition, plate reading, speech transcription without a legal review,
-actuation (beyond talk-back through a camera's own speaker) and hardware.
+actuation (beyond talk-back through a camera's own speaker) and hardware
+(the home end runs on boxes people already buy, such as Home Assistant's).
 Senseplane does perception, not decisions.

@@ -250,6 +250,9 @@ describe("conversations", () => {
     const t = Date.now() - 2 * 3600_000;
     await storeActivity(api.data, acc, door, { activity_key: "door-p1", kind: "presence", label: "person", started_at: new Date(t).toISOString(),
       last_seen_at: new Date(t + 600_000).toISOString(), ended_at: new Date(t + 600_000).toISOString(), peak_count: 1 }, log);
+    // An event with a snapshot inside the span gives the span its picture.
+    await api.data.withAccount(acc, (s) => s.db.updateTable("events").set({ snapshot_key: "snapshots/door-1.jpg", occurred_at: new Date(t + 60_000) })
+      .where("id", "=", doorEvent).execute());
     let got: Record<string, any> = {};
     script = async (p, on) => {
       got = (await on.tool("query_activity", { measure: "total_duration", what: { label: "person" }, period: "last_24_hours", sources: [door] })) as Record<string, any>;
@@ -267,8 +270,11 @@ describe("conversations", () => {
     expect(Array.isArray(got.watches)).toBe(true);
     expect(got.zones).toEqual([]); // zone names go to the brain (none set here)
     expect(msg.moments).toHaveLength(1);
-    expect(msg.moments[0]).toMatchObject({ source_id: door, label: "At the door for 10 min", until: new Date(t + 600_000).toISOString(), snapshot_url: null,
-      clip_url: expect.stringContaining("/playback/") });
+    expect(msg.moments[0]).toMatchObject({ source_id: door, label: "At the door for 10 min", until: new Date(t + 600_000).toISOString(),
+      snapshot_url: expect.stringContaining("/snapshot.jpg"), clip_url: expect.stringContaining("/playback/") });
+    // ...and keeps it when the conversation is read back.
+    const read = (await call(owner, "GET", `/v1/conversations/${c.id}`)).json();
+    expect(read.messages.at(-1).moments[0].snapshot_url).toEqual(expect.stringContaining("/snapshot.jpg"));
     const bad = await (async () => {
       script = async (_p, on) => {
         got = (await on.tool("query_activity", { measure: "count", what: {} })) as Record<string, any>;

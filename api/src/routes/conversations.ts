@@ -82,7 +82,7 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
 
   /** Signs stored moments into links for this caller (fresh every read, with the caller's grants). */
   async function signMoments(req: FastifyRequest, s: AccountScope, stored: StoredMoment[][]): Promise<Moment[][]> {
-    const ids = [...new Set(stored.flat().flatMap((m) => (m.kind === "event" ? [m.event_id] : [])))];
+    const ids = [...new Set(stored.flat().flatMap((m) => (m.kind === "event" || (m.kind === "range" && m.event_id) ? [m.event_id!] : [])))];
     const events = new Map<string, EventRow>();
     if (ids.length) {
       let q = s.db.selectFrom("events").selectAll().where("id", "in", ids);
@@ -108,7 +108,9 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         const claims = u.claims ? u.claims(m.source_id, t - 5000, end + 5000) : {};
         if (!claims || !src) return { ...base, until: m.until, snapshot_url: null };
         const clip = { kind: "range" as const, accountId: s.accountId, sourceId: m.source_id, from: t - 5000, to: end + 5000, ...claims };
-        return { ...base, until: m.until, snapshot_url: null, clip_url: `${u.base}/playback/${u.signer.sign(clip, u.ttlSeconds).token}/index.m3u8` };
+        const e = m.event_id ? events.get(m.event_id) : undefined;
+        const snapshot_url = e ? toEvent(e, src, u).media.snapshot_url ?? null : null;
+        return { ...base, until: m.until, snapshot_url, clip_url: `${u.base}/playback/${u.signer.sign(clip, u.ttlSeconds).token}/index.m3u8` };
       }
       const claims = u.claims ? u.claims(m.source_id, t - 10_000, t + 10_000) : {};
       if (!claims || !src) return { ...base, snapshot_url: null };
@@ -363,7 +365,12 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
           const at = date(m.at, "at");
           const until = date(m.until, "until");
           if (!at || !until || until < at || !canSense(req, m.source_id, "video", at)) return undefined;
-          return { kind: "range", source_id: m.source_id, at: at.toISOString(), until: until.toISOString(), label: String(m.label ?? "Activity").slice(0, 300) };
+          // Its picture: the snapshot of an event in the span (a watch that fired first), else the one nearest its start.
+          const pic = await deps.data.withAccount(accountId, (s) => visibleEvents(req, s, [m.source_id as string])
+            .where("snapshot_key", "is not", null).where("occurred_at", ">=", new Date(at.getTime() - 5000)).where("occurred_at", "<=", new Date(until.getTime() + 5000))
+            .orderBy(sql`type = 'watch.triggered'`, "desc").orderBy(sql`abs(extract(epoch from occurred_at - ${at}::timestamptz))`).select("id").executeTakeFirst());
+          return { kind: "range", source_id: m.source_id, at: at.toISOString(), until: until.toISOString(), label: String(m.label ?? "Activity").slice(0, 300),
+            ...(pic ? { event_id: pic.id } : {}) };
         }
         if (m.kind === "look" && typeof m.source_id === "string" && brainSources.find((x) => x.id === m.source_id)?.can_look) {
           const at = date(typeof m.at === "string" ? m.at : undefined, "at") ?? new Date();

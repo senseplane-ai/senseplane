@@ -1,7 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The 8 tools, each a thin call into the public API through the TypeScript
+// The 10 tools, each a thin call into the public API through the TypeScript
 // SDK. Results are short JSON text for the model plus, for `look`, the image
 // itself so the agent can see it.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -130,6 +130,7 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
       const self = a.notify_me === false ? null : await agentId();
       const w = await client.watches.create({
         instruction: String(a.condition), sources: ids, ...(a.duration_minutes ? { duration_minutes: Number(a.duration_minutes) } : {}),
+        mode: a.mode === "track" ? "track" : "alert",
         ...(self ? { notify: [{ type: "agent" as const, id: self }] } : {}),
         ...(a.active_hours ? { active_hours: a.active_hours as { from: string; to: string } } : {}),
       });
@@ -154,6 +155,23 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
       let hits = r.data;
       if (src) hits = hits.filter((h) => h.event.source.id === src.id);
       return text({ question: q, ...(inbox.length ? { new_from_your_watches: inbox } : {}), events: hits.map((h) => ({ ...brief(h.event), score: Math.round(h.score * 1000) / 1000 })) });
+    },
+
+    async measure(a) {
+      // The API does the arithmetic (ADR 0057); source names are resolved there, within this caller's grants.
+      const r = await client.activity.query(a as unknown as Parameters<typeof client.activity.query>[0]);
+      return text(r);
+    },
+
+    async check_history(a) {
+      const ids = [];
+      for (const s of (a.sources as unknown[]) ?? []) ids.push((await resolve(s)).id);
+      const r = await client.activity.check({
+        ...(a.instruction ? { instruction: String(a.instruction) } : {}), ...(a.watch_id ? { watch_id: String(a.watch_id) } : {}),
+        ...(ids.length ? { sources: ids } : {}), ...(a.from ? { from: String(a.from) } : {}), ...(a.to ? { to: String(a.to) } : {}),
+        ...(a.max_checks !== undefined ? { max_checks: Number(a.max_checks) } : {}),
+      });
+      return text({ matches: r.matches, checks_used: r.checks_used, candidates: r.candidates, unchecked: r.unchecked, stored: r.stored });
     },
 
     async replay(a) {

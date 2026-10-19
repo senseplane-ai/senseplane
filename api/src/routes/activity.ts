@@ -122,6 +122,8 @@ export async function scope(s: AccountScope, req: FastifyRequest | undefined, na
 /** Answers a question inside an account (also used by the chat tool). */
 export async function ask(data: DataAccess, accountId: string, req: FastifyRequest | undefined, q: ActivityQuery, now = Date.now()) {
   return data.withAccount(accountId, async (s) => {
+    // Times in the question: its own zone, else the workspace's (ADR 0044), else UTC.
+    if (!q.time_zone) q = { ...q, time_zone: (await s.account.get())?.time_zone || "UTC" };
     const sources = await scope(s, req, q.sources);
     if (q.what?.watch_id) {
       const w = await s.db.selectFrom("watches").select("id").where("id", "=", q.what.watch_id).executeTakeFirst();

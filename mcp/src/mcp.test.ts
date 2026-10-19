@@ -56,6 +56,16 @@ const fakeApi: typeof fetch = async (input, init) => {
   if (p === "/events") return json({ data: [], next_cursor: null });
   if (p === "/sources/src_cam/playback") return json({ url: "http://api/playback/t/index.m3u8", expires_at: "2026-10-16T01:15:00Z", gaps: [] });
   if (p === "/clips" && req.method === "POST") return json({ id: "clp_1" }, 201);
+  if (p === "/activity/query" && req.method === "POST") {
+    const b = await req.json();
+    return json({ measure: b.measure, value: 2, unit: "count", window: { from: "2026-10-15T23:00:00Z", to: "2026-10-16T01:00:00Z", time_zone: "Europe/London" }, matched: 2,
+      coverage: { recorded: 1, complete: true, gaps: [] }, evidence: [], notes: [], echo: b });
+  }
+  if (p === "/activity/check" && req.method === "POST") {
+    const b = await req.json();
+    return json({ matches: [{ source_id: "src_cam", source_name: "Front door", at: "2026-10-16T00:20:00Z", summary: "A person takes a pill.", verified: true }],
+      checks_used: 3, candidates: 4, unchecked: 1, compiled: {}, stored: b.watch_id ? 1 : 0 });
+  }
   return json({ error: { code: "not_found", message: p, request_id: "r" } }, 404);
 };
 
@@ -66,6 +76,8 @@ const ARGS: Record<string, Record<string, unknown>> = {
   read_environment: { room: "kitchen" },
   watch_for: { condition: "Tell me when someone comes to the door", sources: ["Front door"], duration_minutes: 60 },
   what_happened: { question: "When did the courier come?" },
+  measure: { measure: "count", what: { watch_id: "wat_1" }, period: "today" },
+  check_history: { instruction: "a person taking pills", sources: ["Front door"] },
   replay: { source: "src_cam", from: "2026-10-16T00:29:00Z", to: "2026-10-16T00:31:00Z", save: true },
   stop_watching: { watch_id: "wat_1" },
 };
@@ -79,9 +91,9 @@ describe("mcp tools", () => {
     await client.connect(b);
   });
 
-  it("lists exactly the 8 tools from the spec", async () => {
+  it("lists exactly the 10 tools from the spec", async () => {
     const listed = (await client.listTools()).tools.map((t) => t.name);
-    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "replay", "stop_watching"]);
+    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching"]);
     expect(listed).toEqual(tools.map((t) => t.name));
   });
 
@@ -104,6 +116,8 @@ describe("mcp tools", () => {
     expect(body("read_environment").sources[0].readings[0]).toMatchObject({ value: 22.4, trend_last_hour: "rising", change_last_hour: 1.4 });
     expect(body("watch_for")).toMatchObject({ watch_id: "wat_1", expires_at: "2026-10-16T02:00:00Z" });
     expect(body("what_happened").events[0]).toMatchObject({ summary: "A courier left a parcel.", clip_url: "http://api/c" });
+    expect(body("measure")).toMatchObject({ value: 2, unit: "count", echo: { measure: "count", what: { watch_id: "wat_1" }, period: "today" } });
+    expect(body("check_history")).toMatchObject({ checks_used: 3, unchecked: 1, stored: 0, matches: [{ summary: "A person takes a pill." }] });
     expect(body("replay")).toMatchObject({ url: "http://api/playback/t/index.m3u8", clip_id: "clp_1" });
     expect(body("stop_watching")).toEqual({ stopped: "wat_1" });
   });
@@ -186,7 +200,7 @@ describe("remote mcp with oauth", () => {
 
     const client = new Client({ name: "remote", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${refreshed.access_token}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(8);
+    expect((await client.listTools()).tools).toHaveLength(10);
     const r = (await client.callTool({ name: "list_senses", arguments: {} })) as { content: { text: string }[] };
     expect(JSON.parse(r.content[0]!.text).sources[0].id).toBe("src_cam");
     await client.close();
@@ -240,7 +254,7 @@ describe("remote mcp with oauth", () => {
   it("also accepts a Senseplane API key directly", async () => {
     const client = new Client({ name: "key", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${KEY}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(8);
+    expect((await client.listTools()).tools).toHaveLength(10);
     await client.close();
   });
 });

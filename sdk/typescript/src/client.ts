@@ -206,6 +206,8 @@ export class Senseplane {
   /** Activities and questions about them (ADR 0057): "how many meals today?", "how long did she sleep?". */
   readonly activity = {
     query: (body: S["ActivityQuery"]) => unwrap(this.raw.POST("/activity/query", { body })),
+    /** Looks through recorded footage for something no watch tracked; with watch_id, keeps what it finds. Each model check is an AI check. */
+    check: (body: S["ActivityCheckRequest"]) => unwrap(this.raw.POST("/activity/check", { body })),
     list: (query: { source?: string; kind?: "presence" | "sound" | "watch"; label?: string; zone?: string; from?: string; to?: string; limit?: number } = {}) =>
       unwrap(this.raw.GET("/activities", { params: { query } })),
   };

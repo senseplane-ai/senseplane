@@ -2049,6 +2049,7 @@ components:
         duration_minutes: {type: integer, minimum: 1, maximum: 525600, description: 'Stop watching after this long (sets `expires_at`)'}
         notify: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Destination'}, description: 'Where watch.triggered goes (ADR 0043); absent or empty: every subscribed webhook. An agent key may list only itself.'}
         mode: {type: string, enum: [alert, track], default: alert, description: 'track: record activities only, to answer questions later, with no events or notifications (ADR 0057)'}
+        compiled: {type: object, description: 'A compiled watch to use as it is instead of compiling the instruction (validated against the watch spec); packs and code that know exactly what they want'}
         active_hours:
           oneOf: [{type: 'null'}, {$ref: '#/components/schemas/WatchSchedule'}]
     WatchUpdate:

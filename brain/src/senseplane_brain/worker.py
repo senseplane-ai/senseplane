@@ -434,7 +434,7 @@ class Worker:
 
     def do_compile(self, req):
         meta = {"account": req.get("account_id"), "purpose": "compile"}
-        c = compile_watch(req["instruction"], req.get("zones", []), req.get("senses", ["video"]), self.model, meta)
+        c = compile_watch(req["instruction"], req.get("zones", []), req.get("senses", ["video"]), self.model, meta, req.get("watches"))
         return {"compiled": c.compiled, "estimate": c.estimate, "warnings": c.warnings, "compiler": c.compiler, "needs_zone": c.needs_zone}
 
     def do_ask(self, req):

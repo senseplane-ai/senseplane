@@ -1349,6 +1349,8 @@ export interface components {
              * @enum {string}
              */
             mode: "alert" | "track";
+            /** @description A compiled watch to use as it is instead of compiling the instruction (validated against the watch spec); packs and code that know exactly what they want */
+            compiled?: Record<string, never>;
             active_hours?: null | components["schemas"]["watch-schedule"];
         };
         WatchUpdate: {
@@ -2011,139 +2013,52 @@ export interface components {
                     steps: components["schemas"]["trigger"][];
                     within_s: number;
                 };
-            };
-        } & (components["schemas"]["objects"] | components["schemas"]["motion"] | components["schemas"]["sound"] | components["schemas"]["sensor"] | components["schemas"]["schedule"] | components["schemas"]["sequence"]);
-        objects: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "objects";
-            /** @enum {unknown} */
-            label: "person" | "vehicle" | "animal" | "airplane" | "train" | "boat" | "traffic_light" | "fire_hydrant" | "stop_sign" | "parking_meter" | "bench" | "backpack" | "umbrella" | "handbag" | "tie" | "suitcase" | "frisbee" | "skis" | "snowboard" | "ball" | "kite" | "baseball_bat" | "baseball_glove" | "skateboard" | "surfboard" | "tennis_racket" | "bottle" | "wine_glass" | "cup" | "fork" | "knife" | "spoon" | "bowl" | "banana" | "apple" | "sandwich" | "orange" | "broccoli" | "carrot" | "hot_dog" | "pizza" | "donut" | "cake" | "chair" | "couch" | "plant" | "bed" | "table" | "toilet" | "tv" | "laptop" | "computer_mouse" | "remote" | "keyboard" | "phone" | "microwave" | "oven" | "toaster" | "sink" | "refrigerator" | "book" | "clock" | "vase" | "scissors" | "teddy_bear" | "hair_dryer" | "toothbrush";
-            zone?: string;
-            /** @default 1 */
-            min_count: number;
-            /** @default 0 */
-            min_duration_s: number;
-            /** @enum {unknown} */
-            on: "enter" | "leave" | "present" | "stationary";
-        };
-        motion: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "motion";
-            zone?: string;
-            /** @default 0 */
-            min_duration_s: number;
-        };
-        sound: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "sound";
-            /** @enum {unknown} */
-            class: "crying" | "glass_break" | "alarm" | "dog" | "speech_present";
-            /** @default 0 */
-            min_duration_s: number;
-        };
-        sensor: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "sensor";
-            /** @enum {unknown} */
-            sense: "temperature" | "humidity";
-            above?: number;
-            below?: number;
-            rate_per_min?: number;
-            /** @default 0 */
-            min_duration_s: number;
-        };
-        schedule: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "schedule";
-            every_min: number;
-        };
-        sequence: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "sequence";
-            steps: components["schemas"]["trigger"][];
-            within_s: number;
-        };
-        /**
-         * Destination
-         * @description Where a watch's events go (ADR 0043): one of the account's webhooks, or an agent's inbox.
-         */
-        destination: {
-            /** @enum {string} */
-            type: "webhook" | "agent";
-            /** @description A webhook id (whk_…) or an agent id (agt_…). */
-            id: string;
-        };
-        /**
-         * WatchSchedule
-         * @description When a watch may fire (ADR 0043), in wall-clock time in `time_zone`, so it follows daylight saving. When `to` is before `from` the span runs overnight and belongs to the day it starts on (fri 18:00–06:00 includes Saturday 03:00). `from` equal to `to` means the whole day.
-         */
-        "watch-schedule": {
-            /** @description Days the span starts on; every day when absent. */
-            days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
-            from: string;
-            to: string;
-            /** @description IANA time zone, e.g. Europe/London. UTC when absent (responses always include it). */
-            time_zone?: string;
-        };
-        /** Watch */
-        watch: {
-            id: string;
-            instruction: string;
-            sources: string[];
-            /**
-             * @description alert: the watch posts watch.triggered events and notifies its destinations. track: it only records activities, to answer questions later (ADR 0057). Both record activities.
-             * @enum {string}
-             */
-            mode: "alert" | "track";
-            compiled: {
-                trigger: components["schemas"]["trigger"];
-                verify?: {
-                    prompt: string;
-                    min_confidence: number;
+                /** @description Checked by the API on a schedule (ADR 0057): a question about activities and a comparison. Covers absence (no one in the kitchen by 10:00), count, duration and trends (meals below 70 % of usual). */
+                condition: {
+                    /**
+                     * @description discriminator enum property added by openapi-typescript
+                     * @enum {string}
+                     */
+                    type: "condition";
+                    query: components["schemas"]["activity-query"];
+                    test: {
+                        /** @enum {unknown} */
+                        op: "lt" | "lte" | "gt" | "gte" | "eq" | "ne";
+                        value: number;
+                        /**
+                         * @description Compare the value, or its ratio or difference to what is usual (needs query.compare)
+                         * @default value
+                         * @enum {unknown}
+                         */
+                        of: "value" | "ratio" | "delta";
+                    };
+                    /** @description Check once a day at this local time */
+                    at?: string;
+                    /** @description Check this often (default 10 when `at` is absent) */
+                    every_min?: number;
+                    /** @description Days to check on (default every day) */
+                    days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+                    /** @description IANA zone for `at` and the question (default the workspace's) */
+                    time_zone?: string;
                 };
-                cooldown_s: number;
-                active_hours: null | {
-                    days: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
-                    from: string;
-                    to: string;
-                }[];
+                /** @description A summary sent at a time of day (ADR 0057): each item a question about activities, answered and delivered as one watch.triggered event. */
+                digest: {
+                    /**
+                     * @description discriminator enum property added by openapi-typescript
+                     * @enum {string}
+                     */
+                    type: "digest";
+                    at: string;
+                    /** @description Days to check on (default every day) */
+                    days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+                    time_zone?: string;
+                    items: {
+                        label: string;
+                        query: components["schemas"]["activity-query"];
+                    }[];
+                };
             };
-            estimate: {
-                vlm_calls_per_day: string;
-            };
-            /** @enum {string} */
-            status: "active" | "paused" | "needs_zone" | "expired";
-            warnings: string[];
-            /** Format: date-time */
-            created_at: string;
-            /**
-             * Format: date-time
-             * @description When the watch stops by itself (from `duration_minutes` or `expires_at` at creation); null means never. An expired watch has status `expired`.
-             */
-            expires_at?: string | null;
-            /** @description Where watch.triggered events go (ADR 0043). Empty: every webhook subscribed to watch.triggered. Otherwise only these webhooks and agent inboxes. The Events feed always has every event. */
-            notify: components["schemas"]["destination"][];
-            /** @description When the watch may fire, in a time zone; null means always (ADR 0043). Applies on top of `compiled.active_hours`. */
-            active_hours: null | components["schemas"]["watch-schedule"];
-        };
+        } & (components["schemas"]["objects"] | components["schemas"]["motion"] | components["schemas"]["sound"] | components["schemas"]["sensor"] | components["schemas"]["schedule"] | components["schemas"]["sequence"] | components["schemas"]["condition"] | components["schemas"]["digest"]);
         /**
          * ActivityQuery
          * @description One question about activities (ADR 0057). The API does the arithmetic; the window defaults to today in time_zone.
@@ -2244,6 +2159,181 @@ export interface components {
             compare?: "previous_period" | "same_weekday" | "last_14_days" | "last_28_days";
             /** @description Evidence items to return (default 10) */
             limit?: number;
+        };
+        objects: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "objects";
+            /** @enum {unknown} */
+            label: "person" | "vehicle" | "animal" | "airplane" | "train" | "boat" | "traffic_light" | "fire_hydrant" | "stop_sign" | "parking_meter" | "bench" | "backpack" | "umbrella" | "handbag" | "tie" | "suitcase" | "frisbee" | "skis" | "snowboard" | "ball" | "kite" | "baseball_bat" | "baseball_glove" | "skateboard" | "surfboard" | "tennis_racket" | "bottle" | "wine_glass" | "cup" | "fork" | "knife" | "spoon" | "bowl" | "banana" | "apple" | "sandwich" | "orange" | "broccoli" | "carrot" | "hot_dog" | "pizza" | "donut" | "cake" | "chair" | "couch" | "plant" | "bed" | "table" | "toilet" | "tv" | "laptop" | "computer_mouse" | "remote" | "keyboard" | "phone" | "microwave" | "oven" | "toaster" | "sink" | "refrigerator" | "book" | "clock" | "vase" | "scissors" | "teddy_bear" | "hair_dryer" | "toothbrush";
+            zone?: string;
+            /** @default 1 */
+            min_count: number;
+            /** @default 0 */
+            min_duration_s: number;
+            /** @enum {unknown} */
+            on: "enter" | "leave" | "present" | "stationary";
+        };
+        motion: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "motion";
+            zone?: string;
+            /** @default 0 */
+            min_duration_s: number;
+        };
+        sound: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "sound";
+            /** @enum {unknown} */
+            class: "crying" | "glass_break" | "alarm" | "dog" | "speech_present";
+            /** @default 0 */
+            min_duration_s: number;
+        };
+        sensor: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "sensor";
+            /** @enum {unknown} */
+            sense: "temperature" | "humidity";
+            above?: number;
+            below?: number;
+            rate_per_min?: number;
+            /** @default 0 */
+            min_duration_s: number;
+        };
+        schedule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "schedule";
+            every_min: number;
+        };
+        sequence: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "sequence";
+            steps: components["schemas"]["trigger"][];
+            within_s: number;
+        };
+        /** @description Checked by the API on a schedule (ADR 0057): a question about activities and a comparison. Covers absence (no one in the kitchen by 10:00), count, duration and trends (meals below 70 % of usual). */
+        condition: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "condition";
+            query: components["schemas"]["activity-query"];
+            test: {
+                /** @enum {unknown} */
+                op: "lt" | "lte" | "gt" | "gte" | "eq" | "ne";
+                value: number;
+                /**
+                 * @description Compare the value, or its ratio or difference to what is usual (needs query.compare)
+                 * @default value
+                 * @enum {unknown}
+                 */
+                of: "value" | "ratio" | "delta";
+            };
+            /** @description Check once a day at this local time */
+            at?: string;
+            /** @description Check this often (default 10 when `at` is absent) */
+            every_min?: number;
+            /** @description Days to check on (default every day) */
+            days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+            /** @description IANA zone for `at` and the question (default the workspace's) */
+            time_zone?: string;
+        };
+        /** @description A summary sent at a time of day (ADR 0057): each item a question about activities, answered and delivered as one watch.triggered event. */
+        digest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "digest";
+            at: string;
+            /** @description Days to check on (default every day) */
+            days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+            time_zone?: string;
+            items: {
+                label: string;
+                query: components["schemas"]["activity-query"];
+            }[];
+        };
+        /**
+         * Destination
+         * @description Where a watch's events go (ADR 0043): one of the account's webhooks, or an agent's inbox.
+         */
+        destination: {
+            /** @enum {string} */
+            type: "webhook" | "agent";
+            /** @description A webhook id (whk_…) or an agent id (agt_…). */
+            id: string;
+        };
+        /**
+         * WatchSchedule
+         * @description When a watch may fire (ADR 0043), in wall-clock time in `time_zone`, so it follows daylight saving. When `to` is before `from` the span runs overnight and belongs to the day it starts on (fri 18:00–06:00 includes Saturday 03:00). `from` equal to `to` means the whole day.
+         */
+        "watch-schedule": {
+            /** @description Days the span starts on; every day when absent. */
+            days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+            from: string;
+            to: string;
+            /** @description IANA time zone, e.g. Europe/London. UTC when absent (responses always include it). */
+            time_zone?: string;
+        };
+        /** Watch */
+        watch: {
+            id: string;
+            instruction: string;
+            sources: string[];
+            /**
+             * @description alert: the watch posts watch.triggered events and notifies its destinations. track: it only records activities, to answer questions later (ADR 0057). Both record activities.
+             * @enum {string}
+             */
+            mode: "alert" | "track";
+            compiled: {
+                trigger: components["schemas"]["trigger"];
+                verify?: {
+                    prompt: string;
+                    min_confidence: number;
+                };
+                cooldown_s: number;
+                active_hours: null | {
+                    days: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+                    from: string;
+                    to: string;
+                }[];
+            };
+            estimate: {
+                vlm_calls_per_day: string;
+            };
+            /** @enum {string} */
+            status: "active" | "paused" | "needs_zone" | "expired";
+            warnings: string[];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the watch stops by itself (from `duration_minutes` or `expires_at` at creation); null means never. An expired watch has status `expired`.
+             */
+            expires_at?: string | null;
+            /** @description Where watch.triggered events go (ADR 0043). Empty: every webhook subscribed to watch.triggered. Otherwise only these webhooks and agent inboxes. The Events feed always has every event. */
+            notify: components["schemas"]["destination"][];
+            /** @description When the watch may fire, in a time zone; null means always (ADR 0043). Applies on top of `compiled.active_hours`. */
+            active_hours: null | components["schemas"]["watch-schedule"];
         };
         /**
          * ActivityAnswer

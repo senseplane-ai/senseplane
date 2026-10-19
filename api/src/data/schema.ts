@@ -334,6 +334,9 @@ export interface WatchesTable {
   active_hours: ColumnType<WatchSchedule | null, string | null | undefined, string | null>;
   created_at: Timestamp;
   updated_at: Timestamp;
+  /** Condition and digest watches (ADR 0057): when last checked, and whether the condition held then. */
+  last_checked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  last_condition: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
 }
 
 export type Destination = { type: "webhook" | "agent"; id: string };

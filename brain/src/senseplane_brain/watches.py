@@ -3,7 +3,8 @@
 """Watch engine: evaluates compiled triggers per source on every frame,
 audio chunk and tick. Pure and synchronous; it returns "fires", and the worker
 verifies them with the VLM (only when the watch has `verify`) before an event
-is published. Sensor triggers are evaluated by the API, where readings arrive."""
+is published. Sensor triggers are evaluated by the API, where readings arrive,
+and so are condition and digest triggers (questions about activities, ADR 0057)."""
 
 import logging
 from dataclasses import dataclass, field
@@ -276,7 +277,7 @@ class WatchEngine:
         for key, w in self.watches.items():
             if key.startswith(account_id + ".") and source_id in w["sources"]:
                 trig = w["compiled"]["trigger"]
-                if trig["type"] == "sensor":
+                if trig["type"] in ("sensor", "condition", "digest"):  # checked by the API (readings; ADR 0057)
                     continue
                 st = self.states.get((key, source_id))
                 if st is None:

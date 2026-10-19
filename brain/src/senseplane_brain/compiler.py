@@ -132,7 +132,63 @@ def _object_watch(instruction: str, text: str, label: str, word: str, zone_field
     return trigger, {"prompt": f"{prompt} Answer yes or no with a confidence.", "min_confidence": 0.7}
 
 
-def rules(instruction: str, zones: list[str], senses: list[str]) -> Compiled:
+def _clock(text: str) -> str | None:
+    """"10am", "10:30", "8 pm", "noon", "this evening" → "HH:MM"."""
+    low = text.lower()
+    if re.search(r"\bnoon|midday\b", low):
+        return "12:00"
+    m = re.search(r"\b(?:by|at|before|until|till) (\d{1,2})(?:[:.](\d\d))?\s*(am|pm|a\.m\.|p\.m\.)?", low)
+    if m:
+        h, mm = int(m.group(1)), int(m.group(2) or 0)
+        if m.group(3) and m.group(3).startswith("p") and h < 12:
+            h += 12
+        if m.group(3) and m.group(3).startswith("a") and h == 12:
+            h = 0
+        if 0 <= h < 24 and 0 <= mm < 60:
+            return f"{h:02d}:{mm:02d}"
+    for word, hhmm in (("morning", "09:00"), ("evening", "20:00"), ("night", "21:00"), ("afternoon", "15:00")):
+        if re.search(rf"\b(every|each|this) {word}\b", low):
+            return hhmm
+    return None
+
+
+def _hours_s(text: str) -> float | None:
+    m = re.search(r"\bfor (?:more than |over |at least )?(\d+(?:\.\d+)?|an?|one|two|three|four|five|six)\s*(hours?|hrs?|h|minutes?|mins?)\b", text.lower())
+    if not m:
+        return None
+    n = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}.get(m.group(1)) or float(m.group(1))
+    return n * (3600 if m.group(2).startswith("h") else 60)
+
+
+def _scheduled(instruction: str, zones: list[str], watches: list[dict]) -> Compiled | None:
+    """Questions about activities checked on a schedule (ADR 0057): absence by a time, no one for a while, a daily summary."""
+    text = instruction.lower()
+    zone, _ = _zone(instruction, zones)
+    what = {"label": next((lbl for lbl, p in WORDS.items() if re.search(p, text)), "person"), **({"zone": zone} if zone else {})}
+    where = f" in {zone.replace('_', ' ')}" if zone else ""
+    if re.search(r"\b(summary|summari[sz]e|digest|recap|report|round-?up|how .* day went|their day|her day|his day)\b", text):
+        at = _clock(instruction) or "20:00"
+        items = [{"label": f"First seen{where}", "query": {"measure": "first", "what": what}},
+                 {"label": f"Last seen{where}", "query": {"measure": "last", "what": what, "period": "today"}},
+                 {"label": f"Time seen{where}", "query": {"measure": "total_duration", "what": what}},
+                 {"label": f"Longest time with no one{where}", "query": {"measure": "longest_gap", "what": what}}]
+        for w in watches[:8]:
+            if w.get("mode") == "track" and w.get("id"):
+                items.append({"label": str(w.get("instruction", w["id"]))[:80], "query": {"measure": "count", "what": {"watch_id": w["id"]}, "compare": "last_14_days"}})
+        return Compiled({"trigger": {"type": "digest", "at": at, "items": items[:12]}, "cooldown_s": 0, "active_hours": None}, {"vlm_calls_per_day": "0"})
+    nobody = r"\b(no ?one|no-one|nobody|not (?:been )?(?:seen|up|out|in)|hasn't (?:been|come|got|gotten|left)|has not|haven't|isn't up|not got up)\b"
+    if re.search(nobody, text) and (at := _clock(instruction)) and not _hours_s(instruction):
+        trig = {"type": "condition", "query": {"measure": "count", "what": what}, "test": {"op": "eq", "value": 0}, "at": at}
+        return Compiled({"trigger": trig, "cooldown_s": 0, "active_hours": None}, {"vlm_calls_per_day": "0"})
+    if (re.search(nobody, text) or re.search(r"\bno (movement|motion|activity)\b|\bhasn't moved|not moved\b", text)) and (secs := _hours_s(instruction)):
+        trig = {"type": "condition", "query": {"measure": "since_last", "what": what}, "test": {"op": "gte", "value": secs}, "every_min": 10}
+        return Compiled({"trigger": trig, "cooldown_s": 0, "active_hours": None}, {"vlm_calls_per_day": "0"})
+    return None
+
+
+def rules(instruction: str, zones: list[str], senses: list[str], watches: list[dict] | None = None) -> Compiled:
+    if (scheduled := _scheduled(instruction, zones, watches or [])) is not None:
+        return scheduled
     text = instruction.lower()
     zone, place_mentioned = _zone(instruction, zones)
     warnings: list[str] = []
@@ -225,16 +281,29 @@ Trigger is one of:
 - {"type":"sensor","sense":"temperature|humidity","above"?:number,"below"?:number,"rate_per_min"?:number,"min_duration_s"?:number}
 - {"type":"schedule","every_min":int>=5}  (verify is required)
 - {"type":"sequence","steps":[Trigger, ...>=2],"within_s":number}
+- {"type":"condition","query":<Query>,"test":{"op":"lt|lte|gt|gte|eq|ne","value":number,"of"?:"value|ratio|delta"},"at"?:"HH:MM","every_min"?:int>=5,"days"?:[...]}
+  Checked on a schedule, never by frames: absence ("tell me if nobody has been in the kitchen by 10am": count of person in zone kitchen eq 0, at 10:00),
+  inactivity ("no movement for 3 hours": since_last of person gte 10800, every_min 10), counts and durations by a time, and trends
+  ("eating less than usual": count of the meal watch with compare last_14_days, test of ratio lt 0.7, at 20:00). No verify; cooldown_s 0.
+- {"type":"digest","at":"HH:MM","days"?:[...],"items":[{"label":str,"query":<Query>}, ...1-12]}
+  A summary sent at a time ("send me a summary of mum's day at 8pm"): first and last seen, time present, longest time with no one, and counts of
+  the tracking watches given. No verify; cooldown_s 0.
+Query is {"measure":"exists|count|first|last|since_last|total_duration|longest|average_duration|longest_gap|sequence","what":{"label"?:str,"zone"?:str,
+  "watch_id"?:str,"sound"?:str,"sensor"?:{"sense":str,"above"?:number,"below"?:number},"min_duration_s"?:number},"period"?:"today|yesterday|last_24_hours|last_7_days",
+  "between"?:{"from":"HH:MM","to":"HH:MM"},"compare"?:"last_14_days|same_weekday"} with exactly one of label, watch_id, sound or sensor in what;
+  the period defaults to today. Use watch_id only from the watches given.
 Prefer the cheapest trigger that catches the situation; use verify only when the trigger alone can't tell (a package, a queue, a state of something).
 Use only zone names from the list given. Never add identification of people. Keep the verify prompt a yes/no question."""
 
 
-def compile_watch(instruction: str, zones: list[str], senses: list[str], client: ModelClient | None, meta: dict | None = None) -> Compiled:
-    fallback = rules(instruction, zones, senses)
+def compile_watch(instruction: str, zones: list[str], senses: list[str], client: ModelClient | None, meta: dict | None = None,
+                  watches: list[dict] | None = None) -> Compiled:
+    fallback = rules(instruction, zones, senses, watches)
     if client is None:
         return fallback
     try:
-        out = client.compile(SYSTEM, json.dumps({"instruction": instruction, "zones": zones, "senses": senses}), meta)
+        out = client.compile(SYSTEM, json.dumps({"instruction": instruction, "zones": zones, "senses": senses,
+                                                 "watches": [{"id": w.get("id"), "instruction": w.get("instruction"), "mode": w.get("mode")} for w in watches or []]}), meta)
         trigger = out.get("trigger")
         _trigger.validate_python(trigger)
         zone_names = _zones_in(trigger)
@@ -244,6 +313,13 @@ def compile_watch(instruction: str, zones: list[str], senses: list[str], client:
             compiled["verify"] = {"prompt": str(out["verify"]["prompt"]), "min_confidence": float(out["verify"].get("min_confidence", 0.7))}
         if trigger["type"] == "schedule" and "verify" not in compiled:
             raise ValueError("schedule triggers need verify")
+        if trigger["type"] in ("condition", "digest"):
+            compiled.pop("verify", None)
+            compiled["cooldown_s"] = 0
+            known = {w.get("id") for w in watches or []}
+            used = [q["what"].get("watch_id") for q in _queries(trigger)]
+            if any(u and u not in known for u in used):
+                raise ValueError("the condition names a watch that doesn't exist")
         warnings = [str(w) for w in out.get("warnings", [])]
         if unknown:
             warnings.append(f"Zone(s) {', '.join(unknown)} don't exist on this camera yet: draw them in the console.")
@@ -255,7 +331,17 @@ def compile_watch(instruction: str, zones: list[str], senses: list[str], client:
         return fallback
 
 
+def _queries(trigger: dict) -> list[dict]:
+    if trigger.get("type") == "condition":
+        return [trigger["query"]]
+    if trigger.get("type") == "digest":
+        return [i["query"] for i in trigger.get("items", [])]
+    return []
+
+
 def _zones_in(trigger: dict) -> list[str]:
     if trigger.get("type") == "sequence":
         return [z for s in trigger.get("steps", []) for z in _zones_in(s)]
+    if trigger.get("type") in ("condition", "digest"):
+        return [q["what"]["zone"] for q in _queries(trigger) if q.get("what", {}).get("zone")]
     return [trigger["zone"]] if trigger.get("zone") else []

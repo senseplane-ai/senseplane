@@ -22,7 +22,7 @@
     "start": "node --import @senseplane/telemetry/register dist/server.js",
     "db:types": "kysely-codegen --url $MIGRATION_DATABASE_URL --out-file src/data/generated.ts",
     "admin": "node dist/cli.js",
-    "codegen": "node -e \"const fs=require('fs');fs.mkdirSync('src/generated',{recursive:true});for(const f of ['trigger','watch','destination','watch-schedule'])fs.copyFileSync('../spec/schemas/'+f+'.json','src/generated/'+f+'.schema.json')\""
+    "codegen": "node -e \"const fs=require('fs');fs.mkdirSync('src/generated',{recursive:true});for(const f of ['trigger','watch','destination','watch-schedule','activity-query'])fs.copyFileSync('../spec/schemas/'+f+'.json','src/generated/'+f+'.schema.json')\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1152.0",

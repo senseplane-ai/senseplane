@@ -65,3 +65,32 @@ def test_active_hours():
     assert active_now([{"days": ["fri"], "from": "08:00", "to": "20:00"}], t)
     assert not active_now([{"days": ["sat"], "from": "08:00", "to": "20:00"}], t)
     assert active_now([{"days": ["fri"], "from": "22:00", "to": "06:00"}], t) is False
+
+
+def test_questions_about_activities_compile_to_condition_and_digest_watches():
+    """ADR 0057: absence by a time, no one for a while and a daily summary are checked by the API on a schedule."""
+    from senseplane_brain.compiler import rules
+
+    track = [{"id": "wat_eat", "instruction": "Track meals at the table", "mode": "track"}, {"id": "wat_door", "instruction": "Door", "mode": "alert"}]
+    c = rules("Tell me if nobody has been in the kitchen by 10am", ["kitchen"], ["video"], track).compiled
+    assert c["trigger"] == {"type": "condition", "query": {"measure": "count", "what": {"label": "person", "zone": "kitchen"}}, "test": {"op": "eq", "value": 0}, "at": "10:00"}
+    assert c["cooldown_s"] == 0 and "verify" not in c
+    c = rules("Alert me if there is no movement in the hallway for 2 hours", ["hallway"], ["video"]).compiled
+    assert c["trigger"]["query"] == {"measure": "since_last", "what": {"label": "person", "zone": "hallway"}} and c["trigger"]["test"] == {"op": "gte", "value": 7200}
+    assert c["trigger"]["every_min"] == 10
+    assert rules("Tell me if mum isn't up by 9:30 pm", [], ["video"]).compiled["trigger"]["at"] == "21:30"
+    d = rules("Send me a summary of Mum's day every evening", [], ["video"], track).compiled["trigger"]
+    assert d["type"] == "digest" and d["at"] == "20:00"
+    assert [i["label"] for i in d["items"]][:2] == ["First seen", "Last seen"]
+    assert {"label": "Track meals at the table", "query": {"measure": "count", "what": {"watch_id": "wat_eat"}, "compare": "last_14_days"}} in d["items"]
+    assert not any(i["query"]["what"].get("watch_id") == "wat_door" for i in d["items"])  # alert watches aren't summarised
+    # Ordinary watches are unchanged.
+    assert rules("Tell me if someone comes to the door", [], ["video"]).compiled["trigger"]["type"] == "objects"
+    assert rules("Tell me if the dog is on the sofa for 5 minutes", [], ["video"]).compiled["trigger"]["type"] == "objects"
+    # What the spec accepts.
+    from pydantic import TypeAdapter
+
+    from senseplane_brain.spec.trigger import Trigger
+
+    TypeAdapter(Trigger).validate_python(d)
+    TypeAdapter(Trigger).validate_python(rules("Alert me if no one has been seen for 3 hours", [], ["video"]).compiled["trigger"])

@@ -19,6 +19,7 @@ import type { WatchesTable } from "../data/schema.js";
 import { ApiError } from "../errors.js";
 import { type EventUrls, toEvent } from "../events.js";
 import triggerSchema from "../generated/trigger.schema.json" with { type: "json" };
+import activityQuerySchema from "../generated/activity-query.schema.json" with { type: "json" };
 import watchSchema from "../generated/watch.schema.json" with { type: "json" };
 import destinationSchemaJson from "../generated/destination.schema.json" with { type: "json" };
 import scheduleSchemaJson from "../generated/watch-schedule.schema.json" with { type: "json" };
@@ -28,6 +29,7 @@ import { storeActivity } from "../brain-events.js";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 (addFormatsModule as unknown as (a: Ajv2020) => void)(ajv);
+ajv.addSchema(activityQuerySchema);
 ajv.addSchema(triggerSchema);
 ajv.addSchema(destinationSchemaJson);
 ajv.addSchema(scheduleSchemaJson);
@@ -143,9 +145,12 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     if (missing.length) throw new ApiError(404, "not_found", `source(s) not found: ${missing.join(", ")}`);
     const zones = [...new Set(srcs.flatMap((x) => (x!.zones ?? []).map((z) => z.name)))];
     const senses = [...new Set(srcs.flatMap((x) => x!.senses))];
+    // Existing watches on these sources, so a condition or digest can measure what they track (ADR 0057).
+    const watches = (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("watches").select(["id", "instruction", "mode", "sources"]).execute()))
+      .filter((w) => w.sources.some((id) => sources.includes(id))).map(({ id, instruction: i, mode }) => ({ id, instruction: i, mode }));
     let out: CompileReply;
     try {
-      out = await bus().request<CompileReply>("rpc.brain.compile", { account_id: accountId, instruction, zones, senses }, 30_000);
+      out = await bus().request<CompileReply>("rpc.brain.compile", { account_id: accountId, instruction, zones, senses, watches }, 30_000);
     } catch (e) {
       if (e instanceof ApiError) throw e;
       throw new ApiError(503, "service_unavailable", "the brain did not answer; try again shortly");
@@ -155,11 +160,11 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     return out;
   }
 
-  app.post<{ Body: { instruction: string; sources: string[]; mode?: "alert" | "track"; duration_minutes?: number; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
+  app.post<{ Body: { instruction: string; sources: string[]; mode?: "alert" | "track"; compiled?: Record<string, unknown>; duration_minutes?: number; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
     "/v1/watches",
     { schema: { body: { type: "object", additionalProperties: false, required: ["instruction", "sources"], properties: {
       instruction: { type: "string", minLength: 3, maxLength: 500 }, sources: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } },
-      mode: { enum: ["alert", "track"] },
+      mode: { enum: ["alert", "track"] }, compiled: { type: "object" },
       duration_minutes: { type: "integer", minimum: 1, maximum: 525600 }, notify: notifySchema, active_hours: { ...scheduleSchema, type: ["object", "null"] },
     } } } },
     async (req, reply) => {
@@ -171,7 +176,13 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       }
       const schedule = checkSchedule(req.body.active_hours);
       const notify = await checkNotify(deps.data, req, req.body.notify ?? []);
-      const c = await compile(accountId, req.body.instruction, sources);
+      // A compiled watch given with the request (packs, or code that knows exactly what it wants) is used as it is.
+      if (req.body.compiled && !validateCompiled(req.body.compiled)) {
+        throw new ApiError(400, "validation_failed", ajv.errorsText(validateCompiled.errors), { errors: validateCompiled.errors });
+      }
+      const c = req.body.compiled
+        ? { compiled: req.body.compiled, estimate: { vlm_calls_per_day: req.body.compiled.verify ? "varies" : "0" }, warnings: [] as string[], compiler: "user", needs_zone: false }
+        : await compile(accountId, req.body.instruction, sources);
       const row = await deps.data.withAccount(accountId, (s) =>
         s.db.insertInto("watches").values({
           id: newId("wat"), account_id: accountId, instruction: req.body.instruction, sources, mode: req.body.mode ?? "alert",
@@ -274,6 +285,9 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       compiled = existing.compiled as unknown as Compiled;
     } else {
       throw new ApiError(400, "validation_failed", "give an instruction, a compiled watch or a watch_id");
+    }
+    if (compiled.trigger.type === "condition" || compiled.trigger.type === "digest") {
+      throw new ApiError(400, "validation_failed", "condition and digest watches are checked on a schedule; try their question with POST /v1/activity/query");
     }
     const schedule = "active_hours" in b ? checkSchedule(b.active_hours) : (existing?.active_hours ?? null);
     const maxChecks = b.max_checks ?? DEFAULT_CHECKS;

@@ -20,6 +20,12 @@
     },
     {
       "$ref": "#/$defs/sequence"
+    },
+    {
+      "$ref": "#/$defs/condition"
+    },
+    {
+      "$ref": "#/$defs/digest"
     }
   ],
   "discriminator": {
@@ -251,6 +257,144 @@
         "within_s": {
           "type": "number",
           "exclusiveMinimum": 0
+        }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "query",
+        "test"
+      ],
+      "description": "Checked by the API on a schedule (ADR 0057): a question about activities and a comparison. Covers absence (no one in the kitchen by 10:00), count, duration and trends (meals below 70 % of usual).",
+      "properties": {
+        "type": {
+          "const": "condition"
+        },
+        "query": {
+          "$ref": "activity-query.json"
+        },
+        "test": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "value"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "lt",
+                "lte",
+                "gt",
+                "gte",
+                "eq",
+                "ne"
+              ]
+            },
+            "value": {
+              "type": "number"
+            },
+            "of": {
+              "enum": [
+                "value",
+                "ratio",
+                "delta"
+              ],
+              "default": "value",
+              "description": "Compare the value, or its ratio or difference to what is usual (needs query.compare)"
+            }
+          }
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "Check once a day at this local time"
+        },
+        "every_min": {
+          "type": "integer",
+          "minimum": 5,
+          "description": "Check this often (default 10 when `at` is absent)"
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "mon",
+              "tue",
+              "wed",
+              "thu",
+              "fri",
+              "sat",
+              "sun"
+            ]
+          },
+          "description": "Days to check on (default every day)"
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA zone for `at` and the question (default the workspace's)"
+        }
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "at",
+        "items"
+      ],
+      "description": "A summary sent at a time of day (ADR 0057): each item a question about activities, answered and delivered as one watch.triggered event.",
+      "properties": {
+        "type": {
+          "const": "digest"
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "mon",
+              "tue",
+              "wed",
+              "thu",
+              "fri",
+              "sat",
+              "sun"
+            ]
+          },
+          "description": "Days to check on (default every day)"
+        },
+        "time_zone": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "query"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "query": {
+                "$ref": "activity-query.json"
+              }
+            }
+          }
         }
       }
     }

@@ -531,6 +531,29 @@
           "account_id": {
             "type": "string",
             "description": "For metering the compile as an AI check (ADR 0025)"
+          },
+          "watches": {
+            "type": "array",
+            "description": "Watches on these sources, so a condition or digest can measure what they track (ADR 0057)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "instruction",
+                "mode"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       },

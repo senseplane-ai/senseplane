@@ -39,6 +39,7 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
 import { markSilentBridges, registerBridgeRoutes } from "./routes/bridges.js";
 import { closeStaleActivities } from "./activity.js";
+import { runScheduledWatches } from "./scheduled-watches.js";
 import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
@@ -463,6 +464,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       void expireWatches(data, bus).catch((err) => app.log.error({ err }, "watch expiry failed"));
       void markSilentBridges(data, app.log).catch((err) => app.log.error({ err }, "bridge sweep failed"));
       void closeStaleActivities(data).catch((err) => app.log.error({ err }, "activity sweep failed"));
+      void runScheduledWatches(data, app.log).catch((err) => app.log.error({ err }, "scheduled watches failed"));
       void purgeDeletedAccounts({ data, bus, storage }, app.log).catch((err) => app.log.error({ err }, "account deletion failed"));
       // Live sessions the media plane stopped reporting (3 missed minute reports) are closed and metered.
       void mediaDriver?.sweepFeeds().catch((err) => app.log.error({ err }, "feed sweep failed"));

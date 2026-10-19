@@ -11,6 +11,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from . import activity_query
+
 
 class Label(Enum):
     person = 'person'
@@ -152,6 +154,95 @@ class Schedule(BaseModel):
     every_min: Annotated[int, Field(ge=5)]
 
 
+class Op(Enum):
+    lt = 'lt'
+    lte = 'lte'
+    gt = 'gt'
+    gte = 'gte'
+    eq = 'eq'
+    ne = 'ne'
+
+
+class Of(Enum):
+    value = 'value'
+    ratio = 'ratio'
+    delta = 'delta'
+
+
+class Test(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    op: Op
+    value: float
+    of: Annotated[
+        Of | None,
+        Field(
+            description='Compare the value, or its ratio or difference to what is usual (needs query.compare)'
+        ),
+    ] = 'value'
+
+
+class Day(Enum):
+    mon = 'mon'
+    tue = 'tue'
+    wed = 'wed'
+    thu = 'thu'
+    fri = 'fri'
+    sat = 'sat'
+    sun = 'sun'
+
+
+class Condition(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['condition']
+    query: activity_query.ActivityQuery
+    test: Test
+    at: Annotated[
+        str | None,
+        Field(
+            description='Check once a day at this local time',
+            pattern='^([01]\\d|2[0-3]):[0-5]\\d$',
+        ),
+    ] = None
+    every_min: Annotated[
+        int | None,
+        Field(description='Check this often (default 10 when `at` is absent)', ge=5),
+    ] = None
+    days: Annotated[
+        list[Day] | None, Field(description='Days to check on (default every day)')
+    ] = None
+    time_zone: Annotated[
+        str | None,
+        Field(
+            description="IANA zone for `at` and the question (default the workspace's)"
+        ),
+    ] = None
+
+
+class Item(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    label: Annotated[str, Field(max_length=80)]
+    query: activity_query.ActivityQuery
+
+
+class Digest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['digest']
+    at: Annotated[str, Field(pattern='^([01]\\d|2[0-3]):[0-5]\\d$')]
+    days: Annotated[
+        list[Day] | None, Field(description='Days to check on (default every day)')
+    ] = None
+    time_zone: str | None = None
+    items: Annotated[list[Item], Field(max_length=12, min_length=1)]
+
+
 class Sequence(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -161,9 +252,13 @@ class Sequence(BaseModel):
     within_s: Annotated[float, Field(gt=0.0)]
 
 
-class Trigger(RootModel[Objects | Motion | Sound | Sensor | Schedule | Sequence]):
+class Trigger(
+    RootModel[
+        Objects | Motion | Sound | Sensor | Schedule | Sequence | Condition | Digest
+    ]
+):
     root: Annotated[
-        Objects | Motion | Sound | Sensor | Schedule | Sequence,
+        Objects | Motion | Sound | Sensor | Schedule | Sequence | Condition | Digest,
         Field(discriminator='type', title='Trigger'),
     ]
 

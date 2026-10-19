@@ -9,8 +9,15 @@ does: HTTPS, the WebRTC port, recording, then detection.
 ## Before you start
 
 - **On your computer:** Node 22 or newer, Go 1.23 or newer and ffmpeg.
-- **An API key:** in the console, go to **Agents → For developers → Create
-  API key**.
+- **An account key** for a workspace of its own, so the fake cameras stay out
+  of yours. On the server, in the folder with `docker-compose.yml`:
+
+  ```sh
+  docker compose exec api node dist/cli.js create-account "Load test"
+  ```
+
+  It prints the new workspace's `api_key`. (Keys from the Agents page are
+  agent keys, which can't add cameras.)
 - **Upload speed.** Each camera sends about 0.3–0.6 Mbps (640×360 at
   15 fps), so 40 cameras need about 20 Mbps up. Check yours with
   `networkQuality` (macOS) or any speed test, and keep the largest step under

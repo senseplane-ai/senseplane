@@ -47,6 +47,9 @@ async function call(method, path, body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const json = r.status === 204 ? {} : await r.json().catch(() => ({}));
+  if (r.status === 403 && json?.error?.message?.includes("agent keys")) {
+    throw new Error("this is an agent key, which can't add cameras. Make an account key on the server: docker compose exec api node dist/cli.js create-account \"Load test\"");
+  }
   if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${json?.error?.message ?? ""}`);
   return json;
 }

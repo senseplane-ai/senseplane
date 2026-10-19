@@ -461,7 +461,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     data, maxSources: async (id) => (await quotaFor(id)).maxSources, audit,
     ...(mediaDriver?.publicUrl ? { whip: { publicUrl: mediaDriver.publicUrl, authorizeUrl: whipAuthorizeUrl, signer } } : {}),
   });
-  const stoppers: (() => void)[] = [];
+  const stoppers: (() => void | Promise<void>)[] = [];
   if (storage) {
     registerPlaybackRoutes(app, {
       data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900,
@@ -557,7 +557,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       if (internal) await internal.listen({ port: options.internalPort!, host: process.env.INTERNAL_HOST ?? "127.0.0.1" });
     },
     async close() {
-      for (const stop of stoppers) stop();
+      // Background work finishes what it started before the database closes (ADR 0058).
+      await Promise.all(stoppers.map((stop) => stop()));
       await bus?.close();
       await app.close();
       await internal?.close();

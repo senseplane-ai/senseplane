@@ -61,33 +61,37 @@ export async function runDueJobs(data: DataAccess, jobs: Job[], log?: FastifyBas
  * Runs due jobs on a timer: half the shortest interval, between 1 and 10 s, with jitter so processes don't poll
  * together. Each job runs on its own, so a long one (the Telegram long poll) doesn't hold up the rest.
  */
-export function startJobs(data: DataAccess, jobs: Job[], log: FastifyBaseLogger): () => void {
+export function startJobs(data: DataAccess, jobs: Job[], log: FastifyBaseLogger): () => Promise<void> {
   const pollMs = Math.min(10_000, Math.max(1000, (Math.min(...jobs.map((j) => j.everyS)) * 1000) / 2));
   const byName = new Map(jobs.map((j) => [j.name, j]));
-  const local = new Set<string>();
+  const local = new Map<string, Promise<void>>();
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
+  let polling: Promise<void> = Promise.resolve();
   const tick = async () => {
     try {
       for (const r of await claimJobs(data, jobs.filter((j) => !local.has(j.name)), undefined, WORKER_ID)) {
-        local.add(r.name);
-        void runClaimed(data, byName.get(r.name)!, r.state, log, undefined, WORKER_ID)
+        const run = runClaimed(data, byName.get(r.name)!, r.state, log, undefined, WORKER_ID)
           .catch((err) => log.error({ err, job: r.name }, "background job could not be recorded"))
           .finally(() => local.delete(r.name));
+        local.set(r.name, run);
       }
     } catch (err) {
-      log.error({ err }, "background jobs poll failed");
+      if (!stopped) log.error({ err }, "background jobs poll failed");
     }
     if (!stopped) schedule();
   };
   const schedule = () => {
-    timer = setTimeout(() => void tick(), pollMs * (0.8 + Math.random() * 0.4));
+    timer = setTimeout(() => void (polling = tick()), pollMs * (0.8 + Math.random() * 0.4));
     timer.unref();
   };
-  void tick();
-  return () => {
+  polling = tick();
+  // Stopping waits for the poll and the runs in flight, so the database can be closed after.
+  return async () => {
     stopped = true;
     clearTimeout(timer);
+    await polling;
+    await Promise.all(local.values());
   };
 }
 
@@ -98,17 +102,12 @@ export function startJobs(data: DataAccess, jobs: Job[], log: FastifyBaseLogger)
 export function startClaimLoop<T>(o: {
   name: string; intervalMs: number; log: FastifyBaseLogger; kick?: EventTarget; batch: number;
   claim(max: number): Promise<T[]>; handle(row: T): Promise<void>;
-}): () => void {
-  let running = false;
+}): () => Promise<void> {
+  let running: Promise<void> | undefined;
   let again = false;
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
-  const tick = async () => {
-    if (running) {
-      again = true;
-      return;
-    }
-    running = true;
+  const round = async () => {
     try {
       do {
         again = false;
@@ -117,10 +116,17 @@ export function startClaimLoop<T>(o: {
         if (rows.length >= o.batch) again = true;
       } while (again && !stopped);
     } catch (err) {
-      o.log.error({ err, worker: o.name }, "background work poll failed");
-    } finally {
-      running = false;
+      if (!stopped) o.log.error({ err, worker: o.name }, "background work poll failed");
     }
+  };
+  const tick = async () => {
+    if (stopped) return;
+    if (running) {
+      again = true;
+      return;
+    }
+    running = round().finally(() => (running = undefined));
+    await running;
   };
   const schedule = () => {
     if (stopped) return;
@@ -130,9 +136,10 @@ export function startClaimLoop<T>(o: {
   const onKick = () => void tick();
   o.kick?.addEventListener("kick", onKick);
   void tick().then(schedule);
-  return () => {
+  return async () => {
     stopped = true;
     clearTimeout(timer);
     o.kick?.removeEventListener("kick", onKick);
+    await running;
   };
 }

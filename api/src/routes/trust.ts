@@ -10,7 +10,7 @@ import { type Kysely, sql } from "kysely";
 import { ABILITIES } from "../access.js";
 import type { DataAccess } from "../data/access.js";
 import { newId } from "../data/ids.js";
-import type { Database } from "../data/schema.js";
+import type { AgentKind, Database } from "../data/schema.js";
 import { ApiError } from "../errors.js";
 import { type EventUrls, toEvent } from "../events.js";
 import type { ObjectStorage } from "../storage.js";
@@ -49,7 +49,7 @@ export async function insertGrant(db: Kysely<Database>, sources: () => Promise<{
 }
 
 type AgentRow = {
-  id: string; name: string; kind: "key" | "app"; client_name: string | null; client_host: string | null; connected_at: Date | null; created_at: Date;
+  id: string; name: string; kind: AgentKind; client_name: string | null; client_host: string | null; connected_at: Date | null; created_at: Date;
   prefix?: string | null; last_active_at?: Date | string | null;
 };
 export const toAgent = (r: AgentRow) => ({
@@ -97,6 +97,8 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
       const r = await s.db.updateTable("agents").set({ revoked_at: new Date() }).where("id", "=", req.params.id).where("revoked_at", "is", null).executeTakeFirst();
       await s.db.updateTable("api_keys").set({ revoked_at: new Date() }).where("agent_id", "=", req.params.id).execute();
       await s.db.deleteFrom("grants").where("agent_id", "=", req.params.id).execute();
+      // A linked chat's agent: removing it unlinks the chat (ADR 0059).
+      await s.db.updateTable("channels").set({ status: "unlinked" }).where("agent_id", "=", req.params.id).execute();
       return Number(r.numUpdatedRows);
     });
     if (!n) throw new ApiError(404, "not_found", "agent not found");

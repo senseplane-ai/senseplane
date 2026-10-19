@@ -8,6 +8,7 @@ import type { AccountScope } from "./data/access.js";
 import { newId } from "./data/ids.js";
 import type { Destination, EventsTable } from "./data/schema.js";
 import type { MediaClaims, PlaybackSigner } from "./playback.js";
+import { queueEventForChannels } from "./channels.js";
 import { deliveryKick, rememberEventTrace } from "./workers.js";
 
 export type EventRow = Selectable<EventsTable>;
@@ -60,6 +61,7 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
     // Wake the worker just after this transaction commits.
     setTimeout(() => deliveryKick.dispatchEvent(new Event("kick")), 20);
   }
+  if (route.channels.length) await queueEventForChannels(s, route.channels, row.id);
   if (route.agents.length) {
     // Revoked agents are skipped; the watch keeps their ids.
     const live = await s.db.selectFrom("agents").select("id").where("id", "in", route.agents).where("revoked_at", "is", null).execute();
@@ -76,7 +78,7 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
 /**
  * Where an event goes (ADR 0043). A watch.triggered event of a watch with
  * `notify` goes only to the listed webhooks (whatever event types they
- * subscribe to) and agents. Everything else, and watches without `notify`,
+ * subscribe to), agents and channels (ADR 0059). Everything else, and watches without `notify`,
  * goes to every webhook subscribed to the type (or "*"). The Events feed
  * always has it.
  */
@@ -86,9 +88,10 @@ export function routeEvent(type: string, notify: Destination[] | null | undefine
     return {
       webhooks: hooks.filter((h) => want.has(h.id)).map((h) => h.id),
       agents: [...new Set(notify.filter((d) => d.type === "agent").map((d) => d.id))],
+      channels: [...new Set(notify.filter((d) => d.type === "channel").map((d) => d.id))],
     };
   }
-  return { webhooks: hooks.filter((h) => h.events.some((p) => typeMatches(p, type))).map((h) => h.id), agents: [] as string[] };
+  return { webhooks: hooks.filter((h) => h.events.some((p) => typeMatches(p, type))).map((h) => h.id), agents: [] as string[], channels: [] as string[] };
 }
 
 /**

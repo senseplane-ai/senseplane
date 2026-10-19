@@ -53,10 +53,10 @@ export const toWatch = (w: WatchRow) => ({
   created_at: new Date(w.created_at).toISOString(),
 });
 
-// Watch destinations and schedule (ADR 0043).
+// Watch destinations and schedule (ADR 0043, 0059).
 const destinationSchema = {
   type: "object", additionalProperties: false, required: ["type", "id"],
-  properties: { type: { enum: ["webhook", "agent"] }, id: { type: "string", minLength: 1, maxLength: 64 } },
+  properties: { type: { enum: destinationSchemaJson.properties.type.enum }, id: { type: "string", minLength: 1, maxLength: 64 } },
 };
 const notifySchema = { type: "array", maxItems: 20, items: destinationSchema };
 const scheduleSchema = {
@@ -76,7 +76,7 @@ function checkSchedule(s: WatchSchedule | null | undefined) {
 
 /**
  * Destinations must belong to the account: webhooks that exist, agents that
- * aren't revoked. An agent key may route a watch only to itself (it can't see
+ * aren't revoked, channels that are linked (ADR 0059). An agent key may route a watch only to itself (it can't see
  * the account's webhooks or other agents).
  */
 export async function checkNotify(data: DataAccess, req: FastifyRequest, notify: Destination[]): Promise<Destination[]> {
@@ -87,13 +87,14 @@ export async function checkNotify(data: DataAccess, req: FastifyRequest, notify:
     }
     return unique;
   }
-  const hookIds = unique.filter((d) => d.type === "webhook").map((d) => d.id);
-  const agentIds = unique.filter((d) => d.type === "agent").map((d) => d.id);
+  const ids = (type: Destination["type"]) => unique.filter((d) => d.type === type).map((d) => d.id);
+  const [hookIds, agentIds, channelIds] = [ids("webhook"), ids("agent"), ids("channel")];
   const known = await data.withAccount(req.accountId!, async (s) => ({
-    hooks: new Set(hookIds.length ? (await s.db.selectFrom("webhooks").select("id").where("id", "in", hookIds).execute()).map((r) => r.id) : []),
-    agents: new Set(agentIds.length ? (await s.db.selectFrom("agents").select("id").where("id", "in", agentIds).where("revoked_at", "is", null).execute()).map((r) => r.id) : []),
+    webhook: new Set(hookIds.length ? (await s.db.selectFrom("webhooks").select("id").where("id", "in", hookIds).execute()).map((r) => r.id) : []),
+    agent: new Set(agentIds.length ? (await s.db.selectFrom("agents").select("id").where("id", "in", agentIds).where("revoked_at", "is", null).execute()).map((r) => r.id) : []),
+    channel: new Set(channelIds.length ? (await s.db.selectFrom("channels").select("id").where("id", "in", channelIds).where("status", "!=", "unlinked").execute()).map((r) => r.id) : []),
   }));
-  const unknown = unique.filter((d) => !(d.type === "webhook" ? known.hooks : known.agents).has(d.id));
+  const unknown = unique.filter((d) => !known[d.type].has(d.id));
   if (unknown.length) {
     throw new ApiError(400, "validation_failed", `unknown destination(s): ${unknown.map((d) => `${d.type} ${d.id}`).join(", ")}`, { unknown });
   }

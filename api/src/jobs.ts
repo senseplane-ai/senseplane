@@ -29,37 +29,54 @@ export interface Job {
 
 const jobSpec = (j: Job) => `${j.name}:${Math.max(1, Math.round(j.everyS))}:${Math.max(j.leaseS ?? 300, Math.round(j.everyS))}`;
 
-/** Claims and runs the jobs that are due. Returns the names that ran. `at` stands in for now in tests. */
-export async function runDueJobs(data: DataAccess, jobs: Job[], log?: FastifyBaseLogger, at?: Date, worker = WORKER_ID): Promise<string[]> {
+/** Claims the jobs that are due for this process. `at` stands in for now in tests. */
+async function claimJobs(data: DataAccess, jobs: Job[], at: Date | undefined, worker: string): Promise<{ name: string; state: unknown }[]> {
   if (!jobs.length) return [];
+  const { rows } = await sql<{ name: string; state: unknown }>`select * from claim_jobs(${jobs.map(jobSpec)}, ${worker}, ${at ?? sql`now()`})`.execute(data.db());
+  return rows;
+}
+
+/** Runs one claimed job and records how it went; the next run is an interval after this one ends. */
+async function runClaimed(data: DataAccess, job: Job, state: unknown, log: FastifyBaseLogger | undefined, at: Date | undefined, worker: string) {
+  let error: string | null = null;
+  let next: unknown;
+  try {
+    next = await job.run(state);
+  } catch (err) {
+    error = (err as Error).message?.slice(0, 500) || "failed";
+    log?.error({ err, job: job.name }, "background job failed");
+  }
+  await sql`select finish_job(${job.name}, ${worker}, ${error}, ${next === undefined ? null : JSON.stringify(next)}::jsonb, ${at ?? sql`now()`})`.execute(data.db());
+}
+
+/** Claims and runs the jobs that are due, waiting for them. Returns the names that ran. `at` stands in for now in tests. */
+export async function runDueJobs(data: DataAccess, jobs: Job[], log?: FastifyBaseLogger, at?: Date, worker = WORKER_ID): Promise<string[]> {
   const byName = new Map(jobs.map((j) => [j.name, j]));
-  const when = at ?? sql`now()`;
-  const { rows } = await sql<{ name: string; state: unknown }>`select * from claim_jobs(${jobs.map(jobSpec)}, ${worker}, ${when})`.execute(data.db());
-  await Promise.all(rows.map(async ({ name, state }) => {
-    let error: string | null = null;
-    let next: unknown;
-    try {
-      next = await byName.get(name)!.run(state);
-    } catch (err) {
-      error = (err as Error).message?.slice(0, 500) || "failed";
-      log?.error({ err, job: name }, "background job failed");
-    }
-    await sql`select finish_job(${name}, ${worker}, ${error}, ${next === undefined ? null : JSON.stringify(next)}::jsonb, ${at ?? sql`now()`})`.execute(data.db());
-  }));
+  const rows = await claimJobs(data, jobs, at, worker);
+  await Promise.all(rows.map((r) => runClaimed(data, byName.get(r.name)!, r.state, log, at, worker)));
   return rows.map((r) => r.name);
 }
 
-/** Runs due jobs on a timer: half the shortest interval, between 1 and 10 s, with jitter so processes don't poll together. */
+/**
+ * Runs due jobs on a timer: half the shortest interval, between 1 and 10 s, with jitter so processes don't poll
+ * together. Each job runs on its own, so a long one (the Telegram long poll) doesn't hold up the rest.
+ */
 export function startJobs(data: DataAccess, jobs: Job[], log: FastifyBaseLogger): () => void {
   const pollMs = Math.min(10_000, Math.max(1000, (Math.min(...jobs.map((j) => j.everyS)) * 1000) / 2));
-  let running = false;
+  const byName = new Map(jobs.map((j) => [j.name, j]));
+  const local = new Set<string>();
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
   const tick = async () => {
-    if (!running) {
-      running = true;
-      await runDueJobs(data, jobs, log).catch((err) => log.error({ err }, "background jobs poll failed"));
-      running = false;
+    try {
+      for (const r of await claimJobs(data, jobs.filter((j) => !local.has(j.name)), undefined, WORKER_ID)) {
+        local.add(r.name);
+        void runClaimed(data, byName.get(r.name)!, r.state, log, undefined, WORKER_ID)
+          .catch((err) => log.error({ err, job: r.name }, "background job could not be recorded"))
+          .finally(() => local.delete(r.name));
+      }
+    } catch (err) {
+      log.error({ err }, "background jobs poll failed");
     }
     if (!stopped) schedule();
   };

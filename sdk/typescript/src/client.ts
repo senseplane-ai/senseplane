@@ -16,6 +16,7 @@ export type Clip = S["Clip"];
 export type Grant = S["Grant"];
 export type Agent = S["Agent"];
 export type Webhook = S["Webhook"];
+export type Channel = S["Channel"];
 export type Usage = S["Usage"];
 export type Sense = S["Sense"];
 export type Account = S["Account"];
@@ -240,6 +241,18 @@ export class Senseplane {
     redeliver: (id: string, deliveryId: string) =>
       unwrap(this.raw.POST("/webhooks/{id}/deliveries/{deliveryId}/redeliver", { params: { path: { id, deliveryId } } })),
     verify: verifyWebhook,
+  };
+
+  /** Telegram chats that watches send to and that can ask (ADR 0059). */
+  readonly channels = {
+    list: async () => (await unwrap(this.raw.GET("/channels"))).data,
+    telegram: () => unwrap(this.raw.GET("/channels/telegram")),
+    /** A one-time link (10 minutes): `url` for a private chat, `group_url` to add the bot to a group. */
+    linkTelegram: () => unwrap(this.raw.POST("/channels/telegram/link")),
+    update: (id: string, body: { name?: string; snapshots?: boolean; can_ask?: boolean; muted_until?: string | null }) =>
+      unwrap(this.raw.PATCH("/channels/{id}", { params: { path: { id } }, body })),
+    delete: (id: string) => unwrap(this.raw.DELETE("/channels/{id}", { params: { path: { id } } })),
+    test: (id: string) => unwrap(this.raw.POST("/channels/{id}/test", { params: { path: { id } } })),
   };
 
   readonly usage = { get: (query: { from?: string; to?: string } = {}) => unwrap(this.raw.GET("/usage", { params: { query } })) };

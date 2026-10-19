@@ -131,6 +131,8 @@ export interface Settings {
   githubClientSecret: string;
   googleClientId: string;
   googleClientSecret: string;
+  /** A Telegram bot's token from @BotFather (optional): alerts and questions in Telegram, polled, so no public URL is needed (ADR 0059). */
+  telegramBotToken: string;
   /** Host ports, when not 443 and 40000 (local testing only). */
   httpsPort: number;
   rtcPort: number;
@@ -157,6 +159,7 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): Settings 
     retentionDays: (env.RAW_RETENTION_DAYS ?? "").trim() || "7",
     maxResolution: maxResolution(env.MAX_RESOLUTION),
     announcedAddress: (env.MEDIA_ANNOUNCED_ADDRESS ?? "").trim(),
+    telegramBotToken: (env.TELEGRAM_BOT_TOKEN ?? "").trim(),
     githubClientId: (env.AUTH_GITHUB_CLIENT_ID ?? "").trim(),
     githubClientSecret: (env.AUTH_GITHUB_CLIENT_SECRET ?? "").trim(),
     googleClientId: (env.AUTH_GOOGLE_CLIENT_ID ?? "").trim(),
@@ -262,6 +265,7 @@ export function serviceFiles(s: Settings, x: Secrets, address: string): ServiceF
         AUTH_GITHUB_CLIENT_SECRET: s.githubClientSecret,
         AUTH_GOOGLE_CLIENT_ID: s.googleClientId,
         AUTH_GOOGLE_CLIENT_SECRET: s.googleClientSecret,
+        TELEGRAM_BOT_TOKEN: s.telegramBotToken,
       }),
     },
     {

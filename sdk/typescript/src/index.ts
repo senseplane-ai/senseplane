@@ -3,7 +3,7 @@
 
 export { Senseplane } from "./client.js";
 export type {
-  SenseplaneOptions, Source, Watch, Trigger, Event, Clip, Grant, Agent, Webhook, Usage, Sense, Account, Delivery, Role, Me, Member, Invite,
+  SenseplaneOptions, Source, Watch, Trigger, Event, Clip, Grant, Agent, Webhook, Channel, Usage, Sense, Account, Delivery, Role, Me, Member, Invite,
   Conversation, Message, Moment, SuggestedWatch, ConversationStreamEvent,
   LiveViewSession,
   Destination, WatchSchedule, InboxItem, WatchTestResult,

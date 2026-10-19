@@ -19,17 +19,17 @@ const utc = (s: string) => new Date(`${s}Z`);
 describe("routing", () => {
   const hooks = [{ id: "whk_a", events: ["watch.triggered"] }, { id: "whk_b", events: ["*"] }, { id: "whk_c", events: ["detection.person"] }];
   it("sends to every subscribed webhook without notify", () => {
-    expect(routeEvent("watch.triggered", undefined, hooks)).toEqual({ webhooks: ["whk_a", "whk_b"], agents: [] });
-    expect(routeEvent("watch.triggered", [], hooks)).toEqual({ webhooks: ["whk_a", "whk_b"], agents: [] });
+    expect(routeEvent("watch.triggered", undefined, hooks)).toEqual({ webhooks: ["whk_a", "whk_b"], agents: [], channels: [] });
+    expect(routeEvent("watch.triggered", [], hooks)).toEqual({ webhooks: ["whk_a", "whk_b"], agents: [], channels: [] });
   });
-  it("sends only to the listed webhooks and agents with notify", () => {
-    const notify = [{ type: "webhook" as const, id: "whk_c" }, { type: "agent" as const, id: "agt_x" }, { type: "agent" as const, id: "agt_x" }];
-    expect(routeEvent("watch.triggered", notify, hooks)).toEqual({ webhooks: ["whk_c"], agents: ["agt_x"] });
-    expect(routeEvent("watch.triggered", [{ type: "agent", id: "agt_x" }], hooks)).toEqual({ webhooks: [], agents: ["agt_x"] });
+  it("sends only to the listed webhooks, agents and channels with notify", () => {
+    const notify = [{ type: "webhook" as const, id: "whk_c" }, { type: "agent" as const, id: "agt_x" }, { type: "agent" as const, id: "agt_x" }, { type: "channel" as const, id: "chn_t" }];
+    expect(routeEvent("watch.triggered", notify, hooks)).toEqual({ webhooks: ["whk_c"], agents: ["agt_x"], channels: ["chn_t"] });
+    expect(routeEvent("watch.triggered", [{ type: "agent", id: "agt_x" }], hooks)).toEqual({ webhooks: [], agents: ["agt_x"], channels: [] });
     expect(routeEvent("watch.triggered", [{ type: "webhook", id: "whk_gone" }], hooks).webhooks).toEqual([]);
   });
   it("keeps subscriptions for events that aren't watch-triggered", () => {
-    expect(routeEvent("detection.person", [{ type: "agent", id: "agt_x" }], hooks)).toEqual({ webhooks: ["whk_b", "whk_c"], agents: [] });
+    expect(routeEvent("detection.person", [{ type: "agent", id: "agt_x" }], hooks)).toEqual({ webhooks: ["whk_b", "whk_c"], agents: [], channels: [] });
   });
 });
 

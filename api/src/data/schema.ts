@@ -217,6 +217,8 @@ export interface InvitesTable {
   revoked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
+export type AgentKind = "key" | "app" | "channel";
+
 export interface UserIdentitiesTable {
   provider: string;
   provider_user_id: string;
@@ -231,8 +233,8 @@ export interface AgentsTable {
   name: string;
   created_at: Timestamp;
   revoked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
-  /** `key`: made for code with POST /v1/agents; `app`: an MCP client approved on the consent page (ADR 0048). */
-  kind: ColumnType<"key" | "app", "key" | "app" | undefined, "key" | "app">;
+  /** `key`: made for code with POST /v1/agents; `app`: an MCP client approved on the consent page (ADR 0048); `channel`: a linked chat (ADR 0059). */
+  kind: ColumnType<AgentKind, AgentKind | undefined, AgentKind>;
   client_name: ColumnType<string | null, string | null | undefined, string | null>;
   /** Redirect host without port (loopback as `localhost`): with client_name, what makes a reconnect reuse the agent. */
   client_host: ColumnType<string | null, string | null | undefined, string | null>;
@@ -346,7 +348,65 @@ export interface WatchesTable {
   claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
-export type Destination = { type: "webhook" | "agent"; id: string };
+export type Destination = { type: "webhook" | "agent" | "channel"; id: string };
+
+/** A chat in a messaging app that alerts go to and that can ask (ADR 0059). */
+export interface ChannelsTable {
+  id: string;
+  account_id: string;
+  kind: "telegram";
+  chat_id: string;
+  chat_type: string;
+  name: string;
+  status: ColumnType<"active" | "blocked" | "unlinked", "active" | "blocked" | "unlinked" | undefined, "active" | "blocked" | "unlinked">;
+  agent_id: string;
+  /** The agent's API key, encrypted with the secret box. */
+  agent_key: string;
+  snapshots: ColumnType<boolean, boolean | undefined, boolean>;
+  can_ask: ColumnType<boolean, boolean | undefined, boolean>;
+  muted_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  selected_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  conversation_id: ColumnType<string | null, string | null | undefined, string | null>;
+  conversation_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  next_send_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  linked_by: ColumnType<string | null, string | null | undefined, string | null>;
+  created_at: Timestamp;
+}
+
+export interface ChannelLinksTable {
+  id: string;
+  account_id: string;
+  kind: string;
+  code_hash: string;
+  created_by: string | null;
+  expires_at: ColumnType<Date, Date | string, Date | string>;
+  used_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: Timestamp;
+}
+
+/** The outbox: an event to send, or a body (answers, notices). */
+export interface ChannelMessagesTable {
+  id: string;
+  account_id: string;
+  channel_id: string;
+  event_id: ColumnType<string | null, string | null | undefined, string | null>;
+  body: ColumnType<ChannelBody | null, string | null | undefined, string | null>;
+  status: ColumnType<"pending" | "sent" | "failed" | "skipped", "pending" | "sent" | "failed" | "skipped" | undefined, "pending" | "sent" | "failed" | "skipped">;
+  attempts: Generated<number>;
+  next_attempt_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  last_error: ColumnType<string | null, string | null | undefined, string | null>;
+  sent_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: Timestamp;
+}
+
+export interface ChannelBody {
+  /** Telegram HTML. */
+  text: string;
+  buttons?: { text: string; url?: string; data?: string }[];
+  /** A stored snapshot to send as a photo, with the text as its caption. */
+  photo_key?: string;
+}
 export type WatchSchedule = { days?: string[]; from: string; to: string; time_zone?: string };
 
 export interface AgentInboxTable {
@@ -476,4 +536,7 @@ export interface Database {
   api_keys: ApiKeysTable;
   segments: SegmentsTable;
   instance_secrets: InstanceSecretsTable;
+  channels: ChannelsTable;
+  channel_links: ChannelLinksTable;
+  channel_messages: ChannelMessagesTable;
 }

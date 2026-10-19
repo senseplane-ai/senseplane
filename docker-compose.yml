@@ -45,6 +45,10 @@ x-settings: &settings
   AUTH_GITHUB_CLIENT_SECRET: ""
   AUTH_GOOGLE_CLIENT_ID: ""
   AUTH_GOOGLE_CLIENT_SECRET: ""
+  # Optional: alerts and questions in Telegram. Create a bot by messaging
+  # @BotFather (/newbot), paste its token here, then link chats from
+  # Settings → Notifications. No public URL or open port is needed.
+  TELEGRAM_BOT_TOKEN: ""
   # Passwords for the database, Valkey and object storage. Change them before
   # you put real footage here. These services never leave this machine (no
   # ports are published), and a change takes effect on the next

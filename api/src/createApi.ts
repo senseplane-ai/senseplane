@@ -41,6 +41,10 @@ import { markSilentBridges, registerBridgeRoutes } from "./routes/bridges.js";
 import { closeStaleActivities } from "./activity.js";
 import { startScheduledWatches } from "./scheduled-watches.js";
 import { type Job, startJobs } from "./jobs.js";
+import {
+  type ChannelDeps, registerChannelRoutes, startChannelSender, startTelegramUpdates, telegramPollJob, telegramWebhookJob,
+} from "./channels.js";
+import { type TelegramConfig, TelegramBot, telegramConfigFromEnv } from "./telegram.js";
 import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
@@ -116,6 +120,10 @@ export interface CreateApiOptions {
   workers?: boolean;
   /** A bus to use instead of connecting to valkeyUrl (tests). */
   bus?: ApiBus;
+  /** Telegram (ADR 0059); default from TELEGRAM_BOT_TOKEN and TELEGRAM_*; false turns it off. */
+  telegram?: TelegramConfig | false;
+  /** Telegram API calls (tests inject a fake). */
+  telegramFetch?: typeof fetch;
   /** Live view (ADR 0042): viewers idle this long are closed (default LIVE_IDLE_TIMEOUT_SECONDS or 600). */
   liveIdleTimeoutSeconds?: number;
   /** Live view join token lifetime (default 60 s). */
@@ -402,6 +410,13 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   });
   const ipSalt = (await data.secrets.get("demo_ip_salt")) ?? (await data.secrets.putIfAbsent("demo_ip_salt", newPlaybackSecret()));
   registerTrustRoutes(app, { data, storage, urls: eventUrls });
+  // Telegram chats: alerts and questions (ADR 0059).
+  const telegramConfig = options.telegram === false ? undefined : options.telegram ?? telegramConfigFromEnv();
+  const channels: ChannelDeps = {
+    data, app, storage, audit, log: app.log, consoleUrl: auth.consoleUrls[0],
+    ...(telegramConfig ? { bot: new TelegramBot(telegramConfig, options.telegramFetch) } : {}),
+  };
+  registerChannelRoutes(channels);
   // Connected apps: MCP consent creates agents, the MCP service redeems their keys (ADR 0048).
   registerAppRoutes(app, { data, audit });
   registerUsageRoutes(app, { data, quotaFor });
@@ -493,6 +508,12 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
         },
       }] : []),
     ];
+    if (channels.bot) {
+      if (channels.bot.config.mode === "polling") jobs.push(telegramPollJob(channels));
+      else if (options.apiPublicUrl) jobs.push(telegramWebhookJob(channels, options.apiPublicUrl.replace(/\/$/, "")));
+      stoppers.push(startTelegramUpdates(channels));
+    }
+    stoppers.push(startChannelSender(channels));
     stoppers.push(startJobs(data, jobs, app.log));
     stoppers.push(startScheduledWatches(data, app.log));
     // Deliveries are built outside a request, so links use the configured public URL.

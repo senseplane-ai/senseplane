@@ -26,9 +26,11 @@ has a test that says when it is done; results are in [`milestones/`](milestones/
 - **Privacy:** per-account encryption keys; face and plate redaction before the model.
 - **SDKs:** Python SDK.
 - **Understanding:** image embeddings; more watch modes (count, duration, first/last, absence).
+- **Talk-back ("Speak"):** send audio to a camera's speaker. First push-to-talk in live view and to phone cameras (the capture page plays it), then IP cameras through the bridge (ONVIF backchannel first, then vendor APIs; the bridge converts Opus to G.711), and talking to several cameras at once. For agents, a `speak` tool with text-to-speech, also as a watch action. A new **Speak** permission, off by default like Listen, with every use in the audit log; the rules for agents speaking go in [lawful camera use](lawful-use.md) first.
 - **Later:** WHEP egress for third-party players (live view itself ships over the signalling protocol, ADR 0042), H.265, public stream URLs, Telegram and WhatsApp delivery, Kubernetes/Helm.
 
 ## Never in scope
 
 Face recognition, plate reading, speech transcription without a legal review,
-actuation and hardware. Senseplane does perception, not decisions.
+actuation (beyond talk-back through a camera's own speaker) and hardware.
+Senseplane does perception, not decisions.

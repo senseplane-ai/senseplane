@@ -314,5 +314,19 @@ describe("watch destinations over the API", () => {
     // Agents need to see the sources; bad ranges are refused.
     expect((await call(owner, "POST", "/v1/watches/test", { instruction: "Someone", sources: [front], from: range.to, to: range.from })).statusCode).toBe(400);
     expect((await call(agentX.api_key, "POST", "/v1/watches/test", { instruction: "Someone at the door", sources: [front], ...range })).statusCode).toBe(200);
+
+    // Checking history for a tracking watch keeps what it finds as the watch's activities (ADR 0057).
+    const track = (await call(owner, "POST", "/v1/watches", { instruction: "Track when a package is left", sources: [front, back], mode: "track" })).json();
+    const checked = (await call(owner, "POST", "/v1/activity/check", { watch_id: track.id, ...range, max_checks: 10 })).json();
+    expect(checked.stored).toBe(checked.matches.length);
+    expect(checked.stored).toBeGreaterThanOrEqual(3);
+    const counted = (await call(owner, "POST", "/v1/activity/query", { measure: "count", what: { watch_id: track.id }, from: range.from })).json();
+    expect(counted.value).toBe(checked.stored);
+    const list = (await call(owner, "GET", `/v1/activities?kind=watch&label=${track.id}&from=${range.from}`)).json().data;
+    expect(list.every((x: { checked: boolean; verified: boolean }) => x.checked && x.verified)).toBe(true);
+    // Run again: the same moments, not counted twice.
+    await call(owner, "POST", "/v1/activity/check", { watch_id: track.id, ...range, max_checks: 10 });
+    expect((await call(owner, "POST", "/v1/activity/query", { measure: "count", what: { watch_id: track.id }, from: range.from })).json().value).toBe(checked.stored);
+    expect((await call(owner, "POST", "/v1/activity/check", { ...range })).statusCode).toBe(400);
   });
 });

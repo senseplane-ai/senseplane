@@ -47,6 +47,8 @@ def test_package_watch_fires_once_after_the_delivery(detector):
     assert door[0].t - 1_000_000.0 > 30  # after the person has been gone for a few seconds, not while crouching
     assert door[0].verify["prompt"].startswith("Is there a package")
     assert door[0].frame is not None
+    # The frame from when the person arrived goes along, so the check can compare before and after.
+    assert door[0].before is not None and door[0].before.shape == door[0].frame.shape and (door[0].before != door[0].frame).any()
     assert len(fires_on("van-driving-640x360.mp4", w, detector)) <= 1  # background people; the VLM rejects it
     for empty in ("rain-window-night-640x360.mp4", "night-sky-empty-640x480.mp4", "storm-rain-night-360x640.mp4"):
         assert fires_on(empty, w, detector) == [], empty

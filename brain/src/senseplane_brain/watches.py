@@ -41,6 +41,7 @@ class Fire:
     verify: dict | None
     frame: np.ndarray | None = None
     mode: str = "alert"
+    before: np.ndarray | None = None  # sequences: the frame when the first step happened, for a before/after check
 
 
 class _State:
@@ -67,6 +68,7 @@ class Ctx:
     zones: dict[str, list] = field(default_factory=dict)
     sounds: dict[str, float] | None = None  # set on audio chunks
     tick: bool = False
+    frame: np.ndarray | None = None
 
 
 class Sustained:
@@ -182,19 +184,23 @@ class SequenceState(_State):
         self.steps = [make_state(s) for s in trig["steps"]]
         self.within = float(trig["within_s"])
         self.index, self.started = 0, None
+        self.first: np.ndarray | None = None  # the frame when the first step happened
+        self.before: np.ndarray | None = None  # ...kept for the firing that completes the sequence
 
     def step(self, ctx: Ctx) -> bool:
         if self.started is not None and ctx.t - self.started > self.within:
-            self.index, self.started = 0, None
+            self.index, self.started, self.first = 0, None, None
         fired = False
         # Every step sees every input, so later steps keep their own state current.
         results = [s.step(ctx) for s in self.steps]
         if results[self.index]:
             if self.index == 0:
                 self.started = ctx.t
+                self.first = None if ctx.frame is None else ctx.frame.copy()
             self.index += 1
             if self.index == len(self.steps):
                 self.index, self.started, fired = 0, None, True
+                self.before, self.first = self.first, None
         return fired
 
 
@@ -325,7 +331,7 @@ class WatchEngine:
             if not self.markers.claim(f"watch:{key}:{source_id}", 1.0 if track else max(float(comp.get("cooldown_s", 0)), 1.0), ctx.t):
                 continue
             fires.append(Fire(w["id"], account_id, source_id, ctx.t, describe(comp["trigger"]), comp.get("verify"),
-                              None if frame is None else frame.copy(), "track" if track else "alert"))
+                              None if frame is None else frame.copy(), "track" if track else "alert", getattr(st, "before", None)))
         return fires
 
     def on_frame(self, account_id: str, source_id: str, tracks: list[Track], motion_mask: np.ndarray | None,
@@ -333,7 +339,7 @@ class WatchEngine:
         h, w = frame.shape[:2]
         zmap = {z["name"]: z["polygon"] for z in zones}
         tz = {tr.id: zones_for(tr.box, w, h, zones) for tr in tracks}
-        return self.evaluate(account_id, source_id, Ctx(t, tracks, tz, motion_mask, zmap), frame)
+        return self.evaluate(account_id, source_id, Ctx(t, tracks, tz, motion_mask, zmap, frame=frame), frame)
 
     def on_audio(self, account_id: str, source_id: str, sounds: dict[str, float], t: float, frame: np.ndarray | None) -> list[Fire]:
         return self.evaluate(account_id, source_id, Ctx(t, sounds=sounds), frame)

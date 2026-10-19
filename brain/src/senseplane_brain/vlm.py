@@ -113,14 +113,19 @@ class ModelClient:
                 log.warning("model call failed (%s), attempt %d: %s", kind, attempt, err)
         raise RuntimeError(f"model call failed twice ({kind})")
 
-    def ask(self, rgb: np.ndarray, question: str, meta: dict | None = None) -> Answer:
+    def ask(self, rgb: np.ndarray, question: str, meta: dict | None = None, before: np.ndarray | None = None) -> Answer:
+        """One frame, or with `before` two frames of the same camera, for a question about what changed."""
         system = ("You look at one frame from a home or small-business camera and answer a question about it. "
                   'Reply with JSON only: {"yes": true|false|null, "answer": "<one short sentence>", "confidence": 0..1}. '
                   "Use yes=null when the question is not a yes/no question. Describe only what is visible; never identify people by name.")
-        out = self._json(self.vision_model, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": [{"type": "text", "text": question}, {"type": "image_url", "image_url": {"url": _jpeg_data_url(rgb)}}]},
-        ], "vlm_calls", meta)
+        content: list[dict] = [{"type": "text", "text": question}, {"type": "image_url", "image_url": {"url": _jpeg_data_url(rgb)}}]
+        if before is not None:
+            system = system.replace("one frame", "two frames of the same camera, before and after,")
+            content = [{"type": "text", "text": f"{question}\nThe first image is from when it started (before); the second is now (after). "
+                        "Compare them: what is missing, new or moved, and what the person did."},
+                       {"type": "image_url", "image_url": {"url": _jpeg_data_url(before)}},
+                       {"type": "image_url", "image_url": {"url": _jpeg_data_url(rgb)}}]
+        out = self._json(self.vision_model, [{"role": "system", "content": system}, {"role": "user", "content": content}], "vlm_calls", meta)
         yes = out.get("yes")
         return Answer(yes if isinstance(yes, bool) else None, str(out.get("answer", "")), float(out.get("confidence", 0.0)))
 

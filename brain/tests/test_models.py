@@ -38,6 +38,21 @@ def test_ask_sends_the_image_and_parses_json(env):
     assert client.cost_usd == pytest.approx(0.0001)
 
 
+def test_ask_with_a_before_frame_sends_both_in_order(env):
+    mock = MockOpenAI(lambda body: (200, '{"yes": true, "answer": "The parcel by the door is gone.", "confidence": 0.9}'))
+    env(mock)
+    before, after = np.zeros((36, 64, 3), dtype=np.uint8), np.full((36, 64, 3), 255, dtype=np.uint8)
+    a = ModelClient().ask(after, "Did the person take a parcel?", before=before)
+    mock.close()
+    assert a.yes is True
+    req = mock.requests[0]
+    assert "two frames of the same camera" in req["messages"][0]["content"]
+    parts = req["messages"][1]["content"]
+    assert parts[0]["text"].startswith("Did the person take a parcel?\nThe first image is from when it started")
+    assert [p["type"] for p in parts] == ["text", "image_url", "image_url"]
+    assert parts[1]["image_url"]["url"] != parts[2]["image_url"]["url"]  # before, then after
+
+
 def test_retries_without_json_mode_when_the_endpoint_refuses_it(env):
     def handler(body):
         if "response_format" in body:

@@ -19,6 +19,7 @@
 import asyncio
 import base64
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -660,7 +661,9 @@ class Worker:
             else:
                 meta = {"account": fire.account_id, "purpose": "verify"}
                 with telemetry.tracer().start_as_current_span("brain.verify", attributes={"senseplane.watch_id": fire.watch_id, "senseplane.source_id": fire.source_id}) as vspan:
-                    a = await asyncio.get_running_loop().run_in_executor(None, telemetry.in_context(self.model.ask), fire.frame, fire.verify["prompt"], meta)
+                    # A sequence (arrived, then left) is checked on before and after, since the after frame alone can't show what happened.
+                    ask = functools.partial(self.model.ask, before=fire.before) if fire.before is not None else self.model.ask
+                    a = await asyncio.get_running_loop().run_in_executor(None, telemetry.in_context(ask), fire.frame, fire.verify["prompt"], meta)
                     vspan.set_attribute("senseplane.verified", a.yes is True)
                     vspan.set_attribute("senseplane.confidence", float(a.confidence or 0))
                 if a.yes is not True or a.confidence < float(fire.verify.get("min_confidence", 0.7)):

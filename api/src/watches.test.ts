@@ -86,6 +86,24 @@ describe("watches, ask, memory search, sensor watches", () => {
     expect((await call("POST", "/v1/watches", { instruction: "Tell me", sources: ["src_nope"] })).statusCode).toBe(404);
   });
 
+  it("makes tracking watches (ADR 0057) and switches a watch between alert and track", async () => {
+    const w = (await call("POST", "/v1/watches", { instruction: "Track when someone eats at the table", sources: [src], mode: "track" })).json();
+    expect(w.mode).toBe("track");
+    expect(kv.get(`${acc}.${w.id}`)).toMatchObject({ mode: "track" });
+    const alert = (await call("PATCH", `/v1/watches/${w.id}`, { mode: "alert" })).json();
+    expect(alert.mode).toBe("alert");
+    expect(kv.get(`${acc}.${w.id}`)).toMatchObject({ mode: "alert" });
+    expect((await call("POST", "/v1/watches", { instruction: "Track meals", sources: [src], mode: "count" })).statusCode).toBe(400);
+    await call("DELETE", `/v1/watches/${w.id}`);
+  });
+
+  it("puts a camera at a site", async () => {
+    const s = (await call("POST", "/v1/sources", { name: "Till", type: "browser", site: "High St" })).json();
+    expect(s.site).toBe("High St");
+    expect((await call("PATCH", `/v1/sources/${s.id}`, { site: "Market Sq" })).json().site).toBe("Market Sq");
+    expect((await call("PATCH", `/v1/sources/${s.id}`, { site: null })).json().site).toBeNull();
+  });
+
   it("answers ask from the brain", async () => {
     const r = await call("POST", `/v1/sources/${src}/ask`, { question: "Is the stove on?" });
     expect(r.json()).toMatchObject({ answer: "The stove is off.", yes: false, confidence: 0.9 });

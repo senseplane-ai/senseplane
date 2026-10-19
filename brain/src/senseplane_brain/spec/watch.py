@@ -18,6 +18,7 @@ from . import watch_schedule
 
 class Mode(StrEnum):
     alert = 'alert'
+    track = 'track'
 
 
 class Verify(BaseModel):
@@ -81,7 +82,7 @@ class Watch(BaseModel):
     mode: Annotated[
         Mode,
         Field(
-            description='Only alert in v1; more modes are added without breaking changes.'
+            description='alert: the watch posts watch.triggered events and notifies its destinations. track: it only records activities, to answer questions later (ADR 0057). Both record activities.'
         ),
     ]
     compiled: Compiled

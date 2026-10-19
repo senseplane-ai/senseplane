@@ -23,6 +23,8 @@ tags:
   - name: watches
   - name: events
   - name: memory
+  - name: activity
+    description: Activities (one thing, in one place, from a start to an end) and questions about them (ADR 0057).
   - name: webhooks
   - name: agents
     description: Agent keys. An agent sees only what its grants allow (ADR 0024).
@@ -1068,6 +1070,50 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/MemorySearchResponse'}
         default: {$ref: '#/components/responses/Error'}
+  /activity/query:
+    post:
+      operationId: queryActivity
+      summary: Answer a question about activities (count, duration, first/last, absence, order, trends)
+      description: >-
+        One structured question over activities (ADR 0057): presence of a
+        label, a watch's activities, a sound or a sensor threshold, in a
+        window in a time zone, optionally per hour, day, camera or site and
+        compared with what is usual. The API does the arithmetic and reports
+        how much of the window was recorded. Grants apply: presence and watch
+        activities need video on their source, sounds audio.
+      tags: [activity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ActivityQuery'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ActivityAnswer'}
+        default: {$ref: '#/components/responses/Error'}
+  /activities:
+    get:
+      operationId: listActivities
+      summary: List activities (newest first)
+      tags: [activity]
+      parameters:
+        - {name: source, in: query, required: false, description: Source id or name, schema: {type: string}}
+        - {name: kind, in: query, required: false, description: 'presence, sound or watch', schema: {type: string, enum: [presence, sound, watch]}}
+        - {name: label, in: query, required: false, description: 'A label, sound class or watch id', schema: {type: string}}
+        - {name: zone, in: query, required: false, description: Zone name, schema: {type: string}}
+        - {name: from, in: query, required: false, description: 'Range start (RFC 3339; default 24 h ago)', schema: {type: string, format: date-time}}
+        - {name: to, in: query, required: false, description: 'Range end (RFC 3339; default now)', schema: {type: string, format: date-time}}
+        - {name: limit, in: query, required: false, description: 'Page size (1–500, default 100)', schema: {type: integer}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ActivityList'}
+        default: {$ref: '#/components/responses/Error'}
   /webhooks:
     post:
       operationId: createWebhook
@@ -1806,6 +1852,7 @@ components:
       properties:
         name: {type: string, minLength: 1, maxLength: 120}
         location: {type: string, maxLength: 120}
+        site: {type: [string, 'null'], maxLength: 120, description: 'A place the source belongs to, for grouping questions across places'}
         type: {type: string, enum: [browser, sensor, whip, rtsp], description: 'browser sources get a capture link; whip sources get a WHIP URL and bearer token (OBS, encoders); rtsp sources are IP cameras relayed by a bridge and get a bridge token and docker command; sensor sources get an integration token for pushing readings'}
         record_audio: {type: boolean, default: false, description: Ignored for rtsp and sensor sources (bridge cameras are video only)}
         senses:
@@ -1822,6 +1869,7 @@ components:
       properties:
         name: {type: string, minLength: 1, maxLength: 120}
         location: {type: string, maxLength: 120}
+        site: {type: [string, 'null'], maxLength: 120}
         record_audio: {type: boolean}
         sensor_thresholds:
           type: [object, 'null']
@@ -1978,6 +2026,7 @@ components:
         sources: {type: array, minItems: 1, items: {type: string}, description: 'Source ids or names (case-insensitive). Several cameras are watched independently; events name the camera.'}
         duration_minutes: {type: integer, minimum: 1, maximum: 525600, description: 'Stop watching after this long (sets `expires_at`)'}
         notify: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Destination'}, description: 'Where watch.triggered goes (ADR 0043); absent or empty: every subscribed webhook. An agent key may list only itself.'}
+        mode: {type: string, enum: [alert, track], default: alert, description: 'track: record activities only, to answer questions later, with no events or notifications (ADR 0057)'}
         active_hours:
           oneOf: [{type: 'null'}, {$ref: '#/components/schemas/WatchSchedule'}]
     WatchUpdate:
@@ -1985,6 +2034,7 @@ components:
       properties:
         instruction: {type: string}
         status: {type: string, enum: [active, paused]}
+        mode: {type: string, enum: [alert, track]}
         compiled: {type: object}
         notify: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Destination'}, description: 'Replaces the destinations; [] goes back to every subscribed webhook.'}
         active_hours:
@@ -2207,6 +2257,16 @@ components:
     Conversation: {$ref: './schemas/conversation.json'}
     Message: {$ref: './schemas/message.json'}
     Moment: {$ref: './schemas/moment.json'}
+    Activity: {$ref: './schemas/activity.json'}
+    ActivityQuery: {$ref: './schemas/activity-query.json'}
+    ActivityAnswer: {$ref: './schemas/activity-answer.json'}
+    ActivityList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/Activity'}
     SuggestedWatch: {$ref: './schemas/suggested-watch.json'}
     ConversationCreate:
       type: object

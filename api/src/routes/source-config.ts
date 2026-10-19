@@ -45,6 +45,7 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
           properties: {
             name: { type: "string", minLength: 1, maxLength: 120 },
             location: { type: "string", maxLength: 120 },
+            site: { type: ["string", "null"], maxLength: 120 },
             record_audio: { type: "boolean" },
             retention_days: { type: ["integer", "null"], minimum: 1 },
             retention_mode: { type: ["string", "null"], enum: ["days", "fill", null] },
@@ -67,7 +68,7 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
         && (await deps.data.withAccount(req.accountId!, (s) => s.account.get()))?.retention_max_bytes == null && (await deps.storageCap?.(req.accountId!)) == null) {
         throw new ApiError(400, "validation_failed", "fill mode needs retention_max_bytes on this source or the account");
       }
-      for (const k of ["name", "location", "record_audio", "retention_days", "retention_mode", "retention_max_bytes"]) if (k in b) set[k] = b[k];
+      for (const k of ["name", "location", "site", "record_audio", "retention_days", "retention_mode", "retention_max_bytes"]) if (k in b) set[k] = b[k];
       for (const k of ["zones", "privacy_masks", "sensor_thresholds"]) if (k in b) set[k] = b[k] === null ? null : JSON.stringify(b[k]);
       if ("privacy_masks" in b) set.view_changed_at = null; // masks checked against the current view
       const row = await deps.data.withAccount(req.accountId!, async (s) => {

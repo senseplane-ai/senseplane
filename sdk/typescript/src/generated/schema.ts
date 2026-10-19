@@ -649,6 +649,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/activity/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer a question about activities (count, duration, first/last, absence, order, trends)
+         * @description One structured question over activities (ADR 0057): presence of a label, a watch's activities, a sound or a sensor threshold, in a window in a time zone, optionally per hour, day, camera or site and compared with what is usual. The API does the arithmetic and reports how much of the window was recorded. Grants apply: presence and watch activities need video on their source, sounds audio.
+         */
+        post: operations["queryActivity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List activities (newest first) */
+        get: operations["listActivities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks": {
         parameters: {
             query?: never;
@@ -1120,6 +1157,8 @@ export interface components {
         SourceCreate: {
             name: string;
             location?: string;
+            /** @description A place the source belongs to, for grouping questions across places */
+            site?: string | null;
             /**
              * @description browser sources get a capture link; whip sources get a WHIP URL and bearer token (OBS, encoders); rtsp sources are IP cameras relayed by a bridge and get a bridge token and docker command; sensor sources get an integration token for pushing readings
              * @enum {string}
@@ -1140,6 +1179,7 @@ export interface components {
         SourceUpdate: {
             name?: string;
             location?: string;
+            site?: string | null;
             record_audio?: boolean;
             sensor_thresholds?: {
                 temperature?: {
@@ -1283,12 +1323,20 @@ export interface components {
             duration_minutes?: number;
             /** @description Where watch.triggered goes (ADR 0043); absent or empty: every subscribed webhook. An agent key may list only itself. */
             notify?: components["schemas"]["destination"][];
+            /**
+             * @description track: record activities only, to answer questions later, with no events or notifications (ADR 0057)
+             * @default alert
+             * @enum {string}
+             */
+            mode: "alert" | "track";
             active_hours?: null | components["schemas"]["watch-schedule"];
         };
         WatchUpdate: {
             instruction?: string;
             /** @enum {string} */
             status?: "active" | "paused";
+            /** @enum {string} */
+            mode?: "alert" | "track";
             compiled?: Record<string, never>;
             /** @description Replaces the destinations; [] goes back to every subscribed webhook. */
             notify?: components["schemas"]["destination"][];
@@ -1502,6 +1550,12 @@ export interface components {
         Conversation: components["schemas"]["conversation"];
         Message: components["schemas"]["message"];
         Moment: components["schemas"]["moment"];
+        Activity: components["schemas"]["activity"];
+        ActivityQuery: components["schemas"]["activity-query"];
+        ActivityAnswer: components["schemas"]["activity-answer"];
+        ActivityList: {
+            data: components["schemas"]["activity"][];
+        };
         SuggestedWatch: components["schemas"]["suggested-watch"];
         ConversationCreate: {
             title?: string;
@@ -1648,6 +1702,8 @@ export interface components {
             id: string;
             name: string;
             location?: string;
+            /** @description A place the source belongs to (a home, a shop, a depot), for grouping questions across places (ADR 0057). */
+            site?: string | null;
             /**
              * @description rtsp: an IP camera relayed by a bridge (ADR 0045). rtmp and bridge_camera are reserved.
              * @enum {string}
@@ -2005,10 +2061,10 @@ export interface components {
             instruction: string;
             sources: string[];
             /**
-             * @description Only alert in v1; more modes are added without breaking changes.
+             * @description alert: the watch posts watch.triggered events and notifies its destinations. track: it only records activities, to answer questions later (ADR 0057). Both record activities.
              * @enum {string}
              */
-            mode: "alert";
+            mode: "alert" | "track";
             compiled: {
                 trigger: components["schemas"]["trigger"];
                 verify?: {
@@ -2039,6 +2095,205 @@ export interface components {
             notify: components["schemas"]["destination"][];
             /** @description When the watch may fire, in a time zone; null means always (ADR 0043). Applies on top of `compiled.active_hours`. */
             active_hours: null | components["schemas"]["watch-schedule"];
+        };
+        /**
+         * ActivityQuery
+         * @description One question about activities (ADR 0057). The API does the arithmetic; the window defaults to today in time_zone.
+         */
+        "activity-query": {
+            /**
+             * @description exists/count/first/last: activities that began in the window; since_last: seconds since the last one ended (0 if one is going on; looks back 30 days); total_duration/longest/average_duration: seconds inside the window; longest_gap: the longest stretch with none; timeline: the activities; sequence: `what` followed by `then` within within_s; *_value: sensor readings
+             * @enum {unknown}
+             */
+            measure: "exists" | "count" | "first" | "last" | "since_last" | "total_duration" | "longest" | "average_duration" | "longest_gap" | "timeline" | "sequence" | "average_value" | "min_value" | "max_value";
+            /** @description The thing measured: exactly one of label, watch_id, sound or sensor. */
+            what: {
+                /** @description Presence of a detector label: person, vehicle, animal or an everyday object (cup, laptop, phone, ...; see Detector labels) */
+                label?: string;
+                /** @description A watch's activities: while its condition held and passed its check (mode track or alert) */
+                watch_id?: string;
+                /**
+                 * @description A sound class
+                 * @enum {unknown}
+                 */
+                sound?: "crying" | "glass_break" | "alarm" | "dog" | "speech_present";
+                /** @description A sensor: its readings, or the spans above/below a threshold */
+                sensor?: {
+                    /** @description temperature or humidity */
+                    sense: string;
+                    above?: number;
+                    below?: number;
+                };
+                /** @description Presence only: in this zone (default: anywhere in view) */
+                zone?: string;
+                /** @description Only activities with at least this many at once */
+                min_count?: number;
+                /** @description Only activities at least this long */
+                min_duration_s?: number;
+            };
+            /** @description sequence only: what follows */
+            then?: {
+                /** @description Presence of a detector label: person, vehicle, animal or an everyday object (cup, laptop, phone, ...; see Detector labels) */
+                label?: string;
+                /** @description A watch's activities: while its condition held and passed its check (mode track or alert) */
+                watch_id?: string;
+                /**
+                 * @description A sound class
+                 * @enum {unknown}
+                 */
+                sound?: "crying" | "glass_break" | "alarm" | "dog" | "speech_present";
+                /** @description A sensor: its readings, or the spans above/below a threshold */
+                sensor?: {
+                    /** @description temperature or humidity */
+                    sense: string;
+                    above?: number;
+                    below?: number;
+                };
+                /** @description Presence only: in this zone (default: anywhere in view) */
+                zone?: string;
+                /** @description Only activities with at least this many at once */
+                min_count?: number;
+                /** @description Only activities at least this long */
+                min_duration_s?: number;
+            };
+            /** @description sequence only: how soon after `what` ends `then` must start (default 3600) */
+            within_s?: number;
+            /** @description Source ids or names (default: all the caller may see) */
+            sources?: string[];
+            /** @description Only sources at these sites */
+            sites?: string[];
+            /**
+             * @description The window, in time_zone (default today)
+             * @enum {unknown}
+             */
+            period?: "today" | "yesterday" | "this_week" | "last_hour" | "last_24_hours" | "last_7_days" | "last_30_days";
+            /**
+             * Format: date-time
+             * @description Window start, instead of period
+             */
+            from?: string;
+            /**
+             * Format: date-time
+             * @description Window end (default now)
+             */
+            to?: string;
+            /** @description IANA time zone for today, days, hours and between (default UTC) */
+            time_zone?: string;
+            /** @description Only this part of each day, HH:MM; to before from runs overnight (22:00–06:00) */
+            between?: {
+                from: string;
+                to: string;
+            };
+            /**
+             * @description Also answer per hour, day, weekday, camera, zone or site
+             * @enum {unknown}
+             */
+            group_by?: "hour" | "day" | "weekday" | "source" | "zone" | "site";
+            /**
+             * @description Also compare with what is usual: the same window shifted back (days the camera was mostly off are left out)
+             * @enum {unknown}
+             */
+            compare?: "previous_period" | "same_weekday" | "last_14_days" | "last_28_days";
+            /** @description Evidence items to return (default 10) */
+            limit?: number;
+        };
+        /**
+         * ActivityAnswer
+         * @description The answer to an ActivityQuery: the value, the activities behind it and how much of the window was recorded.
+         */
+        "activity-answer": {
+            measure: string;
+            /** @description A count, seconds, a boolean, an RFC 3339 time (first, last) or a sensor value; null when there is nothing to measure */
+            value: number | boolean | string | null;
+            /** @enum {unknown} */
+            unit: "boolean" | "count" | "seconds" | "time" | "value" | null;
+            window: {
+                /** Format: date-time */
+                from: string;
+                /** Format: date-time */
+                to: string;
+                time_zone: string;
+            };
+            /** @description Activities the value is based on */
+            matched: number;
+            groups?: {
+                key: string;
+                value: number | string | null;
+            }[];
+            baseline?: {
+                compare: string;
+                /** @description Past windows with enough recording to count */
+                windows: number;
+                /** @description What is usual (times: seconds after midnight) */
+                mean: number | null;
+                ratio: number | null;
+                delta: number | null;
+                /** @description Each past window, oldest first; null when the camera was mostly off */
+                values: (number | null)[];
+            };
+            trend?: {
+                per_day: number;
+                /** @enum {unknown} */
+                direction: "up" | "down" | "flat";
+            };
+            coverage: {
+                /** @description Share of the window (over the sources) that was recorded; null for sensors */
+                recorded: number | null;
+                complete: boolean | null;
+                gaps: {
+                    source_id: string;
+                    /** Format: date-time */
+                    from: string;
+                    /** Format: date-time */
+                    to: string;
+                }[];
+            };
+            evidence: {
+                id: string;
+                source_id: string;
+                source_name: string;
+                zone: string | null;
+                /** Format: date-time */
+                started_at: string;
+                /**
+                 * Format: date-time
+                 * @description null: still going
+                 */
+                ended_at: string | null;
+                duration_s: number;
+                summary?: string | null;
+            }[];
+            /** @description Things to say with the answer, such as gaps in the recording */
+            notes: string[];
+        };
+        /**
+         * Activity
+         * @description One thing, in one place, from a start to an end (ADR 0057).
+         */
+        activity: {
+            id: string;
+            source: {
+                id: string;
+                name: string;
+            };
+            /** @enum {unknown} */
+            kind: "presence" | "sound" | "watch";
+            /** @description presence: a detector label; sound: a sound class; watch: the watch id */
+            label: string;
+            zone: string | null;
+            watch_id: string | null;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            ended_at: string | null;
+            ongoing: boolean;
+            duration_s: number;
+            peak_count: number;
+            confidence: number | null;
+            verified: boolean | null;
+            summary: string | null;
+            /** @description Found by a history check rather than live */
+            checked: boolean;
         };
         /** Webhook */
         webhook: {
@@ -3467,6 +3722,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemorySearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    queryActivity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["activity-query"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["activity-answer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listActivities: {
+        parameters: {
+            query?: {
+                /** @description Source id or name */
+                source?: string;
+                /** @description presence, sound or watch */
+                kind?: "presence" | "sound" | "watch";
+                /** @description A label, sound class or watch id */
+                label?: string;
+                /** @description Zone name */
+                zone?: string;
+                /** @description Range start (RFC 3339; default 24 h ago) */
+                from?: string;
+                /** @description Range end (RFC 3339; default now) */
+                to?: string;
+                /** @description Page size (1–500, default 100) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityList"];
                 };
             };
             default: components["responses"]["Error"];

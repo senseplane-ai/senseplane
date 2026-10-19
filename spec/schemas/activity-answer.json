@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/activity-answer.json",
+  "title": "ActivityAnswer",
+  "description": "The answer to an ActivityQuery: the value, the activities behind it and how much of the window was recorded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "measure",
+    "value",
+    "unit",
+    "window",
+    "matched",
+    "coverage",
+    "evidence",
+    "notes"
+  ],
+  "properties": {
+    "measure": {
+      "type": "string"
+    },
+    "value": {
+      "type": [
+        "number",
+        "boolean",
+        "string",
+        "null"
+      ],
+      "description": "A count, seconds, a boolean, an RFC 3339 time (first, last) or a sensor value; null when there is nothing to measure"
+    },
+    "unit": {
+      "enum": [
+        "boolean",
+        "count",
+        "seconds",
+        "time",
+        "value",
+        null
+      ]
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "time_zone"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_zone": {
+          "type": "string"
+        }
+      }
+    },
+    "matched": {
+      "type": "integer",
+      "description": "Activities the value is based on"
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compare",
+        "windows",
+        "mean",
+        "ratio",
+        "delta",
+        "values"
+      ],
+      "properties": {
+        "compare": {
+          "type": "string"
+        },
+        "windows": {
+          "type": "integer",
+          "description": "Past windows with enough recording to count"
+        },
+        "mean": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "What is usual (times: seconds after midnight)"
+        },
+        "ratio": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delta": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "description": "Each past window, oldest first; null when the camera was mostly off"
+        }
+      }
+    },
+    "trend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "per_day",
+        "direction"
+      ],
+      "properties": {
+        "per_day": {
+          "type": "number"
+        },
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "flat"
+          ]
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recorded",
+        "complete",
+        "gaps"
+      ],
+      "properties": {
+        "recorded": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Share of the window (over the sources) that was recorded; null for sensors"
+        },
+        "complete": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_id",
+              "from",
+              "to"
+            ],
+            "properties": {
+              "source_id": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "source_id",
+          "source_name",
+          "zone",
+          "started_at",
+          "ended_at",
+          "duration_s"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "null: still going"
+          },
+          "duration_s": {
+            "type": "number"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Things to say with the answer, such as gaps in the recording"
+    }
+  }
+}

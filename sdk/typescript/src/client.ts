@@ -203,6 +203,13 @@ export class Senseplane {
       unwrap(this.raw.GET("/memory/search", { params: { query } })),
   };
 
+  /** Activities and questions about them (ADR 0057): "how many meals today?", "how long did she sleep?". */
+  readonly activity = {
+    query: (body: S["ActivityQuery"]) => unwrap(this.raw.POST("/activity/query", { body })),
+    list: (query: { source?: string; kind?: "presence" | "sound" | "watch"; label?: string; zone?: string; from?: string; to?: string; limit?: number } = {}) =>
+      unwrap(this.raw.GET("/activities", { params: { query } })),
+  };
+
   readonly agents = {
     /** The returned api_key is shown once. */
     create: (body: S["AgentCreate"]) => unwrap(this.raw.POST("/agents", { body })),

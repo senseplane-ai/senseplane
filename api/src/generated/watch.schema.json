@@ -37,9 +37,10 @@
     "mode": {
       "type": "string",
       "enum": [
-        "alert"
+        "alert",
+        "track"
       ],
-      "description": "Only alert in v1; more modes are added without breaking changes."
+      "description": "alert: the watch posts watch.triggered events and notifies its destinations. track: it only records activities, to answer questions later (ADR 0057). Both record activities."
     },
     "compiled": {
       "type": "object",

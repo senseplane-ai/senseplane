@@ -154,10 +154,11 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     return out;
   }
 
-  app.post<{ Body: { instruction: string; sources: string[]; duration_minutes?: number; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
+  app.post<{ Body: { instruction: string; sources: string[]; mode?: "alert" | "track"; duration_minutes?: number; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
     "/v1/watches",
     { schema: { body: { type: "object", additionalProperties: false, required: ["instruction", "sources"], properties: {
       instruction: { type: "string", minLength: 3, maxLength: 500 }, sources: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } },
+      mode: { enum: ["alert", "track"] },
       duration_minutes: { type: "integer", minimum: 1, maximum: 525600 }, notify: notifySchema, active_hours: { ...scheduleSchema, type: ["object", "null"] },
     } } } },
     async (req, reply) => {
@@ -172,7 +173,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       const c = await compile(accountId, req.body.instruction, sources);
       const row = await deps.data.withAccount(accountId, (s) =>
         s.db.insertInto("watches").values({
-          id: newId("wat"), account_id: accountId, instruction: req.body.instruction, sources,
+          id: newId("wat"), account_id: accountId, instruction: req.body.instruction, sources, mode: req.body.mode ?? "alert",
           compiled: JSON.stringify(c.compiled), estimate: JSON.stringify(c.estimate), warnings: c.warnings,
           status: c.needs_zone ? "needs_zone" : "active", compiler: c.compiler,
           expires_at: req.body.duration_minutes ? new Date(Date.now() + req.body.duration_minutes * 60_000) : null,
@@ -195,10 +196,10 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     return toWatch(row);
   });
 
-  app.patch<{ Params: { id: string }; Body: { instruction?: string; status?: "active" | "paused"; compiled?: Record<string, unknown>; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
+  app.patch<{ Params: { id: string }; Body: { instruction?: string; status?: "active" | "paused"; mode?: "alert" | "track"; compiled?: Record<string, unknown>; notify?: Destination[]; active_hours?: WatchSchedule | null } }>(
     "/v1/watches/:id",
     { schema: { body: { type: "object", additionalProperties: false, properties: {
-      instruction: { type: "string", minLength: 3, maxLength: 500 }, status: { enum: ["active", "paused"] }, compiled: { type: "object" },
+      instruction: { type: "string", minLength: 3, maxLength: 500 }, status: { enum: ["active", "paused"] }, mode: { enum: ["alert", "track"] }, compiled: { type: "object" },
       notify: notifySchema, active_hours: { ...scheduleSchema, type: ["object", "null"] },
     } } } },
     async (req) => {
@@ -219,6 +220,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
         set.compiler = "user";
       }
       if (req.body.status) set.status = req.body.status;
+      if (req.body.mode) set.mode = req.body.mode;
       if ("active_hours" in req.body) {
         const schedule = checkSchedule(req.body.active_hours);
         set.active_hours = schedule ? JSON.stringify(schedule) : null;

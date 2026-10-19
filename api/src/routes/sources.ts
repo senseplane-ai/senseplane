@@ -66,6 +66,7 @@ export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
     id: row.id,
     name: row.name,
     ...(row.location ? { location: row.location } : {}),
+    site: row.site ?? null,
     type: row.type,
     senses: row.senses,
     status: row.status,
@@ -91,6 +92,7 @@ const createBody = {
   properties: {
     name: { type: "string", minLength: 1, maxLength: 120 },
     location: { type: "string", maxLength: 120 },
+    site: { type: ["string", "null"], maxLength: 120 },
     type: { type: "string", enum: ["browser", "sensor", "whip", "rtsp"] },
     record_audio: { type: "boolean", default: false },
     retention_days: { type: ["integer", "null"], minimum: 1 },
@@ -101,7 +103,7 @@ const createBody = {
 } as const;
 
 type CreateBody = {
-  name: string; location?: string; type: "browser" | "sensor" | "whip" | "rtsp"; record_audio?: boolean; retention_days?: number | null;
+  name: string; location?: string; site?: string | null; type: "browser" | "sensor" | "whip" | "rtsp"; record_audio?: boolean; retention_days?: number | null;
   senses?: string[]; rtsp_url?: string; bridge_id?: string;
 };
 
@@ -221,9 +223,11 @@ export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
           record_audio: recordAudio,
           retention_days: body.retention_days ?? null,
         });
-        if (!bridgeId) return created;
-        await s.db.updateTable("sources").set({ bridge_id: bridgeId, rtsp_url: body.rtsp_url ? deps.data.box().encrypt(body.rtsp_url) : null })
-          .where("id", "=", created.id).execute();
+        if (!bridgeId && !body.site) return created;
+        await s.db.updateTable("sources").set({
+          ...(body.site ? { site: body.site } : {}),
+          ...(bridgeId ? { bridge_id: bridgeId, rtsp_url: body.rtsp_url ? deps.data.box().encrypt(body.rtsp_url) : null } : {}),
+        }).where("id", "=", created.id).execute();
         return (await s.sources.get(created.id))!;
       });
       await deps.publishConfig?.(accountId, source);

@@ -158,6 +158,12 @@ class Source(BaseModel):
     id: Annotated[str, Field(pattern='^src_[0-9A-HJKMNP-TV-Z]{26}$')]
     name: Annotated[str, Field(max_length=120, min_length=1)]
     location: Annotated[str | None, Field(max_length=120)] = None
+    site: Annotated[
+        str | None,
+        Field(
+            description='A place the source belongs to (a home, a shop, a depot), for grouping questions across places (ADR 0057).'
+        ),
+    ] = None
     type: Annotated[
         Type,
         Field(

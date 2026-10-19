@@ -30,6 +30,13 @@
       "type": "string",
       "maxLength": 120
     },
+    "site": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "A place the source belongs to (a home, a shop, a depot), for grouping questions across places (ADR 0057)."
+    },
     "type": {
       "type": "string",
       "enum": [

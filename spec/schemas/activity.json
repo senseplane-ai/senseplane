@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/activity.json",
+  "title": "Activity",
+  "description": "One thing, in one place, from a start to an end (ADR 0057).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "source",
+    "kind",
+    "label",
+    "zone",
+    "watch_id",
+    "started_at",
+    "ended_at",
+    "ongoing",
+    "duration_s",
+    "peak_count",
+    "confidence",
+    "verified",
+    "summary",
+    "checked"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": {
+      "enum": [
+        "presence",
+        "sound",
+        "watch"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "description": "presence: a detector label; sound: a sound class; watch: the watch id"
+    },
+    "zone": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "watch_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "ongoing": {
+      "type": "boolean"
+    },
+    "duration_s": {
+      "type": "number"
+    },
+    "peak_count": {
+      "type": "integer"
+    },
+    "confidence": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "verified": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checked": {
+      "type": "boolean",
+      "description": "Found by a history check rather than live"
+    }
+  }
+}

@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/activity-query.json",
+  "title": "ActivityQuery",
+  "description": "One question about activities (ADR 0057). The API does the arithmetic; the window defaults to today in time_zone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "measure",
+    "what"
+  ],
+  "properties": {
+    "measure": {
+      "enum": [
+        "exists",
+        "count",
+        "first",
+        "last",
+        "since_last",
+        "total_duration",
+        "longest",
+        "average_duration",
+        "longest_gap",
+        "timeline",
+        "sequence",
+        "average_value",
+        "min_value",
+        "max_value"
+      ],
+      "description": "exists/count/first/last: activities that began in the window; since_last: seconds since the last one ended (0 if one is going on; looks back 30 days); total_duration/longest/average_duration: seconds inside the window; longest_gap: the longest stretch with none; timeline: the activities; sequence: `what` followed by `then` within within_s; *_value: sensor readings"
+    },
+    "what": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The thing measured: exactly one of label, watch_id, sound or sensor.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Presence of a detector label: person, vehicle, animal or an everyday object (cup, laptop, phone, ...; see Detector labels)"
+        },
+        "watch_id": {
+          "type": "string",
+          "description": "A watch's activities: while its condition held and passed its check (mode track or alert)"
+        },
+        "sound": {
+          "enum": [
+            "crying",
+            "glass_break",
+            "alarm",
+            "dog",
+            "speech_present"
+          ],
+          "description": "A sound class"
+        },
+        "sensor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sense"
+          ],
+          "properties": {
+            "sense": {
+              "type": "string",
+              "description": "temperature or humidity"
+            },
+            "above": {
+              "type": "number"
+            },
+            "below": {
+              "type": "number"
+            }
+          },
+          "description": "A sensor: its readings, or the spans above/below a threshold"
+        },
+        "zone": {
+          "type": "string",
+          "description": "Presence only: in this zone (default: anywhere in view)"
+        },
+        "min_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only activities with at least this many at once"
+        },
+        "min_duration_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Only activities at least this long"
+        }
+      }
+    },
+    "then": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "sequence only: what follows",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Presence of a detector label: person, vehicle, animal or an everyday object (cup, laptop, phone, ...; see Detector labels)"
+        },
+        "watch_id": {
+          "type": "string",
+          "description": "A watch's activities: while its condition held and passed its check (mode track or alert)"
+        },
+        "sound": {
+          "enum": [
+            "crying",
+            "glass_break",
+            "alarm",
+            "dog",
+            "speech_present"
+          ],
+          "description": "A sound class"
+        },
+        "sensor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sense"
+          ],
+          "properties": {
+            "sense": {
+              "type": "string",
+              "description": "temperature or humidity"
+            },
+            "above": {
+              "type": "number"
+            },
+            "below": {
+              "type": "number"
+            }
+          },
+          "description": "A sensor: its readings, or the spans above/below a threshold"
+        },
+        "zone": {
+          "type": "string",
+          "description": "Presence only: in this zone (default: anywhere in view)"
+        },
+        "min_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only activities with at least this many at once"
+        },
+        "min_duration_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Only activities at least this long"
+        }
+      }
+    },
+    "within_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "sequence only: how soon after `what` ends `then` must start (default 3600)"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Source ids or names (default: all the caller may see)"
+    },
+    "sites": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Only sources at these sites"
+    },
+    "period": {
+      "enum": [
+        "today",
+        "yesterday",
+        "this_week",
+        "last_hour",
+        "last_24_hours",
+        "last_7_days",
+        "last_30_days"
+      ],
+      "description": "The window, in time_zone (default today)"
+    },
+    "from": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Window start, instead of period"
+    },
+    "to": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Window end (default now)"
+    },
+    "time_zone": {
+      "type": "string",
+      "description": "IANA time zone for today, days, hours and between (default UTC)"
+    },
+    "between": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^\\d\\d:\\d\\d$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^\\d\\d:\\d\\d$"
+        }
+      },
+      "description": "Only this part of each day, HH:MM; to before from runs overnight (22:00\u201306:00)"
+    },
+    "group_by": {
+      "enum": [
+        "hour",
+        "day",
+        "weekday",
+        "source",
+        "zone",
+        "site"
+      ],
+      "description": "Also answer per hour, day, weekday, camera, zone or site"
+    },
+    "compare": {
+      "enum": [
+        "previous_period",
+        "same_weekday",
+        "last_14_days",
+        "last_28_days"
+      ],
+      "description": "Also compare with what is usual: the same window shifted back (days the camera was mostly off are left out)"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "description": "Evidence items to return (default 10)"
+    }
+  }
+}

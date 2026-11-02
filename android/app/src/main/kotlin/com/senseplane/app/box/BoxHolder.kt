@@ -47,6 +47,7 @@ object BoxHolder {
             }
         })
         if (prefs.whipBase.isNotEmpty()) b.setWHIPBase(prefs.whipBase)
+        if (prefs.matterAddress.isNotEmpty()) runCatching { b.setMatterAddress(prefs.matterAddress) }
         box = b
         server = prefs.server
         return b
@@ -80,4 +81,7 @@ object BoxHolder {
     suspend fun sensors(context: Context): List<Sensor> = withContext(Dispatchers.IO) { parseSensors(get(context).sensors()) }
 
     suspend fun choose(context: Context, entityId: String, on: Boolean) = withContext(Dispatchers.IO) { get(context).choose(entityId, on) }
+
+    /** Adds a Matter device with its pairing code; this can take a minute. */
+    suspend fun addMatter(context: Context, code: String): String = withContext(Dispatchers.IO) { get(context).addMatterDevice(code) }
 }

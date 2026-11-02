@@ -145,8 +145,10 @@ fun CameraScreen(onBack: () -> Unit) {
                 Dot(color, 6); Spacer(Modifier.width(6.dp)); Text(text, color = Ink.text, fontSize = 12.sp)
             }
         }
+        val paused by BoxService.paused.collectAsState()
+        paused?.let { StatusLine("$it. Allow it in Settings to send over mobile data.", Ink.warn) }
         Body("Senseplane gets this camera as \"${prefs.phoneName}\", in 720p. It keeps sending with the screen dimmed or off, while the notification shows.")
-        Body("A phone gets warm sending video all day: keep it plugged in and out of the sun.", color = Ink.muted, size = 13)
+        Body("A phone gets warm sending video all day: keep it plugged in and out of the sun. When it's warm it sends fewer frames until it cools.", color = Ink.muted, size = 13)
     }
 }
 
@@ -186,6 +188,7 @@ fun SettingsScreen(onBack: () -> Unit, onForgotten: () -> Unit, go: (String) -> 
     val scope = rememberCoroutineScope()
     var camera by remember { mutableStateOf(prefs.camera) }
     var bridge by remember { mutableStateOf(prefs.bridge) }
+    var videoOnMobile by remember { mutableStateOf(prefs.videoOnMobile) }
     val status by BoxHolder.status.collectAsState()
     fun restart() { BoxHolder.stop(context); BoxHolder.start(context) }
     Screen("Settings", onBack = onBack) {
@@ -199,6 +202,8 @@ fun SettingsScreen(onBack: () -> Unit, onForgotten: () -> Unit, go: (String) -> 
             ToggleRow("Be a camera", "Sends this phone's back camera.", camera) { camera = it; prefs.camera = it; restart() }
             Divider()
             ToggleRow("Relay cameras and sensors", "IP cameras on this Wi-Fi and Bluetooth sensors.", bridge) { bridge = it; prefs.bridge = it; restart() }
+            Divider()
+            ToggleRow("Send video on mobile data", "Off: only on Wi-Fi. A camera uses about 20 GB a day.", videoOnMobile) { videoOnMobile = it; prefs.videoOnMobile = it; restart() }
         }
         Panel {
             if (status.running || status.pairing) NavRow("Stop Senseplane on this phone", "It stops sending until you start it again") { BoxHolder.stop(context) }

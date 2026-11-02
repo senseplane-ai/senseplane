@@ -44,7 +44,8 @@ import java.io.File
  *   ./gradlew connectedDebugAndroidTest \
  *     -Pandroid.testInstrumentationRunnerArguments.server=http://10.0.2.2:58080 \
  *     -Pandroid.testInstrumentationRunnerArguments.whipBase=http://10.0.2.2:58090 \
- *     -Pandroid.testInstrumentationRunnerArguments.ownerKey=sk_...
+ *     -Pandroid.testInstrumentationRunnerArguments.ownerKey=sk_... \
+ *     -Pandroid.testInstrumentationRunnerArguments.matterAddress=10.0.2.2:5540   # optional: go run ./cmd/matter-fake-device
  */
 @RunWith(AndroidJUnit4::class)
 class PhoneBoxE2ETest {
@@ -67,6 +68,7 @@ class PhoneBoxE2ETest {
             val ctx = InstrumentationRegistry.getInstrumentation().targetContext
             ctx.getSharedPreferences("senseplane", 0).edit().clear()
                 .putString("whip_base", args.getString("whipBase") ?: "")
+                .putString("matter_address", args.getString("matterAddress") ?: "")
                 .putString("phone_name", "E2E phone")
                 .commit()
             File(ctx.filesDir, "box").deleteRecursively()
@@ -172,6 +174,30 @@ class PhoneBoxE2ETest {
                 ?.firstOrNull { it["sense"]?.jsonPrimitive?.content == "battery" }
         }
         assertTrue(reading.toString(), reading["unit"]?.jsonPrimitive?.content == "percent")
+
+        // A Matter plug (bridge/cmd/matter-fake-device on the computer) added with its code in the app.
+        if (args.getString("matterAddress").orEmpty().isNotEmpty()) {
+            compose.onNodeWithText("Add a Matter device").performScrollTo().performClick()
+            compose.waitUntil(10_000) { compose.onAllNodes(hasText("Get a code")).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNode(hasSetTextAction()).performTextInput("3497-011-2332")
+            shot("15-matter")
+            compose.onNodeWithText("Add device").performClick()
+            compose.waitUntil(120_000) { compose.onAllNodes(hasText("Fake plug")).fetchSemanticsNodes().isNotEmpty() }
+            shot("16-matter-sensors")
+            val power = eventually("the plug's sensors listed", 60) {
+                call("GET", "/v1/bridges/$bridgeId/entities")["data"]!!.jsonArray.map { it.jsonObject }
+                    .firstOrNull { it["entity_id"]!!.jsonPrimitive.content.startsWith("matter.") && it["sense"]?.jsonPrimitive?.content == "power" }
+            }
+            val powerId = power["entity_id"]!!.jsonPrimitive.content
+            val chosenPower = call("PATCH", "/v1/bridges/$bridgeId/entities", """{"choose":["$powerId"]}""")["data"]!!.jsonArray.map { it.jsonObject }
+                .first { it["entity_id"]!!.jsonPrimitive.content == powerId }
+            val plugSource = chosenPower["source_id"]!!.jsonPrimitive.content
+            val watts = eventually("the plug's power reading", 90) {
+                call("GET", "/v1/sources/$plugSource/now")["readings"]?.jsonArray?.map { it.jsonObject }
+                    ?.firstOrNull { it["sense"]?.jsonPrimitive?.content == "power" }
+            }
+            assertTrue(watts.toString(), watts["unit"]?.jsonPrimitive?.content == "watt")
+        }
 
         // The rest of the screens, for review.
         back()

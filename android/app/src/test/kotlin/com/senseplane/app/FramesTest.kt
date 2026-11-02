@@ -83,5 +83,7 @@ class FramesTest {
         val sensors = parseSensors("""[{"entity_id":"bthome.aa_contact","name":"Fridge door","sense":"contact","kind":"state","chosen":true},{"entity_id":"phone.battery","name":"Battery","sense":"battery","kind":"number","chosen":false}]""")
         assertEquals("Bluetooth sensors nearby", sensors[0].group)
         assertEquals("This phone", sensors[1].group)
+        assertEquals("Matter devices", parseSensors("""[{"entity_id":"matter.n5_e1_power","name":"Plug","sense":"power","kind":"number","chosen":false}]""").single().group)
+        assertEquals(2, parseStatus("""{"state":"running","matter":2}""").matter)
     }
 }

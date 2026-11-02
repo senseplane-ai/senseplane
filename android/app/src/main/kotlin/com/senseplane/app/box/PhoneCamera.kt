@@ -41,6 +41,7 @@ class PhoneCamera(
     private var preview: Surface? = null
     @Volatile var running = false
         private set
+    private var warm = false
 
     @SuppressLint("MissingPermission") // the app asks for the camera before starting
     fun start() = handler.post {
@@ -118,7 +119,8 @@ class PhoneCamera(
                 session = s
                 val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                     targets.forEach { addTarget(it) }
-                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                    val rate = if (warm) WARM_FPS else fps
+                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(rate, rate))
                 }
                 runCatching { s.setRepeatingRequest(req.build(), null, handler) }.onFailure { Log.w(TAG, "capture failed", it) }
             }
@@ -126,6 +128,18 @@ class PhoneCamera(
                 Log.w(TAG, "camera session failed")
             }
         }, handler)
+    }
+
+    /**
+     * A warm phone sends 10 frames a second at half the bitrate until it cools
+     * (Android's thermal status); recordings stay 720p.
+     */
+    fun setWarm(on: Boolean) = handler.post {
+        if (warm == on) return@post
+        warm = on
+        Log.i(TAG, if (on) "the phone is warm: sending less" else "the phone cooled: sending normally")
+        runCatching { codec?.setParameters(android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, if (on) bitrate / 2 else bitrate) }) }
+        if (device != null) openSession()
     }
 
     fun stop() = handler.post {
@@ -146,5 +160,6 @@ class PhoneCamera(
 
     companion object {
         private const val TAG = "SenseplaneCamera"
+        private const val WARM_FPS = 10
     }
 }

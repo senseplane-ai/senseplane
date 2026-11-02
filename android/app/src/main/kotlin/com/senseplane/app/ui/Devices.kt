@@ -34,7 +34,9 @@ import com.senseplane.app.box.FoundCamera
 import com.senseplane.app.box.Sensor
 import com.senseplane.app.box.senseName
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Cameras found on this Wi-Fi (ONVIF): pick one, enter its own account; or enter an RTSP address. */
 @Composable
@@ -65,7 +67,8 @@ fun AddCameraScreen(onBack: () -> Unit, onAdded: () -> Unit) {
             else BoxHolder.addByAddress(context, url.trim(), name.ifBlank { "Camera" })
         }
         busy = false
-        r.onSuccess { onAdded() }.onFailure { error = it.message ?: "Couldn't add it." }
+        r.exceptionOrNull()?.let { error = it.message ?: "Couldn't add it." }
+        if (r.isSuccess) withContext(Dispatchers.Main) { onAdded() } // navigation is on the main thread
     }
     Screen("Add an IP camera", onBack = onBack, bottom = {
         val ready = if (manual) Regex("^rtsps?://").containsMatchIn(url.trim()) else picked != null && user.isNotBlank()
@@ -153,21 +156,48 @@ fun SensorsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         }
         if (loaded && list.isEmpty()) Body("No sensors yet. The phone's own appear once Senseplane runs; Bluetooth sensors (BTHome, such as Shelly BLU) appear when they send.", color = Ink.muted, size = 13)
         error?.let { StatusLine(it, Ink.warn) }
-        Label("Matter devices")
+        if (list.none { it.group == "Matter devices" }) Label("Matter devices")
         Secondary("Add a Matter device") { go("matter") }
     }
 }
 
-/** Matter needs a controller with its own network fabric, which a box has and this phone doesn't yet. */
+/**
+ * Adds a Matter device to this phone, which is its own Matter controller
+ * (ADR 0065): the device is shared from the app it's in now with a pairing
+ * code. Its sensors then show under Sensors, off until turned on.
+ */
 @Composable
-fun MatterScreen(onBack: () -> Unit) = Screen("Add a Matter device", onBack = onBack) {
-    Body("A plug, sensor or lock that works with Matter joins Senseplane through a box with a Matter controller: a Home Assistant box (its Matter devices are listed with its other sensors), or the Senseplane bridge with a Matter server.")
-    Panel {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("To add one", color = Ink.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Step(1, "In the app it's in now (Apple Home, Google Home, the maker's app), open the device and choose Turn on pairing mode or Share with another app.")
-            Step(2, "In Senseplane, open your box under Cameras and paste the code under Matter devices.")
-        }
+fun MatterScreen(onBack: () -> Unit, onAdded: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var code by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val status by BoxHolder.status.collectAsState()
+    val ready = code.filter { it.isDigit() }.length.let { it == 11 || it == 21 } || code.trim().uppercase().startsWith("MT:")
+    fun add() = scope.launch {
+        busy = true; error = null
+        val r = runCatching { BoxHolder.addMatter(context, code.trim()) }
+        busy = false
+        r.exceptionOrNull()?.let { error = it.message ?: "Couldn't add it." }
+        if (r.isSuccess) withContext(Dispatchers.Main) { onAdded() } // navigation is on the main thread
     }
-    Body("This phone can't be a Matter controller yet; it reads Bluetooth sensors instead.", color = Ink.muted, size = 13)
+    Screen("Add a Matter device", onBack = onBack, bottom = {
+        Primary(if (busy) "Adding… this can take a minute" else "Add device", enabled = ready && !busy) { add() }
+    }) {
+        Body("Plugs, sensors and locks that work with Matter join this phone over Wi-Fi. Keep using them in the app they're in now; Senseplane only reads them.")
+        Field("Pairing code", code, { code = it }, placeholder = "3497-011-2332", monoFont = true, keyboard = KeyboardType.Number,
+            hint = "The 11 digits, or the text of its QR code (MT:…).")
+        error?.let { StatusLine(it, Ink.warn) }
+        Panel {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Get a code", color = Ink.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Step(1, "In the app the device is in (Apple Home, Google Home, Alexa or the maker's app), open the device's settings.")
+                Step(2, "Choose Turn on pairing mode, Share with another app or Linked Matter apps. You get an 11-digit code.")
+                Step(3, "Enter it here within 15 minutes. A new device not set up anywhere yet: set it up in its own app first.")
+            }
+        }
+        if (status.matter > 0) Body("${status.matter} Matter ${if (status.matter == 1) "device" else "devices"} on this phone. Choose what Senseplane gets under Sensors.", color = Ink.muted, size = 13)
+        Body("The phone has to be on the same Wi-Fi as the device. Thread devices also need a Thread border router at home, such as a HomePod mini or Nest Hub.", color = Ink.muted, size = 13)
+    }
 }

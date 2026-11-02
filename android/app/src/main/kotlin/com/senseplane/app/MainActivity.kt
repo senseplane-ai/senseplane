@@ -65,7 +65,7 @@ private fun Routes(nav: NavHostController, start: String) {
         composable("cameradetail/{id}") { CameraDetailScreen(it.arguments?.getString("id") ?: "", onBack = { nav.popBackStack() }) }
         composable("addcamera") { AddCameraScreen(onBack = { nav.popBackStack() }, onAdded = { nav.popBackStack() }) }
         composable("sensors") { SensorsScreen(onBack = { nav.popBackStack() }, go = ::go) }
-        composable("matter") { MatterScreen(onBack = { nav.popBackStack() }) }
+        composable("matter") { MatterScreen(onBack = { nav.popBackStack() }, onAdded = { nav.popBackStack() }) }
         composable("settings") { SettingsScreen(onBack = { nav.popBackStack() }, onForgotten = { nav.navigate("welcome") { popUpTo(0) } }, go = ::go) }
         composable("signin") { SignInScreen(onBack = { nav.popBackStack() }, onSignedIn = { nav.navigate("manage") { popUpTo("home") } }) }
         composable("manage") { ManageScreen(go = ::go, onSignedOut = { home() }) }

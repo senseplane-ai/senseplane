@@ -41,6 +41,16 @@ class Prefs(context: Context) {
         get() = p.getString("session", "") ?: ""
         set(v) = p.edit().putString("session", v).apply()
 
+    /** Sends the camera's video over mobile data too (off: only on Wi-Fi and other unmetered networks). */
+    var videoOnMobile: Boolean
+        get() = p.getBoolean("video_on_mobile", false)
+        set(v) = p.edit().putBoolean("video_on_mobile", v).apply()
+
+    /** Development only: find every Matter device at this host:port (see Box.setMatterAddress). */
+    var matterAddress: String
+        get() = p.getString("matter_address", "") ?: ""
+        set(v) = p.edit().putString("matter_address", v.trim()).apply()
+
     /** Development only: where the emulator reaches the media plane (see Box.setWHIPBase). */
     var whipBase: String
         get() = p.getString("whip_base", "") ?: ""

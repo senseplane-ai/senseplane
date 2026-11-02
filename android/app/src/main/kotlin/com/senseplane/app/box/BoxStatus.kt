@@ -19,6 +19,7 @@ data class BoxStatus(
     val sending: Int = 0,
     val found: Int = 0,
     @SerialName("phone_camera") val phoneCamera: String? = null,
+    val matter: Int = 0,
 ) {
     val pairing get() = state == "pairing"
     val running get() = state == "running"
@@ -56,7 +57,12 @@ data class Sensor(
     val listed: Boolean = true,
 ) {
     /** Where it comes from: the phone itself or a Bluetooth sensor nearby. */
-    val group get() = if (entityId.startsWith("bthome.")) "Bluetooth sensors nearby" else if (entityId.startsWith("phone.")) "This phone" else "Other"
+    val group get() = when {
+        entityId.startsWith("bthome.") -> "Bluetooth sensors nearby"
+        entityId.startsWith("phone.") -> "This phone"
+        entityId.startsWith("matter.") -> "Matter devices"
+        else -> "Other"
+    }
 }
 
 val json = Json { ignoreUnknownKeys = true; explicitNulls = false }

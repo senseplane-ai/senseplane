@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -63,6 +64,18 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+	// As a Home Assistant add-on: the server comes from the add-on's options, the token from pairing.
+	if o, ok := addonOptions("/data/options.json"); ok {
+		if *apiURL == "" {
+			*apiURL = o.Server
+		}
+		if *stateDir == "" {
+			*stateDir = "/data"
+		}
+		if o.Name != "" {
+			*boxName = o.Name
+		}
 	}
 	if v := os.Getenv("SENSEPLANE_RTSP"); v != "" && len(rtsps) == 0 {
 		rtsps = strings.Split(v, ",")
@@ -222,6 +235,22 @@ func dialWHIP(ctx context.Context, url, token string) (relay.Publisher, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// addonOptions reads a Home Assistant add-on's options (only when the Supervisor runs it).
+func addonOptions(path string) (struct{ Server, Name string }, bool) {
+	var o struct {
+		Server string `json:"server"`
+		Name   string `json:"name"`
+	}
+	if os.Getenv("SUPERVISOR_TOKEN") == "" {
+		return struct{ Server, Name string }{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &o) != nil {
+		return struct{ Server, Name string }{}, false
+	}
+	return struct{ Server, Name string }{strings.TrimRight(strings.TrimSpace(o.Server), "/"), strings.TrimSpace(o.Name)}, true
 }
 
 // homeAssistant is the Home Assistant to read: the flags, else the Supervisor's when running as an add-on.

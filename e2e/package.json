@@ -14,6 +14,7 @@
     "chat": "node chat-check.ts",
     "live": "node live-check.ts",
     "destinations": "node watch-destinations-check.ts",
+    "home": "node home-check.ts",
     "journey": "node journey.ts"
   },
   "devDependencies": {

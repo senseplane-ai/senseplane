@@ -72,3 +72,24 @@ it("lists a box's sensors by room and chooses them", async () => {
   fireEvent.click(within(kitchen).getAllByRole("switch")[0]!);
   await waitFor(() => expect(changes.at(-1)).toEqual({ drop: ["binary_sensor.fridge"] }));
 });
+
+it("adds an IP camera through the box", async () => {
+  let created: unknown;
+  const base = fakeFetch({ "GET /bridges": { data: [BOX] }, "GET /bridges/brg_1/entities": { data: [] } });
+  // The SDK sends a Request, so its body is read here.
+  const f: typeof fetch = async (input, init) => {
+    if (input instanceof Request && input.method === "POST" && input.url.endsWith("/sources")) {
+      created = JSON.parse(await input.text());
+      return Response.json({ id: "src_cam", name: "Porch", type: "rtsp", senses: ["video"], status: "pending" }, { status: 201 });
+    }
+    return base(input, init);
+  };
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  fireEvent.change(await screen.findByLabelText("Camera name"), { target: { value: "Porch" } });
+  fireEvent.change(screen.getByLabelText(/RTSP address/), { target: { value: "http://nope" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add camera" }));
+  expect(await screen.findByText(/starts with rtsp:\/\//)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/RTSP address/), { target: { value: "rtsp://u:p@192.168.1.40:554/stream1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add camera" }));
+  await waitFor(() => expect(created).toEqual({ name: "Porch", type: "rtsp", rtsp_url: "rtsp://u:p@192.168.1.40:554/stream1", bridge_id: "brg_1" }));
+});

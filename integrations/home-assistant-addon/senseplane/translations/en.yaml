@@ -1,0 +1,7 @@
+configuration:
+  server:
+    name: Server
+    description: Your Senseplane address, for example https://senseplane.example.com
+  name:
+    name: Name
+    description: What you see in Senseplane when you connect this box (default Home Assistant)

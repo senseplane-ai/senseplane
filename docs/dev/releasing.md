@@ -11,6 +11,7 @@ for linux/amd64 and linux/arm64:
 | `ghcr.io/senseplane-ai/console` | `console/Dockerfile` (the console behind Caddy) |
 | `ghcr.io/senseplane-ai/brain` | `brain/Dockerfile` (builds the int8 detector at build time) |
 | `ghcr.io/senseplane-ai/bridge` | `bridge/Dockerfile` |
+| `ghcr.io/senseplane-ai/bridge-addon` | `bridge/Dockerfile`, target `addon` (the Home Assistant add-on, ADR 0061) |
 
 ## Tags
 
@@ -103,8 +104,17 @@ The same builds as the release, without pushing:
 docker buildx build -f api/Dockerfile -t ghcr.io/senseplane-ai/api:dev --load .
 docker buildx build -t ghcr.io/senseplane-ai/brain:dev --load brain
 docker buildx build -t ghcr.io/senseplane-ai/bridge:dev --load bridge
+docker buildx build --target addon -t ghcr.io/senseplane-ai/bridge-addon:dev --load bridge
 scripts/smoke-image.sh api ghcr.io/senseplane-ai/api:dev   # it starts
 ```
 
 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`
 builds and runs the whole self-host stack from a checkout.
+
+## The Home Assistant add-on
+
+After a release, copy `integrations/home-assistant-addon/` to the root of
+[senseplane-ai/home-assistant-addons](https://github.com/senseplane-ai/home-assistant-addons)
+with `version` in `senseplane/config.yaml` set to the release (the
+Supervisor pulls `ghcr.io/senseplane-ai/bridge-addon:<version>`), and add a
+line to its `CHANGELOG.md`.

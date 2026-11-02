@@ -128,6 +128,50 @@ export function LinkPage() {
 
 const KIND_ORDER = { state: 0, event: 1, number: 2 } as const;
 
+/** The box's cameras, and a form to add one by its RTSP address; the box pulls it on the home network. */
+function BoxCameras({ box }: { box: Bridge }) {
+  const { client, sources, refreshSources } = useApp();
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cams = (sources ?? []).filter((s) => s.type === "rtsp" && (s as { bridge_id?: string | null }).bridge_id === box.id);
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!/^rtsps?:\/\//i.test(url.trim())) return setError("An RTSP address starts with rtsp://, for example rtsp://user:password@192.168.1.40:554/stream1");
+    setBusy(true);
+    setError("");
+    try {
+      await client.sources.create({ name: name.trim() || "Camera", type: "rtsp", rtsp_url: url.trim(), bridge_id: box.id } as never);
+      setName("");
+      setUrl("");
+      toast("Camera added. The box starts sending it within a minute.");
+      void refreshSources();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Cameras">
+      {cams.length ? (
+        <ul className="box-cams">
+          {cams.map((c) => <li key={c.id}><Link to={`/cameras/${c.id}`}>{c.name}</Link> <span className="muted">· {c.status}</span></li>)}
+        </ul>
+      ) : <p className="muted">IP cameras on the same network as this box can be sent through it.</p>}
+      <form onSubmit={add} className="link-form">
+        <Field label="Camera name"><Input value={name} maxLength={120} placeholder="Front door" onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="RTSP address" hint="From the camera's app or manual; it stays encrypted and only the box uses it." error={error || undefined}>
+          <Input mono value={url} maxLength={2048} placeholder="rtsp://user:password@192.168.1.40:554/stream1" onChange={(e) => setUrl(e.target.value)} autoComplete="off" spellCheck={false} />
+        </Field>
+        <div><Button type="submit" disabled={busy || !url.trim()}>Add camera</Button></div>
+      </form>
+    </Card>
+  );
+}
+
 /** /boxes/:id: the box's status and its Home Assistant sensors to choose from, by room. */
 export function BoxPage({ id }: { id: string }) {
   const { extra, refreshSources } = useApp();
@@ -200,6 +244,7 @@ export function BoxPage({ id }: { id: string }) {
           </Card>
         );
       })}
+      <BoxCameras box={box} />
     </div>
   );
 }

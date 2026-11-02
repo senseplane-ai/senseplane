@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Builds and publishes the images to ghcr.io/senseplane-ai/<service>
-# (api, mcp, media, console, brain, bridge) for linux/amd64 and linux/arm64,
+# (api, mcp, media, console, brain, bridge, bridge-addon) for linux/amd64 and linux/arm64,
 # each architecture on its own native runner. docs/dev/releasing.md.
 #
 #   tag vX.Y.Z      the ci workflow first, then X.Y.Z, X.Y (the release line the
@@ -127,7 +127,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        service: [api, mcp, media, console, brain, bridge]
+        service: [api, mcp, media, console, brain, bridge, bridge-addon]
         arch: [amd64, arm64]
         include:
           - { service: api, context: ".", file: api/Dockerfile, description: "Senseplane API: the public REST API" }
@@ -136,6 +136,7 @@ jobs:
           - { service: console, context: ".", file: console/Dockerfile, description: "Senseplane console, served by Caddy (the self-host front door)" }
           - { service: brain, context: brain, file: brain/Dockerfile, description: "Senseplane brain: perception, episodes, watches, memory" }
           - { service: bridge, context: bridge, file: bridge/Dockerfile, description: "Senseplane bridge: relays RTSP cameras over WHIP, outbound only" }
+          - { service: bridge-addon, context: bridge, file: bridge/Dockerfile, target: addon, description: "Senseplane Home Assistant add-on: the bridge, paired with a code" }
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 90
     permissions:
@@ -171,6 +172,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
           platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
@@ -203,7 +205,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [api, mcp, media, console, brain, bridge]
+        service: [api, mcp, media, console, brain, bridge, bridge-addon]
     permissions:
       contents: read
       packages: write
@@ -298,7 +300,7 @@ jobs:
             echo
             echo "linux/amd64 and linux/arm64, signed with cosign (keyless), with SBOM and provenance attestations:"
             echo
-            for s in api mcp media console brain bridge; do echo "- \`$REGISTRY/$s:$VERSION\`"; done
+            for s in api mcp media console brain bridge bridge-addon; do echo "- \`$REGISTRY/$s:$VERSION\`"; done
             echo
             echo "## Run it"
             echo

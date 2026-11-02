@@ -1,0 +1,5 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+name: Senseplane add-ons
+url: https://github.com/senseplane-ai/home-assistant-addons
+maintainer: The Senseplane Authors

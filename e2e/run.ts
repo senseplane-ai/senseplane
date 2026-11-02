@@ -55,6 +55,7 @@ const CHECKS: { name: string; file: string; env?: Record<string, string>; needs?
   { name: "team", file: "team-check.ts" },
   { name: "watch-destinations", file: "watch-destinations-check.ts" },
   { name: "ingest", file: "ingest-check.ts" },
+  { name: "home", file: "home-check.ts" },
   { name: "journey", file: "journey.ts" },
 ];
 
@@ -220,7 +221,7 @@ try {
   const t0 = Date.now();
   stackUp = true;
   sh("docker", [...compose, "up", "-d", "--build", "--wait", ...(EXTERNAL ? ["--scale", "media=0"] : [])]);
-  if (selected.some((c) => ["ingest", "journey"].includes(c.name))) sh("docker", ["build", "-q", "-t", BRIDGE_IMAGE, join(ROOT, "bridge")]);
+  if (selected.some((c) => ["ingest", "home", "journey"].includes(c.name))) sh("docker", ["build", "-q", "-t", BRIDGE_IMAGE, join(ROOT, "bridge")]);
   log(`stack up in ${Math.round((Date.now() - t0) / 1000)} s`);
 
   // The packages the checks run from source (MCP servers, the bridge's whip-push).

@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -28,8 +29,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
-import org.junit.Before
 import org.junit.Rule
+import org.junit.rules.ExternalResource
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -58,7 +59,22 @@ class PhoneBoxE2ETest {
         if (Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_SCAN)
     }.toTypedArray())
 
+    // A fresh phone, before the activity starts.
     @get:Rule(order = 1)
+    val fresh = object : ExternalResource() {
+        override fun before() {
+            assumeTrue("needs -e server and -e ownerKey", server.isNotEmpty() && ownerKey.isNotEmpty())
+            val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+            ctx.getSharedPreferences("senseplane", 0).edit().clear()
+                .putString("whip_base", args.getString("whipBase") ?: "")
+                .putString("phone_name", "E2E phone")
+                .commit()
+            File(ctx.filesDir, "box").deleteRecursively()
+            File(ctx.getExternalFilesDir(null), "shots").deleteRecursively()
+        }
+    }
+
+    @get:Rule(order = 2)
     val compose = createAndroidComposeRule<MainActivity>()
 
     private val http = OkHttpClient()
@@ -74,6 +90,16 @@ class PhoneBoxE2ETest {
         }
     }
 
+    /** A screenshot for people reviewing the app (adb pull /sdcard/Android/data/com.senseplane.app/files/shots). */
+    private fun shot(name: String) {
+        compose.waitForIdle()
+        Thread.sleep(1000) // the screen transition finishes
+        val dir = File(InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null), "shots").apply { mkdirs() }
+        InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { bmp ->
+            File(dir, "$name.png").outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+
     private fun <T> eventually(what: String, seconds: Int, f: () -> T?): T {
         val end = System.currentTimeMillis() + seconds * 1000L
         while (System.currentTimeMillis() < end) {
@@ -83,19 +109,9 @@ class PhoneBoxE2ETest {
         throw AssertionError("timed out waiting for $what")
     }
 
-    @Before
-    fun fresh() {
-        assumeTrue("needs -e server and -e ownerKey", server.isNotEmpty() && ownerKey.isNotEmpty())
-        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        ctx.getSharedPreferences("senseplane", 0).edit().clear()
-            .putString("whip_base", args.getString("whipBase") ?: "")
-            .putString("phone_name", "E2E phone")
-            .commit()
-        File(ctx.filesDir, "box").deleteRecursively()
-    }
-
     @Test
     fun pairsSendsItsCameraAndAChosenSensor() {
+        shot("01-welcome")
         compose.onNodeWithText("Get started").performClick()
         compose.waitUntil(10_000) { compose.onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(hasSetTextAction()).performTextClearance()
@@ -113,13 +129,16 @@ class PhoneBoxE2ETest {
             throw AssertionError("no code; the box says ${BoxHolder.status.value}", e)
         }
         compose.waitUntil(10_000) { compose.onAllNodes(hasText(code)).fetchSemanticsNodes().isNotEmpty() }
+        shot("02-pair-code")
         val box = call("POST", "/v1/bridges/pair", """{"code":"$code","name":"E2E phone"}""")
         val bridgeId = box["id"]!!.jsonPrimitive.content
 
         // Connected: choose what it does (both), allow, and the phone tab shows.
         compose.waitUntil(60_000) { compose.onAllNodes(hasText("What this phone does")).fetchSemanticsNodes().isNotEmpty() }
+        shot("03-mode")
         compose.onNodeWithText("Continue").performClick()
         compose.waitUntil(10_000) { compose.onAllNodes(hasText("Allow")).fetchSemanticsNodes().isNotEmpty() }
+        shot("04-permissions")
         compose.onNodeWithText("Allow").performClick()
         compose.waitUntil(30_000) { compose.onAllNodes(hasText("Running in the background")).fetchSemanticsNodes().isNotEmpty() }
 
@@ -146,11 +165,42 @@ class PhoneBoxE2ETest {
             call("GET", "/v1/bridges/$bridgeId/entities")["data"]!!.jsonArray.map { it.jsonObject }
                 .firstOrNull { it["entity_id"]?.jsonPrimitive?.content == "phone.battery" && it["chosen"]?.jsonPrimitive?.content == "true" }
         }
+        shot("07-sensors")
         val source = chosen["source_id"]!!.jsonPrimitive.content
         val reading = eventually("the battery reading", 60) {
             call("GET", "/v1/sources/$source/now")["readings"]?.jsonArray?.map { it.jsonObject }
                 ?.firstOrNull { it["sense"]?.jsonPrimitive?.content == "battery" }
         }
         assertTrue(reading.toString(), reading["unit"]?.jsonPrimitive?.content == "percent")
+
+        // The rest of the screens, for review.
+        back()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText("Running in the background")).fetchSemanticsNodes().isNotEmpty() }
+        shot("05-phone-tab")
+        compose.onNodeWithText("Camera").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText("Dim the screen")).fetchSemanticsNodes().isNotEmpty() }
+        Thread.sleep(2000) // the preview starts
+        shot("06-camera")
+        back()
+        compose.onNode(hasText("Add an IP camera", substring = true)).performScrollTo().performClick()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText("Found on this Wi-Fi", substring = true, ignoreCase = true)).fetchSemanticsNodes().isNotEmpty() }
+        shot("08-add-camera")
+        back()
+        compose.onNodeWithText("Settings").performClick()
+        shot("09-settings")
+        // Signed in as an admin (the test account's key stands in for a session).
+        Prefs(InstrumentationRegistry.getInstrumentation().targetContext).session = ownerKey
+        back()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText("and manage", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasText("and manage", substring = true)).performClick()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText("Ask")).fetchSemanticsNodes().isNotEmpty() }
+        shot("10-chat")
+        for ((tab, name) in listOf("Activity" to "11-activity", "Cameras" to "12-cameras", "Watches" to "13-watches", "More" to "14-more")) {
+            compose.onAllNodes(hasText(tab)).onFirst().performClick()
+            compose.waitUntil(15_000) { compose.onAllNodes(hasText("Loading…")).fetchSemanticsNodes().isEmpty() }
+            shot(name)
+        }
     }
+
+    private fun back() = compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
 }

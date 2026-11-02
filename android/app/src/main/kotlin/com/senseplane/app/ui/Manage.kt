@@ -223,7 +223,7 @@ private fun CamerasTab() {
         sources?.onFailure { StatusLine(it.message ?: "Couldn't load.", Ink.warn) }?.onSuccess { list ->
             if (list.isEmpty()) Body("No cameras yet.", color = Ink.muted)
             else Panel {
-                list.forEachIndexed { i, s ->
+                list.sortedBy { if (it.status == "online") 0 else 1 }.forEachIndexed { i, s ->
                     if (i > 0) Divider()
                     val color = if (s.status == "online") Ink.live else if (s.status == "offline" || s.status == "reconnecting") Ink.warn else Ink.muted
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {

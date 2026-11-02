@@ -2,32 +2,75 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://senseplane.com/schemas/reading.json",
   "title": "Reading",
+  "description": "One sensor reading (ADR 0060). number: `value` in `unit`; state: `value` true or false, `state` its word (open, closed, on, off, ...); event: something happened, with an optional `detail`. Known senses and units: spec/senses.json.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "sense",
-    "value",
-    "unit"
+    "kind",
+    "measured_at"
   ],
   "properties": {
     "sense": {
+      "$ref": "sense.json"
+    },
+    "kind": {
       "enum": [
-        "temperature",
-        "humidity"
+        "number",
+        "state",
+        "event"
       ]
     },
     "value": {
-      "type": "number"
+      "type": [
+        "number",
+        "boolean"
+      ],
+      "description": "number: the value; state: true or false; absent for events"
     },
     "unit": {
-      "enum": [
-        "celsius",
-        "percent"
-      ]
+      "type": "string",
+      "description": "number only: celsius, percent, watt, ... (spec/senses.json)"
+    },
+    "state": {
+      "type": "string",
+      "description": "state only: what the value means for this sense (open/closed, on/off, wet/dry, ...)"
+    },
+    "since": {
+      "type": "string",
+      "format": "date-time",
+      "description": "state only, in latest readings: when it last changed to this value"
+    },
+    "detail": {
+      "type": "string",
+      "description": "event only: e.g. single, double or long for a button"
+    },
+    "device": {
+      "$ref": "#/$defs/device"
     },
     "measured_at": {
       "type": "string",
       "format": "date-time"
+    }
+  },
+  "$defs": {
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "description": "The device that measured it, when a source has more than one (a Home Assistant entity, a Matter node)",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
     }
   }
 }

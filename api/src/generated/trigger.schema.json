@@ -192,21 +192,35 @@
         "type",
         "sense"
       ],
+      "description": "A sensor reading (ADR 0060). Numbers: above and/or below. States: state true or false (contact true = open, switch true = on, leak true = wet; spec/senses.json). Events (doorbell, button): every one, or only those with detail. Fires once per run that holds min_duration_s.",
       "properties": {
         "type": {
           "const": "sensor"
         },
         "sense": {
-          "enum": [
-            "temperature",
-            "humidity"
-          ]
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "temperature, humidity, power, contact, motion, leak, smoke, switch, doorbell, ... (spec/senses.json)"
+        },
+        "device": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Only this device on the source (its id or name), when it has several"
         },
         "above": {
           "type": "number"
         },
         "below": {
           "type": "number"
+        },
+        "state": {
+          "type": "boolean",
+          "description": "States only: the value to watch for"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Events only: just these (single, double, long, ...)"
         },
         "rate_per_min": {
           "type": "number"

@@ -45,6 +45,7 @@ class Tools(Protocol):
     def view_event(self, event_id: str, question: str) -> dict: ...
     def query_activity(self, args: dict) -> dict: ...
     def check_history(self, args: dict) -> dict: ...
+    def read_sensors(self, args: dict) -> dict: ...
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -61,7 +62,10 @@ _WHAT = {"type": "object", "description": "Exactly one of watch_id, label, sound
                         "label": {"type": "string", "description": "person, vehicle, animal or an everyday object"},
                         "zone": {"type": "string", "description": "With label: only in this zone of the camera"},
                         "sound": {"type": "string", "enum": ["crying", "glass_break", "alarm", "dog", "speech_present"]},
-                        "sensor": {"type": "object", "properties": {"sense": {"type": "string"}, "above": {"type": "number"}, "below": {"type": "number"}}},
+                        "sensor": {"type": "object", "description": "A sensor's readings: numbers above/below, a state (contact state true: while open; "
+                                   "switch true: while on), or events (doorbell, button) as moments",
+                                   "properties": {"sense": {"type": "string"}, "device": {"type": "string", "description": "Only this device (its name)"},
+                                                  "above": {"type": "number"}, "below": {"type": "number"}, "state": {"type": "boolean"}}},
                         "min_count": {"type": "integer", "description": "At least this many at once"},
                         "min_duration_s": {"type": "number", "description": "Only activities at least this long"}}}
 TOOL_SPECS = [
@@ -77,6 +81,9 @@ TOOL_SPECS = [
         ["ref", "question"]),
     _fn("look", "Look at one camera right now and answer a question about the current view.",
         {"source": {"type": "string", "description": "Source name or id"}, "question": {"type": "string"}}, ["source", "question"]),
+    _fn("read_sensors", "Read sensors right now: temperatures and other numbers, whether doors and windows are open, plugs and lights on, "
+        "locks locked, leaks or smoke, and since when; the last doorbell ring or button press.",
+        {"sources": _SOURCES, "sense": {"type": "string", "description": "Only this sense: contact, motion, switch, lock, leak, temperature, power, doorbell, ..."}}),
     _fn("query_activity", "Measure activities exactly: how many times, how long, when first or last, how long since, the longest time without, "
         "per hour/day/camera, and compared with what is usual. Use it for every question about counts, durations, times, absence, order or "
         "trends; never count events yourself. Something tracked by a watch is measured with its watch_id; otherwise use label (presence of "
@@ -235,6 +242,28 @@ class Session:
             return {"results": results} if results else {"results": [], "note": "Nothing found."}
         if name == "query_activity":
             return self._query_activity(args)
+        if name == "read_sensors":
+            ids = self.resolve(args.get("sources")) or self.scope
+            self.status(f"Reading sensors on {self.names(ids)}…")
+            out = self.tools.read_sensors({"sources": ids, **({"sense": args["sense"]} if args.get("sense") else {})})
+            if out.get("error"):
+                return {"error": out["error"]}
+            found = []
+            for src in out.get("sources", []):
+                for r in src.get("readings", []):
+                    item = {"source": src.get("name") or src.get("source_id"), "sense": r["sense"], "time": self.local(r["measured_at"])}
+                    if r.get("device"):
+                        item["device"] = r["device"].get("name") or r["device"]["id"]
+                    if r.get("kind") == "state":
+                        item["state"] = r.get("state")
+                        if r.get("since"):
+                            item["since"] = self.local(r["since"])
+                    elif r.get("kind") == "event":
+                        item["last"] = r.get("detail") or "happened"
+                    else:
+                        item["value"], item["unit"] = r.get("value"), r.get("unit")
+                    found.append(item)
+            return {"readings": found} if found else {"readings": [], "note": "No sensor readings."}
         if name == "check_history":
             ids = self.resolve(args.get("sources")) or self.scope
             self.status(f"Checking recordings on {self.names(ids)}…")
@@ -352,6 +381,7 @@ class Session:
             f"\nUnless the user names sources, use: {self.names(self.scope) or 'none'}.\n"
             "Rules:\n"
             "- Use the tools before answering: search_history or list_events for the past, look for right now. Call tools before writing anything.\n"
+            "- Sensors (doors, plugs, locks, temperatures) right now: read_sensors; their past: query_activity with sensor. Sensor readings have no ref.\n"
             "- Event summaries are short labels. For details they don't give (what someone wore or held, a vehicle's colour), call view_event on the event.\n"
             "- How many, how long, when first or last, how long since, nothing for how long, more or less than usual, trends: call query_activity and "
             "use its numbers. Never count or add up events yourself. Prefer a watch that tracks the thing; otherwise presence of a label (in a zone).\n"

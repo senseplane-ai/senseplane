@@ -1,10 +1,9 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Turns Home Assistant sensor states into Senseplane readings and sends them
-in batches, retrying with backoff while Senseplane is unreachable.
+"""Sends Senseplane readings in batches, retrying with backoff while
+Senseplane is unreachable (the readings come from mapping.py).
 
-No Home Assistant imports: states come in as plain values, so this is
-testable on its own.
+No Home Assistant imports, so this is testable on its own.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import logging
 import random
 from collections import deque
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import Any
 
 from .client import AuthError, SenseplaneError
@@ -23,40 +21,6 @@ from .const import BATCH_SECONDS, MAX_BATCH, MAX_QUEUE
 _LOGGER = logging.getLogger(__name__)
 
 Reading = dict[str, Any]
-
-
-def to_reading(
-    device_class: str | None,
-    state: str | None,
-    unit: str | None,
-    at: datetime,
-    senses: tuple[str, ...] | list[str] = ("temperature", "humidity"),
-) -> Reading | None:
-    """A reading from a sensor state, or None when it isn't one we can send.
-
-    Temperatures are sent in Celsius (Fahrenheit and Kelvin are converted);
-    humidity in percent. Unknown, unavailable and non-numeric states are skipped.
-    """
-    if device_class not in senses or state is None:
-        return None
-    try:
-        value = float(state)
-    except (TypeError, ValueError):
-        return None
-    if value != value or value in (float("inf"), float("-inf")):
-        return None
-    unit = (unit or "").strip()
-    if device_class == "temperature":
-        if unit in ("°F", "F"):
-            value = (value - 32) * 5 / 9
-        elif unit == "K":
-            value = value - 273.15
-        elif unit not in ("°C", "C", ""):
-            return None
-        return {"sense": "temperature", "value": round(value, 2), "unit": "celsius", "at": at.isoformat()}
-    if unit not in ("%", ""):
-        return None
-    return {"sense": "humidity", "value": round(value, 2), "unit": "percent", "at": at.isoformat()}
 
 
 class Forwarder:

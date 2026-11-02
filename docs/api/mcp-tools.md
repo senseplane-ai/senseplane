@@ -39,14 +39,15 @@ Listen to a source for a few seconds. Returns the sounds it detects (for example
 
 ## `read_environment`
 
-Read temperature and humidity for a source or room, with the recent trend.
+Read a source's or room's sensors now: temperature, humidity and other numbers with their recent trend; doors and windows, motion, leaks, smoke, plugs and locks with their state and since when; the last doorbell or button press.
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `source` | string | no | Source id or name |
 | `room` | string | no |  |
+| `sense` | string | no | Only this sense (temperature, contact, power, ...) |
 
-**Returns:** Latest values per granted sense, with trend.
+**Returns:** Latest values per granted sense and device: numbers with trend, states with since, last events.
 
 ## `watch_for`
 
@@ -78,7 +79,7 @@ Ask what happened, in plain language, over a time range (people, vehicles, anima
 
 ## `measure`
 
-Measure what happened, exactly: how many times, how long, when first or last, how long since, the longest time without, per hour/day/camera/site, and compared with what is usual (trends). Use it for counts, durations, absence and comparisons instead of adding up events. Measures presence of a label (person, vehicle, animal, an everyday object; optionally in a zone), a watch's activities (watch_id; a watch made with mode track records them without alerting), a sound, or a sensor threshold. The answer says how much of the time was recorded.
+Measure what happened, exactly: how many times, how long, when first or last, how long since, the longest time without, per hour/day/camera/site, and compared with what is usual (trends). Use it for counts, durations, absence and comparisons instead of adding up events. Measures presence of a label (person, vehicle, animal, an everyday object; optionally in a zone), a watch's activities (watch_id; a watch made with mode track records them without alerting), a sound, or a sensor (a threshold, a state such as a door open or a plug on, or events such as the doorbell). The answer says how much of the time was recorded.
 
 | Input | Type | Required | Notes |
 |---|---|---|---|

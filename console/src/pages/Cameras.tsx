@@ -10,13 +10,13 @@ import { prefs } from "../session";
 import { useApp } from "../shell/AppData";
 import {
   noVideoSince,
-  type StatusKind, ago, eventKind, formatReading, ingestLabel, isSensor, isVideo, keepsLabel, statusOf, timeOf,
+  type Reading, type StatusKind, ago, eventKind, formatReading, ingestLabel, isSensor, isVideo, keepsLabel, readingLabel, statusOf, timeOf,
 } from "../shell/sources";
 import { EmptyState, Frame, Icon, LinkButton, PageHeader, Pill, StatusDot, Table, Tag } from "../ui";
 import "./cameras.css";
 
 type Filter = "all" | StatusKind;
-type Now = { snapshot_url?: string; captured_at: string; readings?: { sense: string; value: number; unit: string; measured_at?: string }[] };
+type Now = { snapshot_url?: string; captured_at: string; readings?: Reading[] };
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
@@ -82,7 +82,7 @@ function CameraCard({ s, now, last, index }: { s: Source; now?: Now; last?: Even
       ) : (
         <div className="cam-card-reading">
           <span className="reading-value">{reading ? formatReading(reading) : "—"}</span>
-          <span className="reading-meta">{ingestLabel(s)}{reading?.measured_at ? ` · ${timeOf(reading.measured_at, false)}` : ""}</span>
+          <span className="reading-meta">{reading && (reading.device || (now?.readings?.length ?? 0) > 1) ? `${readingLabel(reading)} · ` : ""}{ingestLabel(s)}{reading?.measured_at ? ` · ${timeOf(reading.measured_at, false)}` : ""}</span>
         </div>
       )}
       <div className="cam-card-body">

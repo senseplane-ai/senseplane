@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // How sources read in the console: status words, dot colours, ingest labels.
-import { type Source, detectionLabel, labelName } from "senseplane";
+import { type Source, detectionLabel, labelName, readingText, senseName } from "senseplane";
 import type { DotTone } from "../ui";
 
 export type StatusKind = "on" | "attention" | "waiting" | "paused";
@@ -54,8 +54,18 @@ export function keepsLabel(s: Source, account?: { retention_days: number | null;
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
-const UNITS: Record<string, string> = { celsius: "°C", percent: "%" };
-export const formatReading = (r: { value: number; unit: string }) => `${Number(r.value.toFixed(1))} ${UNITS[r.unit] ?? r.unit}`.replace(" %", "%");
+/** A sensor reading as the API returns it (spec/schemas/reading.json, ADR 0060). */
+export type Reading = {
+  sense: string; kind?: "number" | "state" | "event"; value?: number | boolean; unit?: string; state?: string; since?: string; detail?: string;
+  device?: { id: string; name?: string }; measured_at?: string;
+};
+
+/** "21.5 °C", "open", "rang". */
+export const formatReading = (r: Reading) => readingText(r);
+/** What the reading is of: the device's name ("Fridge door"), else the sense ("temperature"). */
+export const readingLabel = (r: Reading) => r.device?.name ?? r.device?.id ?? senseName(r.sense);
+/** One key per sense and device. */
+export const readingKey = (r: Reading) => `${r.sense}|${r.device?.id ?? ""}`;
 
 export const timeOf = (iso: string | number, seconds = true) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hour12: false });

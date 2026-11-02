@@ -9,7 +9,15 @@ from __future__ import annotations
 from enum import Enum, StrEnum
 from typing import Annotated
 
-from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, RootModel
+from pydantic import (
+    AnyUrl,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StringConstraints,
+)
 
 from . import sense
 
@@ -122,28 +130,12 @@ class RetentionMode(Enum):
     NoneType_None = None
 
 
-class Temperature(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    above: float | None = None
-    below: float | None = None
-
-
-class Humidity(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    above: float | None = None
-    below: float | None = None
-
-
 class SensorThresholds(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    temperature: Temperature | None = None
-    humidity: Humidity | None = None
+    above: float | None = None
+    below: float | None = None
 
 
 class MaxResolution(StrEnum):
@@ -208,9 +200,13 @@ class Source(BaseModel):
         ),
     ] = None
     sensor_thresholds: Annotated[
-        SensorThresholds | None,
+        dict[
+            Annotated[str, StringConstraints(pattern=r'^[a-z][a-z0-9_]*$')],
+            SensorThresholds,
+        ]
+        | None,
         Field(
-            description='sensor.threshold fires when a reading crosses one of these.'
+            description='Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses one of these.'
         ),
     ] = None
     max_resolution: Annotated[

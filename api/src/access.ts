@@ -19,6 +19,26 @@ export interface Grant {
 }
 
 export const ABILITIES = ["watch", "history"] as const;
+
+/**
+ * The grant sense that covers every sensor sense (ADR 0060): temperature,
+ * contact, power and any sense a sensor reports later. video and audio are
+ * never covered by it.
+ */
+export const SENSORS = "sensors";
+const MEDIA = new Set(["video", "audio"]);
+
+/** Does a grant's sense list cover this sense? */
+export function coversSense(granted: readonly string[], sense: string): boolean {
+  return granted.includes(sense) || (!MEDIA.has(sense) && granted.includes(SENSORS));
+}
+
+/** The senses granted on a source: `has` also answers for senses covered by "sensors". */
+export class SenseSet extends Set<string> {
+  override has(sense: string): boolean {
+    return super.has(sense) || (!MEDIA.has(sense) && super.has(SENSORS));
+  }
+}
 /** Without the `history` ability, recorded data is limited to this recent stretch (enough for listen and read_environment). */
 export const RECENT_MS = 2 * 3600_000;
 const has = (g: Grant, ability: (typeof ABILITIES)[number]) => !g.abilities || g.abilities.includes(ability);
@@ -39,7 +59,7 @@ export interface Access {
 /** Senses one grant covers for a whole time range on a source (union over grants); "all" for account keys. */
 export function sensesForRange(grants: Grant[] | undefined, sourceId: string, from: Date, to: Date): Set<string> | "all" {
   if (!grants) return "all";
-  const out = new Set<string>();
+  const out = new SenseSet();
   for (const g of grants) if (g.source_ids.includes(sourceId) && inWindow(g, from) && inWindow(g, to)) g.senses.forEach((s) => out.add(s));
   return out;
 }
@@ -47,7 +67,7 @@ export function sensesForRange(grants: Grant[] | undefined, sourceId: string, fr
 /** Clamps [from, to] to the union of a sense's grant windows; undefined when no grant covers any of it. */
 export function grantWindowsFor(grants: Grant[] | undefined, sourceId: string, sense: string): { from: Date | null; to: Date | null }[] | "all" {
   if (!grants) return "all";
-  return grants.filter((g) => g.source_ids.includes(sourceId) && g.senses.includes(sense)).map((g) => ({ from: g.window_from, to: g.window_to }));
+  return grants.filter((g) => g.source_ids.includes(sourceId) && coversSense(g.senses, sense)).map((g) => ({ from: g.window_from, to: g.window_to }));
 }
 
 declare module "fastify" {
@@ -62,7 +82,7 @@ const inWindow = (g: Grant, at: Date) => (!g.window_from || at >= g.window_from)
 export function sensesAt(req: FastifyRequest, sourceId: string, at = new Date()): Set<string> | "all" {
   const grants = req.access?.grants;
   if (!grants) return "all";
-  const out = new Set<string>();
+  const out = new SenseSet();
   for (const g of grants) if (g.source_ids.includes(sourceId) && inWindow(g, at)) g.senses.forEach((s) => out.add(s));
   return out;
 }
@@ -88,7 +108,7 @@ export function requireRange(req: FastifyRequest, sourceId: string, sense: strin
   const grants = req.access?.grants;
   if (!grants) return;
   if (!seesSource(req, sourceId)) throw new ApiError(404, "not_found", "source not found");
-  const ok = grants.some((g) => g.source_ids.includes(sourceId) && g.senses.includes(sense) && inWindow(g, from) && inWindow(g, to));
+  const ok = grants.some((g) => g.source_ids.includes(sourceId) && coversSense(g.senses, sense) && inWindow(g, from) && inWindow(g, to));
   if (!ok) throw new ApiError(403, "forbidden_sense", `this agent has no ${sense} grant covering that range`);
 }
 
@@ -99,7 +119,10 @@ export function grantFilter<DB, TB extends keyof DB>(req: FastifyRequest, timeCo
   return (eb: ExpressionBuilder<DB, TB>) => {
     if (!grants.length) return sql<boolean>`false`;
     return eb.or(grants.map((g) => {
-      const parts = [eb("source_id" as never, "in", g.source_ids as never), eb("sense" as never, "in", g.senses as never)];
+      const sense = g.senses.includes(SENSORS)
+        ? eb.or([eb("sense" as never, "in", g.senses as never), eb("sense" as never, "not in", [...MEDIA] as never)])
+        : eb("sense" as never, "in", g.senses as never);
+      const parts = [eb("source_id" as never, "in", g.source_ids as never), sense];
       if (g.window_from) parts.push(eb(timeColumn as never, ">=", g.window_from as never));
       if (g.window_to) parts.push(eb(timeColumn as never, "<=", g.window_to as never));
       return eb.and(parts);

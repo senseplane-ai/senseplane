@@ -7,25 +7,58 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Annotated
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-
-class Sense(Enum):
-    temperature = 'temperature'
-    humidity = 'humidity'
+from . import sense as sense_1
 
 
-class Unit(Enum):
-    celsius = 'celsius'
-    percent = 'percent'
+class Kind(Enum):
+    number = 'number'
+    state = 'state'
+    event = 'event'
+
+
+class Device(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: Annotated[str, Field(max_length=200)]
+    name: Annotated[str | None, Field(max_length=200)] = None
 
 
 class Reading(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    sense: Sense
-    value: float
-    unit: Unit
-    measured_at: AwareDatetime | None = None
+    sense: sense_1.Sense
+    kind: Kind
+    value: Annotated[
+        float | bool | None,
+        Field(description='number: the value; state: true or false; absent for events'),
+    ] = None
+    unit: Annotated[
+        str | None,
+        Field(
+            description='number only: celsius, percent, watt, ... (spec/senses.json)'
+        ),
+    ] = None
+    state: Annotated[
+        str | None,
+        Field(
+            description='state only: what the value means for this sense (open/closed, on/off, wet/dry, ...)'
+        ),
+    ] = None
+    since: Annotated[
+        AwareDatetime | None,
+        Field(
+            description='state only, in latest readings: when it last changed to this value'
+        ),
+    ] = None
+    detail: Annotated[
+        str | None,
+        Field(description='event only: e.g. single, double or long for a button'),
+    ] = None
+    device: Device | None = None
+    measured_at: AwareDatetime

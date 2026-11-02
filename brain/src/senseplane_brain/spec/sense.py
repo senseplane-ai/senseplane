@@ -12,14 +12,14 @@ from typing import Annotated
 from pydantic import Field, RootModel
 
 
-class Sense2(StrEnum):
+class Sense1(StrEnum):
     video = 'video'
     audio = 'audio'
     temperature = 'temperature'
     humidity = 'humidity'
 
 
-class Sense3(RootModel[str]):
+class Sense2(RootModel[str]):
     root: Annotated[
         str,
         Field(
@@ -31,9 +31,9 @@ class Sense3(RootModel[str]):
     ]
 
 
-class Sense(RootModel[Sense2 | Sense3]):
+class Sense(RootModel[Sense1 | Sense2]):
     root: Annotated[
-        Sense2 | Sense3,
+        Sense1 | Sense2,
         Field(
             description='One thing measured. Open enum: clients must accept unknown values.',
             examples=['video', 'audio', 'temperature', 'humidity'],

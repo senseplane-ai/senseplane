@@ -908,7 +908,7 @@
               },
               "name": {
                 "type": "string",
-                "description": "tool: search_history, list_events, event_snapshot, query_activity or check_history"
+                "description": "tool: search_history, list_events, event_snapshot, query_activity, check_history or read_sensors"
               },
               "args": {
                 "type": "object",
@@ -931,7 +931,8 @@
                     "list_events",
                     "event_snapshot",
                     "query_activity",
-                    "check_history"
+                    "check_history",
+                    "read_sensors"
                   ]
                 },
                 "args": {
@@ -972,6 +973,10 @@
                     "watch_id": {
                       "type": "string",
                       "description": "check_history: check an existing watch instead"
+                    },
+                    "sense": {
+                      "type": "string",
+                      "description": "read_sensors: only this sense (contact, temperature, ...)"
                     }
                   }
                 }

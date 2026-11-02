@@ -4,13 +4,14 @@
 // PATCH /v1/sources/{id}, latest snapshot, and sensor readings with sensor.threshold events.
 import { canSense, grantWindowsFor } from "../access.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { sql } from "kysely";
-import type { DataAccess, Source } from "../data/access.js";
-import type { Thresholds } from "../data/schema.js";
+import { type ExpressionBuilder, sql } from "kysely";
+import type { AccountScope, DataAccess, Source } from "../data/access.js";
+import type { Database, Thresholds } from "../data/schema.js";
 import { ApiError } from "../errors.js";
 import { createEvent } from "../events.js";
 import { mediaClaims } from "../media-access.js";
 import type { KeyRefSealer, PlaybackSigner } from "../playback.js";
+import { cleanReading, deviceMatches, holds, isSensorSense, type ReadingInput, readingInputSchema, readingText, type SensorMatch, senseName, toReading } from "../readings.js";
 import { activeAt } from "../schedule.js";
 import { toSource } from "./sources.js";
 
@@ -20,7 +21,31 @@ export const LATEST_TTL_SECONDS = 60;
 const point = { type: "array", minItems: 2, maxItems: 2, items: { type: "number", minimum: 0, maximum: 1 } };
 const polygon = { type: "array", minItems: 3, maxItems: 64, items: point };
 const bound = { type: "object", additionalProperties: false, properties: { above: { type: "number" }, below: { type: "number" } } };
-const UNITS: Record<string, string> = { temperature: "celsius", humidity: "percent" };
+
+/** The latest reading per sense and device on a source; a state also says since when it has held (ADR 0060). */
+export async function latestReadings(s: AccountScope, sourceId: string) {
+  const latest = await s.db
+    .selectFrom("sensor_readings").select(["sense", "kind", "value", "unit", "detail", "device_id", "device_name", "measured_at"])
+    .distinctOn(["sense", "device_id"]).where("source_id", "=", sourceId)
+    .orderBy("sense").orderBy("device_id").orderBy("measured_at", "desc").execute();
+  // Readings from before integrations named their device (ADR 0060) give way to newer ones of the same sense that do.
+  const named = new Map<string, number>();
+  for (const r of latest) if (r.device_id) named.set(r.sense, Math.max(named.get(r.sense) ?? 0, new Date(r.measured_at).getTime()));
+  const out = [];
+  for (const r of latest.filter((x) => x.device_id || !(new Date(x.measured_at).getTime() < (named.get(x.sense) ?? 0)))) {
+    let since: Date | null = null;
+    if (r.kind === "state") {
+      const same = (eb: ExpressionBuilder<Database, "sensor_readings">) => eb.and([eb("source_id", "=", sourceId), eb("sense", "=", r.sense), sql<boolean>`device_id is not distinct from ${r.device_id}`]);
+      const changed = await s.db.selectFrom("sensor_readings").select("measured_at").where(same).where("value", "<>", r.value)
+        .where("measured_at", "<", r.measured_at).orderBy("measured_at", "desc").limit(1).executeTakeFirst();
+      const first = await s.db.selectFrom("sensor_readings").select("measured_at").where(same)
+        .where("measured_at", ">", changed ? changed.measured_at : new Date(0)).orderBy("measured_at").limit(1).executeTakeFirst();
+      since = first ? new Date(first.measured_at) : null;
+    }
+    out.push({ row: r, since });
+  }
+  return out;
+}
 
 export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
   data: DataAccess;
@@ -52,7 +77,7 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
             retention_max_bytes: { type: ["integer", "null"], minimum: 1 },
             zones: { type: "array", maxItems: 32, items: { type: "object", required: ["name", "polygon"], additionalProperties: false, properties: { name: { type: "string", pattern: "^[a-z0-9_]{1,40}$" }, polygon } } },
             privacy_masks: { type: "array", maxItems: 32, items: polygon },
-            sensor_thresholds: { type: ["object", "null"], additionalProperties: false, properties: { temperature: bound, humidity: bound } },
+            sensor_thresholds: { type: ["object", "null"], propertyNames: { pattern: "^[a-z][a-z0-9_]*$" }, additionalProperties: bound },
           },
         },
       },
@@ -91,62 +116,45 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
     const found = await deps.data.withAccount(accountId, async (s) => {
       const src = await s.sources.get(req.params.id);
       if (!src) return undefined;
-      const readings = await s.db
-        .selectFrom("sensor_readings").select(["sense", "value", "unit", "measured_at"]).distinctOn("sense")
-        .where("source_id", "=", src.id).orderBy("sense").orderBy("measured_at", "desc").execute();
-      return { src, readings };
+      return { src, readings: await latestReadings(s, src.id) };
     });
     if (!found) throw new ApiError(404, "not_found", "source not found");
     const now = new Date().toISOString();
     const isVideo = found.src.senses.includes("video") && canSense(req, found.src.id, "video");
-    found.readings = found.readings.filter((r) => canSense(req, found.src.id, r.sense));
+    const readings = found.readings.filter((r) => canSense(req, found.src.id, r.row.sense));
+    const newest = readings.reduce<Date | null>((m, r) => (!m || new Date(r.row.measured_at) > m ? new Date(r.row.measured_at) : m), null);
     return {
       source_id: found.src.id,
-      captured_at: found.readings[0] ? new Date(found.readings[0].measured_at).toISOString() : now,
+      captured_at: newest ? newest.toISOString() : now,
       // The "latest" link is a live view of the source, so it lives only 60 s and is re-checked on every fetch (ADR 0036).
       ...(isVideo && deps.signer
         ? { snapshot_url: `${deps.base(req)}/media/${deps.signer.sign({ kind: "latest", accountId, sourceId: found.src.id, ...latestClaims(req, found.src.id) }, LATEST_TTL_SECONDS).token}/snapshot.jpg` }
         : {}),
-      ...(found.readings.length
-        ? { readings: found.readings.map((r) => ({ sense: r.sense, value: r.value, unit: r.unit, measured_at: new Date(r.measured_at).toISOString() })) }
-        : {}),
+      ...(readings.length ? { readings: readings.map((r) => toReading(r.row, r.since)) } : {}),
     };
   });
 
-  app.post<{ Params: { id: string }; Body: { readings: { sense: "temperature" | "humidity"; value: number; unit: string; measured_at?: string; at?: string }[] } }>(
+  app.post<{ Params: { id: string }; Body: { readings: ReadingInput[] } }>(
     "/v1/sources/:id/readings",
     {
       schema: {
         body: {
           type: "object", required: ["readings"], additionalProperties: false,
-          properties: {
-            readings: {
-              type: "array", minItems: 1, maxItems: 1000,
-              items: {
-                type: "object", required: ["sense", "value", "unit"], additionalProperties: false,
-                // `at` is accepted as an alias of `measured_at` (integrations, ADR 0045).
-                properties: { sense: { enum: ["temperature", "humidity"] }, value: { type: "number" }, unit: { enum: ["celsius", "percent"] }, measured_at: { type: "string" }, at: { type: "string" } },
-              },
-            },
-          },
+          properties: { readings: { type: "array", minItems: 1, maxItems: 1000, items: readingInputSchema } },
         },
       },
     },
     async (req, reply) => {
       const accountId = req.accountId!;
-      const readings = req.body.readings
-        .map((r) => ({ ...r, at: (r.measured_at ?? r.at) ? new Date((r.measured_at ?? r.at)!) : new Date() }))
-        .sort((a, b) => a.at.getTime() - b.at.getTime());
-      for (const r of readings) {
-        if (Number.isNaN(r.at.getTime())) throw new ApiError(400, "validation_failed", "measured_at must be an RFC 3339 time");
-        if (UNITS[r.sense] !== r.unit) throw new ApiError(400, "validation_failed", `${r.sense} is measured in ${UNITS[r.sense]}`);
-      }
+      const now = new Date();
+      const readings = req.body.readings.map((r) => cleanReading(r, now)).sort((a, b) => a.at.getTime() - b.at.getTime());
       const events = await deps.data.withAccount(accountId, async (s) => {
         const src = await s.sources.get(req.params.id);
         if (!src) throw new ApiError(404, "not_found", "source not found");
         if (src.type !== "sensor") throw new ApiError(400, "validation_failed", "this source does not take sensor readings");
-        const other = readings.find((r) => !src.senses.includes(r.sense));
-        if (other) throw new ApiError(400, "validation_failed", `this sensor does not measure ${other.sense}`);
+        // A sensor gains each new sense its readings bring (ADR 0060); grants still decide who sees it.
+        const added = [...new Set(readings.map((r) => r.sense))].filter((x) => !src.senses.includes(x));
+        if (added.length) await s.db.updateTable("sources").set({ senses: [...src.senses, ...added] }).where("id", "=", src.id).execute();
         for (const month of new Set(readings.map((r) => r.at.toISOString().slice(0, 7)))) {
           await sql`select ensure_readings_partition(${new Date(`${month}-01T00:00:00Z`)})`.execute(s.db);
         }
@@ -155,48 +163,58 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
         // Watches with sensor triggers on this source (evaluated here, where readings arrive).
         const sensorWatches = (await s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute())
           .filter((w) => w.sources.includes(src.id) && (w.compiled as { trigger: { type: string } }).trigger.type === "sensor");
+        const where = src.location ?? src.name;
         for (const r of readings) {
-          const prev = await s.db.selectFrom("sensor_readings").select("value").where("source_id", "=", src.id)
-            .where("sense", "=", r.sense).where("measured_at", "<", r.at).orderBy("measured_at", "desc").limit(1).executeTakeFirst();
-          await s.db.insertInto("sensor_readings").values({ account_id: accountId, source_id: src.id, sense: r.sense, value: r.value, unit: r.unit, measured_at: r.at }).execute();
+          const same = (eb: ExpressionBuilder<Database, "sensor_readings">) => eb.and([eb("source_id", "=", src.id), eb("sense", "=", r.sense), sql<boolean>`device_id is not distinct from ${r.device_id}`]);
+          const prev = await s.db.selectFrom("sensor_readings").select(["value", "kind"]).where(same)
+            .where("measured_at", "<", r.at).orderBy("measured_at", "desc").limit(1).executeTakeFirst();
+          await s.db.insertInto("sensor_readings").values({
+            account_id: accountId, source_id: src.id, sense: r.sense, kind: r.kind, value: r.value, unit: r.unit,
+            detail: r.detail, device_id: r.device_id, device_name: r.device_name, measured_at: r.at,
+          }).execute();
+          const value = toReading({ ...r, measured_at: r.at });
+          const said = `${r.device_name ?? senseName(r.sense)}${r.kind === "event" ? " " : " is "}${readingText(r)}`;
           for (const w of sensorWatches) {
-            const trig = (w.compiled as { trigger: { sense: string; above?: number; below?: number; min_duration_s?: number } }).trigger;
-            if (trig.sense !== r.sense) continue;
+            const trig = (w.compiled as { trigger: SensorMatch & { min_duration_s?: number } }).trigger;
+            if (trig.sense !== r.sense || !deviceMatches(trig, r)) continue;
             if (!activeAt(r.at, w.active_hours, (w.compiled as { active_hours?: { days: string[]; from: string; to: string }[] | null }).active_hours)) continue;
-            const out = (v: number) => (trig.above !== undefined && v > trig.above) || (trig.below !== undefined && v < trig.below);
-            if (!out(r.value)) continue;
-            // Start of the current run of out-of-range readings.
-            const lastIn = await s.db.selectFrom("sensor_readings").select("measured_at").where("source_id", "=", src.id).where("sense", "=", r.sense)
-              .where("measured_at", "<", r.at)
-              .where((eb) => eb.or([
-                ...(trig.above !== undefined ? [eb("value", "<=", trig.above)] : []),
-                ...(trig.below !== undefined ? [eb("value", ">=", trig.below)] : []),
-              ]))
-              .orderBy("measured_at", "desc").limit(1).executeTakeFirst();
-            const runStart = await s.db.selectFrom("sensor_readings").select("measured_at").where("source_id", "=", src.id).where("sense", "=", r.sense)
-              .where("measured_at", ">", lastIn ? new Date(lastIn.measured_at) : new Date(0)).orderBy("measured_at").limit(1).executeTakeFirst();
-            const started = runStart ? new Date(runStart.measured_at) : r.at;
-            if ((r.at.getTime() - started.getTime()) / 1000 < (trig.min_duration_s ?? 0)) continue;
+            if (!holds(trig, r)) continue;
+            // Start of the current run of readings that hold; an event is its own run.
+            let started = r.at;
+            if (r.kind !== "event") {
+              const lastOut = await s.db.selectFrom("sensor_readings").select("measured_at").where(same).where("measured_at", "<", r.at)
+                .where((eb) => (r.kind === "state"
+                  ? eb("value", "<>", (trig.state ?? true) ? 1 : 0)
+                  : eb.and([
+                    ...(trig.above !== undefined ? [eb("value", "<=", trig.above)] : []),
+                    ...(trig.below !== undefined ? [eb("value", ">=", trig.below)] : []),
+                    ...(trig.above === undefined && trig.below === undefined ? [sql<boolean>`false`] : []),
+                  ])))
+                .orderBy("measured_at", "desc").limit(1).executeTakeFirst();
+              const runStart = await s.db.selectFrom("sensor_readings").select("measured_at").where(same)
+                .where("measured_at", ">", lastOut ? new Date(lastOut.measured_at) : new Date(0)).orderBy("measured_at").limit(1).executeTakeFirst();
+              started = runStart ? new Date(runStart.measured_at) : r.at;
+              if ((r.at.getTime() - started.getTime()) / 1000 < (trig.min_duration_s ?? 0)) continue;
+            }
             const ev = await createEvent(s, {
-              // One event per out-of-range run per watch; sensor watches fire `reading.threshold` (ADR 0045).
-              event_key: `watch:${w.id}:${src.id}:${started.toISOString()}`, source_id: src.id, type: "reading.threshold", sense: r.sense,
-              occurred_at: r.at, summary: `${w.instruction} — ${r.sense} is ${r.value} ${r.unit}.`, labels: [r.sense], confidence: null,
-              value: { sense: r.sense, value: r.value, unit: r.unit }, watch_id: w.id,
+              // One event per run that holds, per watch and device; sensor watches fire `reading.threshold` (ADR 0045).
+              event_key: `watch:${w.id}:${src.id}:${started.toISOString()}${r.device_id ? `:${r.device_id}` : ""}`, source_id: src.id, type: "reading.threshold", sense: r.sense,
+              occurred_at: r.at, summary: `${w.instruction} — ${said}.`, labels: [r.sense], confidence: null, value, watch_id: w.id,
             });
             if (ev) created.push(ev.id);
           }
-          const t = thresholds[r.sense];
+          const t = r.kind === "number" ? thresholds[r.sense] : undefined;
           if (!t) continue;
+          const before = prev && prev.kind === "number" ? prev : undefined;
           // Fires on the crossing, not on every reading past the line.
           const crossed =
-            (t.above !== undefined && r.value > t.above && (prev === undefined || prev.value <= t.above)) ||
-            (t.below !== undefined && r.value < t.below && (prev === undefined || prev.value >= t.below));
+            (t.above !== undefined && r.value > t.above && (before === undefined || before.value <= t.above)) ||
+            (t.below !== undefined && r.value < t.below && (before === undefined || before.value >= t.below));
           if (!crossed) continue;
           const dir = t.above !== undefined && r.value > t.above ? `above ${t.above}` : `below ${t.below}`;
           const ev = await createEvent(s, {
-            event_key: `threshold:${src.id}:${r.sense}:${r.at.toISOString()}`, source_id: src.id, type: "sensor.threshold", sense: r.sense,
-            occurred_at: r.at, summary: `${src.location ?? src.name}: ${r.sense} is ${r.value} ${r.unit}, ${dir}.`, labels: [r.sense],
-            confidence: null, value: { sense: r.sense, value: r.value, unit: r.unit },
+            event_key: `threshold:${src.id}:${r.sense}:${r.at.toISOString()}${r.device_id ? `:${r.device_id}` : ""}`, source_id: src.id, type: "sensor.threshold", sense: r.sense,
+            occurred_at: r.at, summary: `${where}: ${said}, ${dir}.`, labels: [r.sense], confidence: null, value,
           });
           if (ev) created.push(ev.id);
         }
@@ -209,15 +227,16 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string; sense?: string } }>("/v1/sources/:id/history", async (req) => {
     const to = req.query.to ? new Date(req.query.to) : new Date();
     const from = req.query.from ? new Date(req.query.from) : new Date(to.getTime() - 24 * 3600_000);
-    // Agents only get the senses they're granted, inside each grant's time window.
-    const senses = ["temperature", "humidity"].filter((s) => !req.query.sense || s === req.query.sense);
-    const windows = senses.map((sense) => ({ sense, w: grantWindowsFor(req.access?.grants, req.params.id, sense) }))
-      .filter((x) => x.w === "all" || x.w.length > 0);
-    if (req.query.sense && !windows.length) throw new ApiError(403, "forbidden_sense", `this agent has no ${req.query.sense} grant for this source`);
     const rows = await deps.data.withAccount(req.accountId!, async (s) => {
-      if (!(await s.sources.get(req.params.id))) throw new ApiError(404, "not_found", "source not found");
+      const src = await s.sources.get(req.params.id);
+      if (!src) throw new ApiError(404, "not_found", "source not found");
+      // Agents only get the senses they're granted, inside each grant's time window.
+      const senses = src.senses.filter((x) => isSensorSense(x) && (!req.query.sense || x === req.query.sense));
+      const windows = senses.map((sense) => ({ sense, w: grantWindowsFor(req.access?.grants, req.params.id, sense) }))
+        .filter((x) => x.w === "all" || x.w.length > 0);
+      if (req.query.sense && !windows.length) throw new ApiError(403, "forbidden_sense", `this agent has no ${req.query.sense} grant for this source`);
       if (!windows.length) return [];
-      const q = s.db.selectFrom("sensor_readings").select(["sense", "value", "unit", "measured_at"]).where("source_id", "=", req.params.id)
+      return s.db.selectFrom("sensor_readings").select(["sense", "kind", "value", "unit", "detail", "device_id", "device_name", "measured_at"]).where("source_id", "=", req.params.id)
         .where("measured_at", ">=", from).where("measured_at", "<", to)
         .where((eb) => eb.or(windows.map(({ sense, w }) => {
           if (w === "all") return eb("sense", "=", sense);
@@ -227,9 +246,8 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
             ...(x.to ? [eb("measured_at", "<=", x.to)] : []),
           ])))]);
         })))
-        .orderBy("measured_at").limit(10_000);
-      return q.execute();
+        .orderBy("measured_at").limit(10_000).execute();
     });
-    return { data: rows.map((r) => ({ sense: r.sense, value: r.value, unit: r.unit, measured_at: new Date(r.measured_at).toISOString() })) };
+    return { data: rows.map((r) => toReading(r)) };
   });
 }

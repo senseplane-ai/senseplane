@@ -19,7 +19,7 @@ export interface What {
   label?: string; // presence: person, vehicle, animal or an everyday object
   watch_id?: string;
   sound?: string;
-  sensor?: { sense: string; above?: number; below?: number };
+  sensor?: { sense: string; device?: string; above?: number; below?: number; state?: boolean };
   zone?: string;
   min_count?: number;
   min_duration_s?: number;

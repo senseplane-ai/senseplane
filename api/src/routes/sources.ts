@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomBytes } from "node:crypto";
-import { seesSource } from "../access.js";
+import { SenseSet, seesSource } from "../access.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Source } from "../data/access.js";
 import type { DataAccess } from "../data/access.js";
@@ -42,6 +42,7 @@ export interface SourcesDeps {
 
 export const newBridgeToken = () => `brg_${randomBytes(24).toString("base64url")}`;
 export const newIntegrationToken = () => `sit_${randomBytes(24).toString("base64url")}`;
+/** What a new sensor source senses unless told; it gains each new sense its readings bring (ADR 0060). */
 const SENSOR_SENSES = ["temperature", "humidity"] as const;
 /** RTSP credentials never leave in error details or listings. */
 export const redactUrls = (text: string) => text.replace(/(rtsps?:\/\/)[^/@\s]*@/gi, "$1***@");
@@ -56,7 +57,7 @@ function refusePaused(source: Source) {
 export function grantedView<T extends { id: string; senses: string[] }>(req: FastifyRequest, s: T): T {
   const grants = req.access?.grants;
   if (!grants) return s;
-  const allowed = new Set(grants.filter((g) => g.source_ids.includes(s.id)).flatMap((g) => g.senses));
+  const allowed = new SenseSet(grants.filter((g) => g.source_ids.includes(s.id)).flatMap((g) => g.senses));
   return { ...s, senses: s.senses.filter((x) => allowed.has(x)) };
 }
 
@@ -96,7 +97,7 @@ const createBody = {
     type: { type: "string", enum: ["browser", "sensor", "whip", "rtsp"] },
     record_audio: { type: "boolean", default: false },
     retention_days: { type: ["integer", "null"], minimum: 1 },
-    senses: { type: "array", minItems: 1, uniqueItems: true, items: { enum: [...SENSOR_SENSES] } },
+    senses: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio"] } } },
     rtsp_url: { type: "string", maxLength: 2048, pattern: "^rtsps?://" },
     bridge_id: { type: "string", minLength: 1, maxLength: 64 },
   },

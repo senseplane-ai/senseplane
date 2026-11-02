@@ -159,26 +159,10 @@
           "type": "null"
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "sense",
-            "value",
-            "unit"
-          ],
-          "properties": {
-            "sense": {
-              "$ref": "sense.json"
-            },
-            "value": {
-              "type": "number"
-            },
-            "unit": {
-              "type": "string"
-            }
-          }
+          "$ref": "reading.json"
         }
-      ]
+      ],
+      "description": "Sensor events: the reading that fired it"
     },
     "media": {
       "type": "object",

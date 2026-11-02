@@ -61,16 +61,24 @@
           "properties": {
             "sense": {
               "type": "string",
-              "description": "temperature or humidity"
+              "description": "temperature, humidity, power, contact, motion, switch, doorbell, ... (spec/senses.json)"
+            },
+            "device": {
+              "type": "string",
+              "description": "Only this device on the source (its id or name)"
             },
             "above": {
               "type": "number"
             },
             "below": {
               "type": "number"
+            },
+            "state": {
+              "type": "boolean",
+              "description": "States: the spans with this value (contact true: while open; switch true: while on)"
             }
           },
-          "description": "A sensor: its readings, or the spans above/below a threshold"
+          "description": "A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments"
         },
         "zone": {
           "type": "string",
@@ -120,16 +128,24 @@
           "properties": {
             "sense": {
               "type": "string",
-              "description": "temperature or humidity"
+              "description": "temperature, humidity, power, contact, motion, switch, doorbell, ... (spec/senses.json)"
+            },
+            "device": {
+              "type": "string",
+              "description": "Only this device on the source (its id or name)"
             },
             "above": {
               "type": "number"
             },
             "below": {
               "type": "number"
+            },
+            "state": {
+              "type": "boolean",
+              "description": "States: the spans with this value (contact true: while open; switch true: while on)"
             }
           },
-          "description": "A sensor: its readings, or the spans above/below a threshold"
+          "description": "A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments"
         },
         "zone": {
           "type": "string",

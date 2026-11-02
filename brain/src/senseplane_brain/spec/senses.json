@@ -1,0 +1,43 @@
+{
+  "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0. The known sensor senses (ADR 0060). `kind` is number (a value in `unit`), state (on/off: `on` is what true means, `off` what false means) or event (something happened, with an optional detail). A reading of a sense not listed here is accepted with the kind it states and, for numbers, any unit token. `name` is what people read; `words` are what the rule-based watch compiler matches; `symbol` is how a unit is shown. Generated copies: api/src/generated/senses.json, mcp/src/generated/senses.json, console/src/generated/senses.json (pnpm codegen).",
+  "units": {
+    "celsius": "°C",
+    "percent": "%",
+    "watt": "W",
+    "kilowatt_hour": "kWh",
+    "volt": "V",
+    "ampere": "A",
+    "lux": "lx",
+    "ppm": "ppm",
+    "ugm3": "µg/m³",
+    "hectopascal": "hPa",
+    "decibel": "dB"
+  },
+  "senses": [
+    { "sense": "temperature", "kind": "number", "unit": "celsius", "name": "temperature", "words": ["temperature", "temp", "degree", "°c", "hot", "cold", "warm", "heat"] },
+    { "sense": "humidity", "kind": "number", "unit": "percent", "name": "humidity", "words": ["humidity", "humid", "damp"] },
+    { "sense": "power", "kind": "number", "unit": "watt", "name": "power use", "words": ["power", "watts", "wattage", "drawing"] },
+    { "sense": "energy", "kind": "number", "unit": "kilowatt_hour", "name": "energy used", "words": ["energy", "kwh"] },
+    { "sense": "voltage", "kind": "number", "unit": "volt", "name": "voltage", "words": ["voltage", "volts"] },
+    { "sense": "current", "kind": "number", "unit": "ampere", "name": "current", "words": ["amps", "amperage"] },
+    { "sense": "illuminance", "kind": "number", "unit": "lux", "name": "light level", "words": ["light level", "illuminance", "lux", "bright", "dark"] },
+    { "sense": "co2", "kind": "number", "unit": "ppm", "name": "CO2", "words": ["co2", "carbon dioxide", "stuffy"] },
+    { "sense": "pm25", "kind": "number", "unit": "ugm3", "name": "PM2.5", "words": ["pm2.5", "pm25", "particulate", "air quality"] },
+    { "sense": "pressure", "kind": "number", "unit": "hectopascal", "name": "air pressure", "words": ["air pressure", "barometric"] },
+    { "sense": "battery", "kind": "number", "unit": "percent", "name": "battery", "words": ["battery"] },
+    { "sense": "sound_level", "kind": "number", "unit": "decibel", "name": "sound level", "words": ["decibels", "noise level"] },
+    { "sense": "contact", "kind": "state", "on": "open", "off": "closed", "name": "door or window", "words": ["door", "window", "opened", "open", "closed", "fridge", "gate", "garage"] },
+    { "sense": "motion", "kind": "state", "on": "motion", "off": "clear", "name": "motion", "words": ["motion", "movement", "moving"] },
+    { "sense": "occupancy", "kind": "state", "on": "occupied", "off": "clear", "name": "presence", "words": ["occupied", "occupancy", "presence"] },
+    { "sense": "leak", "kind": "state", "on": "wet", "off": "dry", "name": "leak", "words": ["leak", "water", "flood", "wet"] },
+    { "sense": "smoke", "kind": "state", "on": "smoke", "off": "clear", "name": "smoke", "words": ["smoke", "fire"] },
+    { "sense": "carbon_monoxide", "kind": "state", "on": "detected", "off": "clear", "name": "carbon monoxide", "words": ["carbon monoxide", "co alarm"] },
+    { "sense": "gas", "kind": "state", "on": "detected", "off": "clear", "name": "gas", "words": ["gas leak", "gas"] },
+    { "sense": "switch", "kind": "state", "on": "on", "off": "off", "name": "switch", "words": ["plug", "switch", "switched", "turned on", "turned off", "light", "kettle", "tv"] },
+    { "sense": "lock", "kind": "state", "on": "unlocked", "off": "locked", "name": "lock", "words": ["lock", "locked", "unlocked"] },
+    { "sense": "vibration", "kind": "state", "on": "vibration", "off": "still", "name": "vibration", "words": ["vibration", "vibrating", "knock"] },
+    { "sense": "tamper", "kind": "state", "on": "tampered", "off": "clear", "name": "tampering", "words": ["tamper", "tampered"] },
+    { "sense": "button", "kind": "event", "name": "button press", "words": ["button", "pressed", "press"] },
+    { "sense": "doorbell", "kind": "event", "name": "doorbell", "words": ["doorbell", "rang", "ring"] }
+  ]
+}

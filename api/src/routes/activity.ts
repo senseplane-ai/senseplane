@@ -12,6 +12,7 @@ import { type ActivityQuery, type Interval, type Loader, QueryError, type Source
 import type { AccountScope, DataAccess } from "../data/access.js";
 import { ApiError } from "../errors.js";
 import { STALE_ACTIVITY_S } from "../activity.js";
+import { deviceMatches } from "../readings.js";
 import { recordedRanges } from "./playback.js";
 
 /** The sense an activity of this kind needs. */
@@ -45,28 +46,52 @@ export function dbLoader(s: AccountScope, req: FastifyRequest | undefined, now =
         for (const id of ids) {
           const wins = allowed(req, id, name, from, to);
           if (!wins.length) continue;
-          const rows = await s.db.selectFrom("sensor_readings").select(["value", "measured_at"]).where("source_id", "=", id).where("sense", "=", name)
+          const rows = await s.db.selectFrom("sensor_readings").select(["kind", "value", "detail", "device_id", "device_name", "measured_at"]).where("source_id", "=", id).where("sense", "=", name)
             .where("measured_at", ">=", new Date(from)).where("measured_at", "<", new Date(to)).orderBy("measured_at").limit(50_000).execute();
-          const pts = rows.map((r) => ({ t: new Date(r.measured_at).getTime(), v: Number(r.value) }));
-          if (above === undefined && below === undefined) {
-            out.push(...within(pts.map((p, i) => ({ id: `rdg_${id}_${i}`, source_id: id, zone: null, start: p.t, end: p.t, open: false, count: 1, value: p.v })), wins));
-            continue;
+          // A state holds until it changes, so the last one before the window counts too (a door opened at 7:55 is open at 8:00).
+          const before = await s.db.selectFrom("sensor_readings").select(["kind", "value", "detail", "device_id", "device_name", "measured_at"]).distinctOn("device_id")
+            .where("source_id", "=", id).where("sense", "=", name).where("kind", "=", "state").where("measured_at", "<", new Date(from))
+            .orderBy("device_id").orderBy("measured_at", "desc").execute();
+          const byDevice = new Map<string, typeof rows>();
+          for (const r of [...before.map((b) => ({ ...b, measured_at: new Date(from) })), ...rows]) {
+            if (!deviceMatches(what.sensor, r)) continue;
+            const k = r.device_id ?? "";
+            byDevice.set(k, [...(byDevice.get(k) ?? []), r]);
           }
-          // Spans where the threshold holds: from the first reading over it until the next reading that isn't.
-          const hit = (v: number) => (above === undefined || v > above) && (below === undefined || v < below);
-          let cur: Interval | undefined;
-          pts.forEach((p, i) => {
-            if (hit(p.v)) {
-              if (!cur) cur = { id: `rdg_${id}_${i}`, source_id: id, zone: null, start: p.t, end: p.t, open: false, count: 1, value: p.v };
-              cur.end = p.t;
-              cur.value = above !== undefined ? Math.max(cur.value!, p.v) : Math.min(cur.value!, p.v);
-            } else if (cur) {
-              cur.end = p.t;
-              out.push(...within([cur], wins));
-              cur = undefined;
+          for (const [device, list] of byDevice) {
+            const tag = device ? `${id}_${device}` : id;
+            const kind = list[0]!.kind;
+            const pts = list.map((r) => ({ t: new Date(r.measured_at).getTime(), v: Number(r.value), detail: r.detail }));
+            if (kind === "event") {
+              // Doorbell rings and button presses are moments.
+              out.push(...within(pts.map((p, i) => ({ id: `rdg_${tag}_${i}`, source_id: id, zone: null, start: p.t, end: p.t, open: false, count: 1, ...(p.detail ? { summary: p.detail } : {}) })), wins));
+              continue;
             }
-          });
-          if (cur) out.push(...within([{ ...cur, open: now - cur.end < 15 * 60_000, end: now - cur.end < 15 * 60_000 ? Math.min(now, to) : cur.end }], wins));
+            if (kind === "number" && above === undefined && below === undefined) {
+              out.push(...within(pts.map((p, i) => ({ id: `rdg_${tag}_${i}`, source_id: id, zone: null, start: p.t, end: p.t, open: false, count: 1, value: p.v })), wins));
+              continue;
+            }
+            // Spans where the condition holds: from the first reading in it until the next reading that isn't.
+            const want = (what.sensor.state ?? true) ? 1 : 0;
+            const hit = kind === "state" ? (v: number) => v === want : (v: number) => (above === undefined || v > above) && (below === undefined || v < below);
+            let cur: Interval | undefined;
+            pts.forEach((p, i) => {
+              if (hit(p.v)) {
+                if (!cur) cur = { id: `rdg_${tag}_${i}`, source_id: id, zone: null, start: p.t, end: p.t, open: false, count: 1, ...(kind === "number" ? { value: p.v } : {}) };
+                cur.end = p.t;
+                if (kind === "number") cur.value = above !== undefined ? Math.max(cur.value!, p.v) : Math.min(cur.value!, p.v);
+              } else if (cur) {
+                cur.end = p.t;
+                out.push(...within([cur], wins));
+                cur = undefined;
+              }
+            });
+            // A state is reported when it changes, so one still in it is going on; a number is stale after 15 minutes.
+            if (cur) {
+              const live = kind === "state" || now - cur.end < 15 * 60_000;
+              out.push(...within([{ ...cur, open: live, end: live ? Math.min(now, to) : cur.end }], wins));
+            }
+          }
         }
         return out;
       }

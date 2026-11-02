@@ -286,6 +286,33 @@ describe("conversations", () => {
     expect(bad.error).toMatch(/exactly one of/);
   });
 
+  it("reads sensors now for the brain, within the caller's grants (ADR 0060)", async () => {
+    const flat = (await call(owner, "POST", "/v1/sources", { name: "Flat", type: "sensor", senses: ["temperature"] })).json();
+    const at = new Date(Date.now() - 600_000).toISOString();
+    await call(owner, "POST", `/v1/sources/${flat.id}/readings`, { readings: [
+      { sense: "contact", value: true, device: { id: "binary_sensor.fridge", name: "Fridge door" }, at },
+      { sense: "temperature", value: 21.5, unit: "celsius", at },
+    ] });
+    let got: Record<string, any> = {};
+    script = async (_p, on) => {
+      got = { all: await on.tool("read_sensors", {}), doors: await on.tool("read_sensors", { sense: "contact", sources: [flat.id] }) };
+      await on.event({ type: "done", content: "ok" });
+    };
+    const c = (await call(owner, "POST", "/v1/conversations")).json();
+    await call(owner, "POST", `/v1/conversations/${c.id}/messages`, { content: "Is the fridge open?" });
+    expect(got.all.sources).toEqual([{ source_id: flat.id, name: "Flat", readings: expect.arrayContaining([
+      { sense: "contact", kind: "state", value: true, state: "open", since: at, device: { id: "binary_sensor.fridge", name: "Fridge door" }, measured_at: at },
+      { sense: "temperature", kind: "number", value: 21.5, unit: "celsius", measured_at: at },
+    ]) }]);
+    expect(got.doors.sources[0].readings.map((r: { sense: string }) => r.sense)).toEqual(["contact"]);
+    // An agent with only the temperature grant reads no door.
+    const agent = (await call(owner, "POST", "/v1/agents", { name: "Thermo" })).json();
+    await call(owner, "POST", "/v1/grants", { agent_id: agent.id, source_ids: [flat.id], senses: ["temperature"] });
+    const ac = (await call(agent.api_key, "POST", "/v1/conversations")).json();
+    await call(agent.api_key, "POST", `/v1/conversations/${ac.id}/messages`, { content: "Is the fridge open?" });
+    expect(got.all.sources[0].readings.map((r: { sense: string }) => r.sense)).toEqual(["temperature"]);
+  });
+
   it("fails cleanly when the brain can't answer, and drops the question", async () => {
     script = async (_p, on) => { await on.event({ type: "error", error: "failed" }); };
     const c = (await call(owner, "POST", "/v1/conversations")).json();

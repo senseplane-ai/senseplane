@@ -205,31 +205,19 @@
         "object",
         "null"
       ],
-      "additionalProperties": false,
-      "description": "sensor.threshold fires when a reading crosses one of these.",
-      "properties": {
-        "temperature": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "above": {
-              "type": "number"
-            },
-            "below": {
-              "type": "number"
-            }
-          }
-        },
-        "humidity": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "above": {
-              "type": "number"
-            },
-            "below": {
-              "type": "number"
-            }
+      "description": "Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses one of these.",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "above": {
+            "type": "number"
+          },
+          "below": {
+            "type": "number"
           }
         }
       }

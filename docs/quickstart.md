@@ -144,17 +144,24 @@ curl -s -X POST http://localhost:58080/v1/sources \
 Install the integration from `integrations/home-assistant` (copy
 `custom_components/senseplane` into Home Assistant's `custom_components`),
 add **Senseplane** under Settings → Devices & services, paste the API URL and
-the `sit_…` token, and pick the sensors. Any script can push readings with the
-same token:
+the `sit_…` token, and pick the entities: temperatures and other numbers,
+door, window and motion sensors, leaks and smoke, plugs, lights and locks,
+doorbells and buttons. Any script can push readings with the same token:
 
 ```sh
 curl -s -X POST http://localhost:58080/v1/sources/src_…/readings \
   -H "Authorization: Bearer sit_…" -H "content-type: application/json" \
-  -d '{"readings":[{"sense":"temperature","value":24.5,"unit":"celsius","at":"2026-10-16T12:00:00Z"}]}'
+  -d '{"readings":[
+        {"sense":"temperature","value":24.5,"unit":"celsius","at":"2026-10-16T12:00:00Z"},
+        {"sense":"contact","value":true,"device":{"id":"fridge","name":"Fridge door"},"at":"2026-10-16T12:00:05Z"},
+        {"sense":"doorbell","at":"2026-10-16T12:01:00Z"}]}'
 ```
 
-A watch such as "Warn me if the temperature is above 27 for 5 min" on that
-source fires a `reading.threshold` event.
+Numbers take a value and a unit, states (`contact` true is open, `switch`
+true is on) a value of true or false, and events neither; the known senses
+are in [`spec/senses.json`](../spec/senses.json). A watch such as "Warn me if
+the temperature is above 27 for 5 min" or "Tell me if the fridge door is left
+open for 5 minutes" on that source fires a `reading.threshold` event.
 
 ## 4. Receive webhooks
 

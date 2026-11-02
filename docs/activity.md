@@ -39,6 +39,7 @@ off can't say that nothing happened.
 | One, then another | `sequence` | "Did she take her pills after breakfast?" |
 | The list | `timeline` | "When was the dog on the sofa today?" |
 | Sensors | `average_value`, `min_value`, `max_value` | "How cold did the bedroom get last night?" |
+| Doors, plugs, doorbells | `count`, `first`, `last`, `total_duration` of `sensor` with `state` (or an event sense) | "How many times was the fridge opened today?", "How long was the heater on?", "When did the doorbell last ring?" |
 
 Each of these can also be:
 

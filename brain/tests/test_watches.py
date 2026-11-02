@@ -96,3 +96,30 @@ def test_questions_about_activities_compile_to_condition_and_digest_watches():
 
     TypeAdapter(Trigger).validate_python(d)
     TypeAdapter(Trigger).validate_python(rules("Alert me if no one has been seen for 3 hours", [], ["video"]).compiled["trigger"])
+
+
+def test_sensor_watches_beyond_climate_compile_from_the_sources_senses():
+    """ADR 0060: numbers in any unit, on/off states and events, only for senses the sources have."""
+    from pydantic import TypeAdapter
+
+    from senseplane_brain.spec.trigger import Trigger
+
+    def trig(text, senses):
+        t = rules(text, [], senses).compiled["trigger"]
+        TypeAdapter(Trigger).validate_python(t)
+        return t
+
+    assert trig("Tell me if the fridge door is left open for 5 minutes", ["contact"]) == {"type": "sensor", "sense": "contact", "state": True, "min_duration_s": 300.0}
+    assert trig("Tell me if the back door is unlocked", ["lock"]) == {"type": "sensor", "sense": "lock", "state": True, "min_duration_s": 0}
+    assert trig("Tell me when the front door is locked", ["lock"])["state"] is False
+    assert trig("Alert me when the doorbell rings", ["doorbell"]) == {"type": "sensor", "sense": "doorbell"}
+    assert trig("Tell me on a long press of the button", ["button"]) == {"type": "sensor", "sense": "button", "detail": "long"}
+    assert trig("Warn me if the kettle draws more than 2000 watts", ["power", "switch"]) == {"type": "sensor", "sense": "power", "above": 2000.0, "min_duration_s": 0}
+    assert trig("Tell me if the server room gets above 28 degrees for 5 minutes", ["temperature", "humidity"])["sense"] == "temperature"
+    assert trig("Let me know if there is a leak under the sink", ["leak", "temperature"])["sense"] == "leak"
+    # Absence by a time is measured from the readings.
+    assert trig("Tell me if the fridge hasn't been opened by 10am", ["contact"]) == {
+        "type": "condition", "query": {"measure": "count", "what": {"sensor": {"sense": "contact", "state": True}}}, "test": {"op": "eq", "value": 0}, "at": "10:00"}
+    # A camera's door isn't a sensor.
+    assert trig("Tell me when someone opens the front door", ["video"])["type"] == "objects"
+    assert trig("Tell me if the TV is on", ["video"])["type"] == "schedule"

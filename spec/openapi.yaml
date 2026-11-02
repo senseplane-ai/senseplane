@@ -184,6 +184,7 @@ paths:
     get:
       operationId: getSourceNow
       summary: Latest snapshot or sensor values
+      description: 'Sensors: the latest reading per sense and device; a state also says since when it has held.'
       tags: [sources]
       parameters:
         - name: id
@@ -301,12 +302,13 @@ paths:
   /sources/{id}/readings:
     post:
       operationId: postReadings
-      summary: Push temperature or humidity readings
+      summary: Push sensor readings
       description: >-
         Takes an account API key or the sensor's integration token (`sit_…`,
-        returned when the sensor source is created; ADR 0045). Readings of a sense
-        the sensor doesn't have are refused. Sensor watches that hold long enough
-        fire `reading.threshold`; `sensor_thresholds` fire `sensor.threshold`.
+        returned when the sensor source is created; ADR 0045). Numbers, on/off
+        states and events (ADR 0060); a sense the sensor doesn't have yet is
+        added to it. Sensor watches that hold long enough fire `reading.threshold`;
+        `sensor_thresholds` fire `sensor.threshold`.
       security:
         - bearerAuth: []
         - integrationToken: []
@@ -2109,8 +2111,8 @@ components:
           type: array
           minItems: 1
           uniqueItems: true
-          items: {type: string, enum: [temperature, humidity]}
-          description: Sensor sources only; default both.
+          items: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
+          description: 'Sensor sources only; default temperature and humidity. A sensor source also gains each new sense its readings bring (spec/senses.json lists the known ones).'
         rtsp_url: {type: string, pattern: '^rtsps?://', maxLength: 2048, description: 'rtsp sources: the camera URL (stored encrypted). Without it the bridge claims the camera with --rtsp.'}
         bridge_id: {type: string, description: 'rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued)'}
     SourceUpdate:
@@ -2123,9 +2125,9 @@ components:
         record_audio: {type: boolean}
         sensor_thresholds:
           type: [object, 'null']
-          properties:
-            temperature: {type: object, properties: {above: {type: number}, below: {type: number}}}
-            humidity: {type: object, properties: {above: {type: number}, below: {type: number}}}
+          description: 'Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses above or below'
+          propertyNames: {pattern: '^[a-z][a-z0-9_]*$'}
+          additionalProperties: {type: object, additionalProperties: false, properties: {above: {type: number}, below: {type: number}}}
         retention_days:
           type: [integer, 'null']
           minimum: 1
@@ -2218,11 +2220,20 @@ components:
     ReadingInput:
       type: object
       additionalProperties: false
-      required: [sense, value, unit]
+      required: [sense]
+      description: >-
+        One reading (ADR 0060). A number needs `value` and `unit` (a known
+        sense in its unit: temperature in celsius, power in watt, ...; spec/senses.json);
+        a state needs `value` true or false (contact true = open, switch true = on, ...);
+        an event needs neither (doorbell, button, with an optional `detail`).
+        `kind` may be left out for known senses and is otherwise taken from `value`.
       properties:
-        sense: {type: string, enum: [temperature, humidity]}
-        value: {type: number}
-        unit: {type: string, enum: [celsius, percent]}
+        sense: {type: string, pattern: '^[a-z][a-z0-9_]*$', maxLength: 40}
+        kind: {type: string, enum: [number, state, event]}
+        value: {type: [number, boolean]}
+        unit: {type: string, pattern: '^[a-z0-9_]{1,32}$'}
+        detail: {type: string, maxLength: 64, description: 'event only: single, double, long, ...'}
+        device: {$ref: './schemas/reading.json#/$defs/device'}
         measured_at: {type: string, format: date-time, description: Defaults to now}
         at: {type: string, format: date-time, description: Alias of measured_at}
     BridgeCamera:

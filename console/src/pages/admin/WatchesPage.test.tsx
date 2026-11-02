@@ -200,6 +200,9 @@ describe("WatchesPage", () => {
 
   it("describes triggers and schedules in words", () => {
     expect(describeTrigger({ type: "sensor", sense: "temperature", above: 27, min_duration_s: 300 } as never)).toBe("temperature > 27 for 5 min");
+    expect(describeTrigger({ type: "sensor", sense: "contact", state: true, device: "Garage door", min_duration_s: 600 } as never)).toBe("Garage door open for 10 min");
+    expect(describeTrigger({ type: "sensor", sense: "lock", state: false } as never)).toBe("lock locked");
+    expect(describeTrigger({ type: "sensor", sense: "doorbell" } as never)).toBe("doorbell");
     expect(describeTrigger({ type: "objects", label: "vehicle", on: "present", min_count: 24 } as never)).toBe("vehicles ≥ 24");
     expect(describeTrigger({ type: "objects", label: "cup", on: "stationary", zone: "desk", min_duration_s: 60 } as never)).toBe("cup stays still in desk for 1 min");
     expect(describeTrigger({ type: "objects", label: "laptop", on: "leave", min_duration_s: 30 } as never)).toBe("laptop gone for 30 s");

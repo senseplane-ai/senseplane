@@ -82,7 +82,7 @@ maximum 50) candidate snapshots, each metered as an AI check. The reply has
 | `objects` | `label` (person, vehicle, animal, or one of 64 everyday objects such as cup, laptop, phone, backpack, chair, book: see [Detector labels](api/labels.md)), `zone?`, `min_count` (default 1), `min_duration_s` (default 0), `on`: `enter` / `leave` / `present` / `stationary` | The condition holds for at least `min_duration_s` |
 | `motion` | `zone?`, `min_duration_s` | There is movement in the zone |
 | `sound` | `class` (crying, glass_break, alarm, dog, speech_present), `min_duration_s` | The class is detected for long enough |
-| `sensor` | `sense` (temperature, humidity), `above?`, `below?`, `rate_per_min?`, `min_duration_s` | The threshold or rate of change is crossed |
+| `sensor` | `sense` (temperature, humidity, power, contact, motion, leak, smoke, switch, lock, doorbell, button, ...: [the catalog](../spec/senses.json)), `device?` (its id or name), numbers: `above?`, `below?`; states: `state` (default true: open, on, wet, unlocked); events: `detail?`; `min_duration_s` | A number is past the line, or a state has held, for `min_duration_s` (once per run); an event happens (every one) |
 | `schedule` | `every_min` (minimum 5), within `active_hours` | Always. A snapshot is taken and `verify` is required |
 | `sequence` | `steps`: a list of other triggers, `within_s` | The steps happen in order within the time window |
 | `condition` | `query` (an [activity question](activity.md)), `test` `{op: lt/lte/gt/gte/eq/ne, value, of?: value/ratio/delta}`, `at` (HH:MM) or `every_min` (default 10), `days?`, `time_zone?` | Checked by the API, not on frames. A daily check (`at`) fires each day the test holds; a repeated one (`every_min`) fires when the test starts to hold. Not while less than half the time asked about was recorded |
@@ -136,6 +136,10 @@ The package watch is a `sequence`:
 | Empty shelf section | `schedule` every 30 min, 08:00–20:00, then verify |
 | Cabinet left open / machine fault light red | `schedule` every 5–15 min, then verify |
 | Server room above 28 °C | `sensor` temperature, above 28, for 300 s (no verify) |
+| The garage door is left open for 10 minutes | `sensor` contact, state true, device "Garage door", for 600 s (no verify) |
+| The kettle draws more than 2000 W | `sensor` power, above 2000 (no verify) |
+| Someone rings the doorbell | `sensor` doorbell (each ring; no verify) |
+| The fridge hasn't been opened by 10am | `condition`: count of `sensor` contact state true, `eq 0`, at 10:00 |
 | Glass breaking | `sound` glass_break (no verify) |
 | Track when someone is eating at the table (`mode: track`) | `objects` person `present` in `table` for 60 s, then verify "Is the person eating?", recorded as activities only |
 | Nobody in the kitchen by 10am | `condition`: `count` of person in `kitchen` today, `eq 0`, at 10:00 |

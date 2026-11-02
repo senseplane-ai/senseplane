@@ -216,8 +216,11 @@ describe("ingest: bridges and sensor integrations", () => {
     const post = await call("POST", `/v1/sources/${sensor.id}/readings`, { readings: [{ sense: "temperature", value: 21.5, unit: "celsius", at: new Date(t0).toISOString() }] }, tok);
     expect(post.statusCode).toBe(202);
     expect((await call("GET", `/v1/sources/${sensor.id}/history?from=${new Date(t0 - 1000).toISOString()}`)).json().data[0]).toMatchObject({ value: 21.5, measured_at: new Date(t0).toISOString() });
-    // Not a sense this sensor has.
-    expect((await call("POST", `/v1/sources/${sensor.id}/readings`, { readings: [{ sense: "humidity", value: 40, unit: "percent" }] }, tok)).statusCode).toBe(400);
+    // A new sense joins the sensor (ADR 0060); a camera sense or a wrong unit doesn't.
+    expect((await call("POST", `/v1/sources/${sensor.id}/readings`, { readings: [{ sense: "humidity", value: 40, unit: "percent" }] }, tok)).statusCode).toBe(202);
+    expect((await call("GET", `/v1/sources/${sensor.id}`)).json().senses).toEqual(["temperature", "humidity"]);
+    expect((await call("POST", `/v1/sources/${sensor.id}/readings`, { readings: [{ sense: "video", value: 1, unit: "percent" }] }, tok)).statusCode).toBe(400);
+    expect((await call("POST", `/v1/sources/${sensor.id}/readings`, { readings: [{ sense: "humidity", value: 40, unit: "celsius" }] }, tok)).statusCode).toBe(400);
     // Nothing else.
     expect((await call("GET", "/v1/sources", undefined, tok)).statusCode).toBe(403);
     expect((await call("GET", "/v1/integration")).statusCode).toBe(403);

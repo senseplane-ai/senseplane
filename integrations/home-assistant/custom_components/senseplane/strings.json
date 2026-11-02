@@ -15,7 +15,7 @@
       },
       "entities": {
         "title": "Choose sensors",
-        "description": "Temperature and humidity sensors to send to {name}. Every change is sent.",
+        "description": "Sensors to send to {name}: temperatures and other numbers, door, window and motion sensors, leaks and smoke, plugs, lights and locks, doorbells and buttons. Every change is sent.",
         "data": {
           "entities": "Sensors"
         }
@@ -42,7 +42,7 @@
     "step": {
       "init": {
         "title": "Choose sensors",
-        "description": "Temperature and humidity sensors to send to Senseplane.",
+        "description": "Sensors to send to Senseplane: numbers, door, window and motion sensors, leaks and smoke, plugs, lights and locks, doorbells and buttons.",
         "data": {
           "entities": "Sensors"
         }

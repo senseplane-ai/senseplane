@@ -42,7 +42,7 @@ Keys are shown once, when they're created. Senseplane stores only a hash.
   Time ranges are `from` and `to`.
 - Request and response bodies are JSON. Most endpoints reject unknown fields
   with `validation_failed`.
-- Enumerations such as `Sense` (`video`, `audio`, `temperature`, `humidity`)
+- Enumerations such as `Sense` (`video`, `audio`, `temperature`, `contact`, …)
   are **open**: new values can appear, so handle values you don't recognise.
 - Every response carries an `x-request-id` header. Quote it when reporting a
   problem.
@@ -140,7 +140,9 @@ gets `422 idempotency_key_reused`. The SDK's create calls take
 ## Sources and senses
 
 A **source** is one camera, phone or sensor. Its `senses` say what it can
-provide: `video`, `audio`, `temperature`, `humidity`.
+provide: `video`, `audio`, and for sensors `temperature`, `humidity`,
+`contact`, `motion`, `power`, `doorbell` and the rest of
+[the catalog](../../spec/senses.json).
 
 - `POST /v1/sources` with `type: "browser"` returns `ingest.capture_url`, a
   link valid for 24 hours that turns a phone or laptop browser into the
@@ -153,7 +155,11 @@ provide: `video`, `audio`, `temperature`, `humidity`.
   `status_since`.
 - `type: "sensor"` returns `ingest.integration_token` (`sit_…`). Push readings
   with it (or an account key) to `POST /v1/sources/{id}/readings`; the token
-  can't do anything else.
+  can't do anything else. A reading is a number (`value` and `unit`: power in
+  `watt`), a state (`value` true or false: a `contact` true is open) or an
+  event (a `doorbell` ring, a `button` press with an optional `detail`), and
+  may name its `device`. A sensor gains each new sense its readings bring
+  (ADR 0060).
 - Tokens are shown once; `POST /v1/sources/{id}/ingest-token` rotates them and
   `DELETE` revokes them.
 - `POST /v1/sources/{id}/pause` stops a camera recording and being analysed
@@ -251,8 +257,9 @@ shape:
   (a sensor watch held its condition), `source.online`,
   `source.offline`, `source.view_changed` (the camera's view no longer
   matches its privacy masks). Treat unknown types as ignorable.
-- **`value`** is set for sensor events, for example
-  `{"sense":"temperature","value":29.4,"unit":"°C"}`.
+- **`value`** is set for sensor events: the reading that fired it, for example
+  `{"sense":"temperature","kind":"number","value":29.4,"unit":"celsius","measured_at":"…"}`
+  or `{"sense":"contact","kind":"state","value":true,"state":"open","device":{"id":"binary_sensor.garage","name":"Garage door"},"measured_at":"…"}`.
 - **`media` URLs are signed and expire after 15 minutes.** Fetch the event
   again (`GET /v1/events/{id}`) for fresh ones.
 - **Feedback:** `POST /v1/events/{id}/feedback` with `relevant` or

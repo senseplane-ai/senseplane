@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pydantic import TypeAdapter, ValidationError
 
 from . import labels
+from . import senses as catalog
 from .spec.trigger import Trigger
 from .vlm import ModelClient
 
@@ -160,11 +161,63 @@ def _hours_s(text: str) -> float | None:
     return n * (3600 if m.group(2).startswith("h") else 60)
 
 
-def _scheduled(instruction: str, zones: list[str], watches: list[dict]) -> Compiled | None:
+def _word(sense: str, text: str) -> int | None:
+    """Where the sentence first names a sensor sense ("fridge" for contact, "kettle" for switch), else None."""
+    hits = [m.start() for w in catalog.WORDS.get(sense, []) if (m := re.search(rf"\b{re.escape(w)}\w*", text))]
+    return min(hits) if hits else None
+
+
+def _sensor_sense(text: str, senses: list[str], kinds: tuple[str, ...]) -> str | None:
+    """The sensor sense of these kinds the sentence names first, among the sources' senses."""
+    named = [(at, s) for s in senses if catalog.KIND.get(s) in kinds and (at := _word(s, text)) is not None]
+    return min(named)[1] if named else None
+
+
+def _state_value(sense: str, text: str) -> bool:
+    """True unless the sentence asks for the "off" word: "left open" → True, "is unlocked" → True, "locked" → False."""
+    on, off = catalog.ON.get(sense, "on"), catalog.OFF.get(sense, "off")
+    if re.search(rf"\b{re.escape(on)}", text) or (on == "open" and re.search(r"\bopen", text)):
+        return True
+    return not re.search(rf"\b{re.escape(off)}\b", text)
+
+
+def _sensor_what(text: str, senses: list[str]) -> dict | None:
+    """A state or event sensor the sentence names, as an activity `what` ("the fridge" → contact open)."""
+    sense = _sensor_sense(text, senses, ("state", "event"))
+    if not sense:
+        return None
+    if catalog.KIND[sense] == "event":
+        return {"sensor": {"sense": sense}}
+    return {"sensor": {"sense": sense, "state": _state_value(sense, text)}}
+
+
+def _sensor(text: str, senses: list[str]) -> dict | None:
+    """A sensor trigger for a sentence about one of the sources' sensors (ADR 0060), else None."""
+    have = [s for s in senses if catalog.is_sensor(s)]
+    if not have and senses:
+        return None
+    have = have or ["temperature", "humidity"]
+    cmp = re.search(r"\b(above|over|below|under|more than|less than|higher than|lower than)\s*(-?\d+(?:\.\d+)?)|([<>])\s*(-?\d+(?:\.\d+)?)", text)
+    number = _sensor_sense(text, have, ("number",))
+    if number and cmp:
+        word = cmp.group(1) or cmp.group(3)
+        bound = "above" if word in ("above", "over", "more than", "higher than", ">") else "below"
+        return {"type": "sensor", "sense": number, bound: float(cmp.group(2) or cmp.group(4)), "min_duration_s": _duration_s(text) or 0}
+    other = _sensor_sense(text, have, ("state", "event"))
+    if not other:
+        return None
+    if catalog.KIND[other] == "event":
+        detail = re.search(r"\b(single|double|triple|long)\b", text)
+        return {"type": "sensor", "sense": other, **({"detail": detail.group(1)} if detail else {})}
+    return {"type": "sensor", "sense": other, "state": _state_value(other, text), "min_duration_s": _duration_s(text) or 0}
+
+
+def _scheduled(instruction: str, zones: list[str], watches: list[dict], senses: list[str] | None = None) -> Compiled | None:
     """Questions about activities checked on a schedule (ADR 0057): absence by a time, no one for a while, a daily summary."""
     text = instruction.lower()
     zone, _ = _zone(instruction, zones)
-    what = {"label": next((lbl for lbl, p in WORDS.items() if re.search(p, text)), "person"), **({"zone": zone} if zone else {})}
+    # A door, plug or doorbell the sources have is measured from its readings; else presence.
+    what = _sensor_what(text, senses or []) or {"label": next((lbl for lbl, p in WORDS.items() if re.search(p, text)), "person"), **({"zone": zone} if zone else {})}
     where = f" in {zone.replace('_', ' ')}" if zone else ""
     if re.search(r"\b(summary|summari[sz]e|digest|recap|report|round-?up|how .* day went|their day|her day|his day)\b", text):
         at = _clock(instruction) or "20:00"
@@ -176,7 +229,7 @@ def _scheduled(instruction: str, zones: list[str], watches: list[dict]) -> Compi
             if w.get("mode") == "track" and w.get("id"):
                 items.append({"label": str(w.get("instruction", w["id"]))[:80], "query": {"measure": "count", "what": {"watch_id": w["id"]}, "compare": "last_14_days"}})
         return Compiled({"trigger": {"type": "digest", "at": at, "items": items[:12]}, "cooldown_s": 0, "active_hours": None}, {"vlm_calls_per_day": "0"})
-    nobody = r"\b(no ?one|no-one|nobody|not (?:been )?(?:seen|up|out|in)|hasn't (?:been|come|got|gotten|left)|has not|haven't|isn't up|not got up)\b"
+    nobody = r"\b(no ?one|no-one|nobody|not (?:been )?(?:seen|up|out|in|opened|used|pressed|rung|switched on|turned on)|hasn't (?:been|come|got|gotten|left)|has not|haven't|wasn't|isn't up|not got up)\b"
     if re.search(nobody, text) and (at := _clock(instruction)) and not _hours_s(instruction):
         trig = {"type": "condition", "query": {"measure": "count", "what": what}, "test": {"op": "eq", "value": 0}, "at": at}
         return Compiled({"trigger": trig, "cooldown_s": 0, "active_hours": None}, {"vlm_calls_per_day": "0"})
@@ -187,7 +240,7 @@ def _scheduled(instruction: str, zones: list[str], watches: list[dict]) -> Compi
 
 
 def rules(instruction: str, zones: list[str], senses: list[str], watches: list[dict] | None = None) -> Compiled:
-    if (scheduled := _scheduled(instruction, zones, watches or [])) is not None:
+    if (scheduled := _scheduled(instruction, zones, watches or [], senses)) is not None:
         return scheduled
     text = instruction.lower()
     zone, place_mentioned = _zone(instruction, zones)
@@ -208,12 +261,11 @@ def rules(instruction: str, zones: list[str], senses: list[str], watches: list[d
     state = state_of or bool(re.search(r"\b(is|are) (the|my|our|a|an|any)\b.*\b(empty|open|closed|on|off|full|red|green|left|missing|running)\b|\bevery \d+ ?min", text))
 
     m_temp = re.search(r"\b(temperature|temp|hot|cold|warm|humidity|humid|damp)\b.*?(above|over|below|under|more than|less than|>|<)\s*(-?\d+(?:\.\d+)?)", text)
-    if m_temp and not ("temperature" in senses or "humidity" in senses or not senses):
+    sensor = _sensor(text, senses)
+    if m_temp and not sensor:
         warnings.append("This source has no temperature or humidity sensor.")
-    if m_temp and ("temperature" in senses or "humidity" in senses or not senses):
-        sense = "humidity" if m_temp.group(1).startswith("humid") or m_temp.group(1) == "damp" else "temperature"
-        bound = "above" if m_temp.group(2) in ("above", "over", "more than", ">") else "below"
-        trigger = {"type": "sensor", "sense": sense, bound: float(m_temp.group(3)), "min_duration_s": _duration_s(text) or 0}
+    if sensor:
+        trigger = sensor
         verify, calls = None, "0"
     elif any(re.search(p, text) for p in (r"\bpackage|parcel|box|deliver", )):
         # Person arrives, then leaves; the VLM checks what was left (docs/watch-spec.md).
@@ -278,18 +330,22 @@ Trigger is one of:
   Something a person leaves behind that is no label (a package, a parcel, a delivery, flowers) is a sequence: person on=enter, then person on=leave, within_s 600, plus verify that the thing is there; checking on motion would look while the person is still in the way.""" + """
 - {"type":"motion","zone"?:str,"min_duration_s"?:number}
 - {"type":"sound","class":"crying|glass_break|alarm|dog|speech_present","min_duration_s"?:number}
-- {"type":"sensor","sense":"temperature|humidity","above"?:number,"below"?:number,"rate_per_min"?:number,"min_duration_s"?:number}
+- {"type":"sensor","sense":"<a sensor sense of the sources>","device"?:str,"above"?:number,"below"?:number,"state"?:boolean,"detail"?:str,"min_duration_s"?:number}
+  Numbers use above/below; states use state (true is the first word: "left open" is contact state true, "unlocked" is lock state true; min_duration_s for "left open for 10 minutes");
+  events (doorbell, button) fire on each one. Known senses: """ + catalog.describe() + """.
+  Use a sensor trigger only for a sense in the senses given; a door or light seen by a camera is not a sensor.
 - {"type":"schedule","every_min":int>=5}  (verify is required)
 - {"type":"sequence","steps":[Trigger, ...>=2],"within_s":number}
 - {"type":"condition","query":<Query>,"test":{"op":"lt|lte|gt|gte|eq|ne","value":number,"of"?:"value|ratio|delta"},"at"?:"HH:MM","every_min"?:int>=5,"days"?:[...]}
   Checked on a schedule, never by frames: absence ("tell me if nobody has been in the kitchen by 10am": count of person in zone kitchen eq 0, at 10:00),
   inactivity ("no movement for 3 hours": since_last of person gte 10800, every_min 10), counts and durations by a time, and trends
-  ("eating less than usual": count of the meal watch with compare last_14_days, test of ratio lt 0.7, at 20:00). No verify; cooldown_s 0.
+  ("eating less than usual": count of the meal watch with compare last_14_days, test of ratio lt 0.7, at 20:00),
+  and sensors ("tell me if the fridge hasn't been opened by 10am": count of sensor contact state true eq 0, at 10:00). No verify; cooldown_s 0.
 - {"type":"digest","at":"HH:MM","days"?:[...],"items":[{"label":str,"query":<Query>}, ...1-12]}
   A summary sent at a time ("send me a summary of mum's day at 8pm"): first and last seen, time present, longest time with no one, and counts of
   the tracking watches given. No verify; cooldown_s 0.
 Query is {"measure":"exists|count|first|last|since_last|total_duration|longest|average_duration|longest_gap|sequence","what":{"label"?:str,"zone"?:str,
-  "watch_id"?:str,"sound"?:str,"sensor"?:{"sense":str,"above"?:number,"below"?:number},"min_duration_s"?:number},"period"?:"today|yesterday|last_24_hours|last_7_days",
+  "watch_id"?:str,"sound"?:str,"sensor"?:{"sense":str,"device"?:str,"above"?:number,"below"?:number,"state"?:boolean},"min_duration_s"?:number},"period"?:"today|yesterday|last_24_hours|last_7_days",
   "between"?:{"from":"HH:MM","to":"HH:MM"},"compare"?:"last_14_days|same_weekday"} with exactly one of label, watch_id, sound or sensor in what;
   the period defaults to today. Use watch_id only from the watches given.
 Prefer the cheapest trigger that catches the situation; use verify only when the trigger alone can't tell (a package, a queue, a state of something).

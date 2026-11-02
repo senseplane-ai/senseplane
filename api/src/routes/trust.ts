@@ -17,13 +17,13 @@ import type { ObjectStorage } from "../storage.js";
 import { toSource } from "./sources.js";
 import { toWatch } from "./watches.js";
 
-export const SENSES = ["video", "audio", "temperature", "humidity"];
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : undefined);
 
 /** Request body schema for a grant's access (shared by POST /v1/grants and the consent page's connect). */
 export const accessProperties = {
   source_ids: { type: "array", minItems: 1, maxItems: 200, items: { type: "string" } },
-  senses: { type: "array", minItems: 1, items: { enum: SENSES } },
+  // video, audio, "sensors" (every sensor sense, ADR 0060) or one sense such as temperature or contact.
+  senses: { type: "array", minItems: 1, items: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40 } },
   abilities: { type: "array", items: { enum: [...ABILITIES] } },
   window: { type: "object", additionalProperties: false, properties: { from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" } } },
 } as const;

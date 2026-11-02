@@ -9,8 +9,8 @@ CONF_TOKEN = "token"
 CONF_SOURCE_ID = "source_id"
 CONF_ENTITIES = "entities"
 
-# Senseplane senses this integration forwards, keyed by Home Assistant device class.
-SENSES = ("temperature", "humidity")
+# Entity domains whose states can be forwarded (mapping.py says which device classes).
+DOMAINS = ["sensor", "binary_sensor", "switch", "light", "fan", "input_boolean", "siren", "lock", "event"]
 
 # How often queued readings are sent, and how many at most per request.
 BATCH_SECONDS = 10.0

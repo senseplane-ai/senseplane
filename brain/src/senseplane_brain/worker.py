@@ -509,6 +509,9 @@ class Worker:
             def check_history(self, args):
                 return call("check_history", args)
 
+            def read_sensors(self, args):
+                return call("read_sensors", args)
+
         complete = (lambda messages, tools: self.model.chat(messages, tools, meta)) if self.model else None
 
         def run():

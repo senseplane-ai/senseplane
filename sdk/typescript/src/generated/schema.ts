@@ -75,7 +75,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Latest snapshot or sensor values */
+        /**
+         * Latest snapshot or sensor values
+         * @description Sensors: the latest reading per sense and device; a state also says since when it has held.
+         */
         get: operations["getSourceNow"];
         put?: never;
         post?: never;
@@ -163,8 +166,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Push temperature or humidity readings
-         * @description Takes an account API key or the sensor's integration token (`sit_…`, returned when the sensor source is created; ADR 0045). Readings of a sense the sensor doesn't have are refused. Sensor watches that hold long enough fire `reading.threshold`; `sensor_thresholds` fire `sensor.threshold`.
+         * Push sensor readings
+         * @description Takes an account API key or the sensor's integration token (`sit_…`, returned when the sensor source is created; ADR 0045). Numbers, on/off states and events (ADR 0060); a sense the sensor doesn't have yet is added to it. Sensor watches that hold long enough fire `reading.threshold`; `sensor_thresholds` fire `sensor.threshold`.
          */
         post: operations["postReadings"];
         delete?: never;
@@ -1364,8 +1367,8 @@ export interface components {
              * @default false
              */
             record_audio: boolean;
-            /** @description Sensor sources only; default both. */
-            senses?: ("temperature" | "humidity")[];
+            /** @description Sensor sources only; default temperature and humidity. A sensor source also gains each new sense its readings bring (spec/senses.json lists the known ones). */
+            senses?: string[];
             /** @description rtsp sources: the camera URL (stored encrypted). Without it the bridge claims the camera with --rtsp. */
             rtsp_url?: string;
             /** @description rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued) */
@@ -1376,12 +1379,9 @@ export interface components {
             location?: string;
             site?: string | null;
             record_audio?: boolean;
+            /** @description Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses above or below */
             sensor_thresholds?: {
-                temperature?: {
-                    above?: number;
-                    below?: number;
-                };
-                humidity?: {
+                [key: string]: {
                     above?: number;
                     below?: number;
                 };
@@ -1455,12 +1455,16 @@ export interface components {
         ReadingsRequest: {
             readings: components["schemas"]["ReadingInput"][];
         };
+        /** @description One reading (ADR 0060). A number needs `value` and `unit` (a known sense in its unit: temperature in celsius, power in watt, ...; spec/senses.json); a state needs `value` true or false (contact true = open, switch true = on, ...); an event needs neither (doorbell, button, with an optional `detail`). `kind` may be left out for known senses and is otherwise taken from `value`. */
         ReadingInput: {
+            sense: string;
             /** @enum {string} */
-            sense: "temperature" | "humidity";
-            value: number;
-            /** @enum {string} */
-            unit: "celsius" | "percent";
+            kind?: "number" | "state" | "event";
+            value?: number | boolean;
+            unit?: string;
+            /** @description event only: single, double, long, ... */
+            detail?: string;
+            device?: components["schemas"]["device"];
             /**
              * Format: date-time
              * @description Defaults to now
@@ -2016,13 +2020,9 @@ export interface components {
             retention_mode?: "days" | "fill" | null;
             /** @description Fill mode: this source's own byte cap; null shares the account's cap. */
             retention_max_bytes?: number | null;
-            /** @description sensor.threshold fires when a reading crosses one of these. */
+            /** @description Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses one of these. */
             sensor_thresholds?: {
-                temperature?: {
-                    above?: number;
-                    below?: number;
-                };
-                humidity?: {
+                [key: string]: {
                     above?: number;
                     below?: number;
                 };
@@ -2047,15 +2047,42 @@ export interface components {
             /** @description rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed. */
             readonly status_detail?: string | null;
         };
-        /** Reading */
+        /** @description The device that measured it, when a source has more than one (a Home Assistant entity, a Matter node) */
+        device: {
+            id: string;
+            name?: string;
+        };
+        /**
+         * Reading
+         * @description One sensor reading (ADR 0060). number: `value` in `unit`; state: `value` true or false, `state` its word (open, closed, on, off, ...); event: something happened, with an optional `detail`. Known senses and units: spec/senses.json.
+         */
         reading: {
+            sense: components["schemas"]["sense"];
             /** @enum {unknown} */
-            sense: "temperature" | "humidity";
-            value: number;
-            /** @enum {unknown} */
-            unit: "celsius" | "percent";
+            kind: "number" | "state" | "event";
+            /** @description number: the value; state: true or false; absent for events */
+            value?: number | boolean;
+            /** @description number only: celsius, percent, watt, ... (spec/senses.json) */
+            unit?: string;
+            /** @description state only: what the value means for this sense (open/closed, on/off, wet/dry, ...) */
+            state?: string;
+            /**
+             * Format: date-time
+             * @description state only, in latest readings: when it last changed to this value
+             */
+            since?: string;
+            /** @description event only: e.g. single, double or long for a button */
+            detail?: string;
+            device?: components["schemas"]["device"];
             /** Format: date-time */
-            measured_at?: string;
+            measured_at: string;
+            $defs: {
+                /** @description The device that measured it, when a source has more than one (a Home Assistant entity, a Matter node) */
+                device: {
+                    id: string;
+                    name?: string;
+                };
+            };
         };
         /** DemoSession */
         "demo-session": {
@@ -2105,11 +2132,8 @@ export interface components {
             confidence: number | null;
             /** @description For watch.triggered: true when a vision model confirmed the watch, false when the watch has a check but no model ran (the event fired on its cheap trigger alone). Null for events without a model check. */
             verified?: boolean | null;
-            value: null | {
-                sense: components["schemas"]["sense"];
-                value: number;
-                unit: string;
-            };
+            /** @description Sensor events: the reading that fired it */
+            value: null | components["schemas"]["reading"];
             /** @description Signed URLs, 15-minute expiry. */
             media: {
                 /** Format: uri */
@@ -2188,16 +2212,23 @@ export interface components {
                     /** @default 0 */
                     min_duration_s: number;
                 };
+                /** @description A sensor reading (ADR 0060). Numbers: above and/or below. States: state true or false (contact true = open, switch true = on, leak true = wet; spec/senses.json). Events (doorbell, button): every one, or only those with detail. Fires once per run that holds min_duration_s. */
                 sensor: {
                     /**
                      * @description discriminator enum property added by openapi-typescript
                      * @enum {string}
                      */
                     type: "sensor";
-                    /** @enum {unknown} */
-                    sense: "temperature" | "humidity";
+                    /** @description temperature, humidity, power, contact, motion, leak, smoke, switch, doorbell, ... (spec/senses.json) */
+                    sense: string;
+                    /** @description Only this device on the source (its id or name), when it has several */
+                    device?: string;
                     above?: number;
                     below?: number;
+                    /** @description States only: the value to watch for */
+                    state?: boolean;
+                    /** @description Events only: just these (single, double, long, ...) */
+                    detail?: string;
                     rate_per_min?: number;
                     /** @default 0 */
                     min_duration_s: number;
@@ -2286,12 +2317,16 @@ export interface components {
                  * @enum {unknown}
                  */
                 sound?: "crying" | "glass_break" | "alarm" | "dog" | "speech_present";
-                /** @description A sensor: its readings, or the spans above/below a threshold */
+                /** @description A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments */
                 sensor?: {
-                    /** @description temperature or humidity */
+                    /** @description temperature, humidity, power, contact, motion, switch, doorbell, ... (spec/senses.json) */
                     sense: string;
+                    /** @description Only this device on the source (its id or name) */
+                    device?: string;
                     above?: number;
                     below?: number;
+                    /** @description States: the spans with this value (contact true: while open; switch true: while on) */
+                    state?: boolean;
                 };
                 /** @description Presence only: in this zone (default: anywhere in view) */
                 zone?: string;
@@ -2311,12 +2346,16 @@ export interface components {
                  * @enum {unknown}
                  */
                 sound?: "crying" | "glass_break" | "alarm" | "dog" | "speech_present";
-                /** @description A sensor: its readings, or the spans above/below a threshold */
+                /** @description A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments */
                 sensor?: {
-                    /** @description temperature or humidity */
+                    /** @description temperature, humidity, power, contact, motion, switch, doorbell, ... (spec/senses.json) */
                     sense: string;
+                    /** @description Only this device on the source (its id or name) */
+                    device?: string;
                     above?: number;
                     below?: number;
+                    /** @description States: the spans with this value (contact true: while open; switch true: while on) */
+                    state?: boolean;
                 };
                 /** @description Presence only: in this zone (default: anywhere in view) */
                 zone?: string;
@@ -2403,16 +2442,23 @@ export interface components {
             /** @default 0 */
             min_duration_s: number;
         };
+        /** @description A sensor reading (ADR 0060). Numbers: above and/or below. States: state true or false (contact true = open, switch true = on, leak true = wet; spec/senses.json). Events (doorbell, button): every one, or only those with detail. Fires once per run that holds min_duration_s. */
         sensor: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             type: "sensor";
-            /** @enum {unknown} */
-            sense: "temperature" | "humidity";
+            /** @description temperature, humidity, power, contact, motion, leak, smoke, switch, doorbell, ... (spec/senses.json) */
+            sense: string;
+            /** @description Only this device on the source (its id or name), when it has several */
+            device?: string;
             above?: number;
             below?: number;
+            /** @description States only: the value to watch for */
+            state?: boolean;
+            /** @description Events only: just these (single, double, long, ...) */
+            detail?: string;
             rate_per_min?: number;
             /** @default 0 */
             min_duration_s: number;

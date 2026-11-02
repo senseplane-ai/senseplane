@@ -9,7 +9,7 @@ import {
   CallToolRequestSchema, type CallToolResult, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema,
   SubscribeRequestSchema, UnsubscribeRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { Senseplane, SenseplaneError } from "senseplane";
+import { isSensorSense, readingText, Senseplane, SenseplaneError, senseName } from "senseplane";
 import { INBOX_URI, inboxBrief, subscriptions } from "./inbox.js";
 import { tools } from "./tools.js";
 import { SpanKind, SpanStatusCode, withSpan } from "@senseplane/telemetry";
@@ -104,19 +104,28 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
     async read_environment(a) {
       const list = await sources();
       const room = a.room ? String(a.room).toLowerCase() : undefined;
-      const picked = a.source ? [await resolve(a.source)] : list.filter((s) => (s.senses.includes("temperature") || s.senses.includes("humidity")) && (!room || s.location?.toLowerCase() === room || s.name.toLowerCase().includes(room)));
-      if (!picked.length) return fail("not_found", room ? `no climate sensor in "${a.room}"` : "no climate sensors");
+      const only = a.sense ? String(a.sense) : undefined;
+      const sensing = (s: { senses: string[] }) => s.senses.some((x) => isSensorSense(x) && (!only || x === only));
+      const picked = a.source ? [await resolve(a.source)] : list.filter((s) => sensing(s) && (!room || s.location?.toLowerCase() === room || s.name.toLowerCase().includes(room)));
+      if (!picked.length) return fail("not_found", `no ${only ? senseName(only) : ""} sensor${only ? "" : "s"}${room ? ` in "${a.room}"` : ""}`.replace("no  ", "no "));
       const from = new Date(Date.now() - 3600_000).toISOString();
       const out = [];
       for (const s of picked) {
         const now = await client.sources.now(s.id);
-        const history = (await client.sources.history(s.id, { from })).data;
-        const readings = (now.readings ?? []).map((r) => {
-          const series = history.filter((h) => h.sense === r.sense);
+        const latest = (now.readings ?? []).filter((r) => !only || r.sense === only);
+        const history = latest.some((r) => r.kind === "number" || r.kind === undefined) ? (await client.sources.history(s.id, { from })).data : [];
+        const readings = latest.map((r) => {
+          const device = r.device ? { device: r.device.name ?? r.device.id } : {};
+          if (r.kind === "state") return { sense: r.sense, ...device, state: r.state, value: r.value, since: r.since, measured_at: r.measured_at };
+          if (r.kind === "event") return { sense: r.sense, ...device, last: readingText(r), ...(r.detail ? { detail: r.detail } : {}), at: r.measured_at };
+          const value = Number(r.value);
+          const series = history.filter((h) => h.sense === r.sense && h.device?.id === r.device?.id);
           const first = series[0]?.value;
-          const delta = first === undefined ? 0 : r.value - first;
-          const trend = Math.abs(delta) < (r.sense === "humidity" ? 2 : 0.3) ? "steady" : delta > 0 ? "rising" : "falling";
-          return { sense: r.sense, value: r.value, unit: r.unit, measured_at: r.measured_at, trend_last_hour: trend, change_last_hour: Math.round(delta * 10) / 10 };
+          const delta = typeof first === "number" ? value - first : 0;
+          // "Steady" is a small change for the unit: 0.3 °C, 2 points of a percentage, else 5 %.
+          const still = r.unit === "celsius" ? 0.3 : r.unit === "percent" ? 2 : Math.max(Math.abs(value) * 0.05, 0.01);
+          const trend = Math.abs(delta) < still ? "steady" : delta > 0 ? "rising" : "falling";
+          return { sense: r.sense, ...device, value, unit: r.unit, text: readingText(r), measured_at: r.measured_at, trend_last_hour: trend, change_last_hour: Math.round(delta * 10) / 10 };
         });
         out.push({ source: s.id, name: s.name, location: s.location, readings });
       }

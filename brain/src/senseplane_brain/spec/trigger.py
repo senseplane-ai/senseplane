@@ -129,19 +129,37 @@ class Sound(BaseModel):
     min_duration_s: Annotated[float | None, Field(ge=0.0)] = 0
 
 
-class Sense(Enum):
-    temperature = 'temperature'
-    humidity = 'humidity'
-
-
 class Sensor(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
     type: Literal['sensor']
-    sense: Sense
+    sense: Annotated[
+        str,
+        Field(
+            description='temperature, humidity, power, contact, motion, leak, smoke, switch, doorbell, ... (spec/senses.json)',
+            pattern='^[a-z][a-z0-9_]*$',
+        ),
+    ]
+    device: Annotated[
+        str | None,
+        Field(
+            description='Only this device on the source (its id or name), when it has several',
+            max_length=200,
+        ),
+    ] = None
     above: float | None = None
     below: float | None = None
+    state: Annotated[
+        bool | None, Field(description='States only: the value to watch for')
+    ] = None
+    detail: Annotated[
+        str | None,
+        Field(
+            description='Events only: just these (single, double, long, ...)',
+            max_length=64,
+        ),
+    ] = None
     rate_per_min: float | None = None
     min_duration_s: Annotated[float | None, Field(ge=0.0)] = 0
 

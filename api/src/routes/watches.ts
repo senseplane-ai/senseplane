@@ -27,6 +27,7 @@ import type { ApiBus } from "../indexer.js";
 import { type ObjectStorage, readObject } from "../storage.js";
 import { storeActivity } from "../brain-events.js";
 import { PACKS, toPack } from "../packs.js";
+import { readingText, senseName } from "../readings.js";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 (addFormatsModule as unknown as (a: Ajv2020) => void)(ajv);
@@ -131,6 +132,9 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
   };
 
   /** Sources by id or (case-insensitive) name, so "Front door" works as well as src_…; several cameras are fine. */
+  /** A source's senses (video, audio, temperature, contact, ...), for grant checks. */
+  const sensesOf = async (accountId: string, id: string) => (await deps.data.withAccount(accountId, (s) => s.sources.get(id)))?.senses ?? [];
+
   async function resolveSources(req: FastifyRequest, refs: string[]): Promise<string[]> {
     const list = await deps.data.withAccount(req.accountId!, (s) => s.sources.list());
     return [...new Set(refs.map((ref) => {
@@ -169,7 +173,9 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
     const sources = await resolveSources(req, b.sources);
     for (const id of sources) {
       // An agent may watch only with senses it holds now.
-      if (!seesSource(req, id) || !(["video", "audio", "temperature", "humidity"] as const).some((x) => canSense(req, id, x))) throw new ApiError(403, "forbidden_sense", `no grant to watch ${id}`);
+      if (!seesSource(req, id)) throw new ApiError(403, "forbidden_sense", `no grant to watch ${id}`);
+      const senses = await sensesOf(accountId, id); // none: an unknown source, reported as not found when compiling
+      if (senses.length && !senses.some((x) => canSense(req, id, x))) throw new ApiError(403, "forbidden_sense", `no grant to watch ${id}`);
     }
     const schedule = checkSchedule(b.active_hours);
     const notify = await checkNotify(deps.data, req, b.notify ?? []);
@@ -313,7 +319,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       const events = await q.execute();
       const sensor = compiled.trigger.type === "sensor" ? String(compiled.trigger.sense) : undefined;
       const readings = sensor
-        ? await s.db.selectFrom("sensor_readings").select(["source_id", "sense", "value", "unit", "measured_at"]).where("source_id", "in", sources)
+        ? await s.db.selectFrom("sensor_readings").select(["source_id", "sense", "kind", "value", "unit", "detail", "device_id", "device_name", "measured_at"]).where("source_id", "in", sources)
           .where("sense", "=", sensor).where("measured_at", ">=", new Date(from)).where("measured_at", "<=", new Date(to)).orderBy("measured_at").limit(MAX_EVENTS).execute()
         : [];
       return { srcs, events, readings };
@@ -335,7 +341,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       const media = c.event ? toEvent(c.event, src, urls).media : {};
       const base = { source_id: c.source_id, source_name: src.name, at: new Date(c.at).toISOString(), ...(c.event ? { event_id: c.event.id } : {}),
         ...(media.snapshot_url ? { snapshot_url: media.snapshot_url } : {}) };
-      const cheap = c.event?.summary ?? (c.reading ? `${c.reading.sense} was ${c.reading.value} ${c.reading.unit}.` : "The trigger fired.");
+      const cheap = c.event?.summary ?? (c.reading ? `${c.reading.device_name ?? senseName(c.reading.sense)} was ${readingText(c.reading)}.` : "The trigger fired.");
       if (!verify) {
         matches.push({ ...base, summary: cheap, verified: null, confidence: null });
         continue;

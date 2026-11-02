@@ -9,6 +9,7 @@
 // one) then runs on at most `max_checks` candidate snapshots.
 import type { EventRow } from "./events.js";
 import type { WatchSchedule } from "./data/schema.js";
+import { deviceMatches, holds, type SensorMatch } from "./readings.js";
 import { activeAt } from "./schedule.js";
 
 type Trig = Record<string, any> & { type: string };
@@ -18,13 +19,13 @@ export interface Compiled {
   cooldown_s: number;
   active_hours: { days: string[]; from: string; to: string }[] | null;
 }
-export interface Reading { sense: string; value: number; unit: string; measured_at: Date | string }
+export interface Reading { sense: string; kind?: string; value: number; unit: string; detail?: string | null; device_id?: string | null; device_name?: string | null; measured_at: Date | string }
 export interface Candidate {
   source_id: string;
   at: number;
   /** The stored event the moment came from (absent for sensor readings). */
   event?: EventRow;
-  reading?: { sense: string; value: number; unit: string };
+  reading?: Reading;
 }
 
 const ms = (d: Date | string) => new Date(d).getTime();
@@ -78,21 +79,27 @@ export function moments(trig: Trig, events: EventRow[], readings: Reading[] = []
     }
     case "sensor": {
       const out: Omit<Candidate, "source_id">[] = [];
-      const isOut = (v: number) => (trig.above !== undefined && v > trig.above) || (trig.below !== undefined && v < trig.below);
+      const m = trig as unknown as SensorMatch;
       const minDur = Number(trig.min_duration_s ?? 0) * 1000;
-      let runStart: number | undefined;
-      let fired = false;
-      for (const r of readings.filter((x) => x.sense === trig.sense).sort((a, b) => ms(a.measured_at) - ms(b.measured_at))) {
+      // Runs are per device, as the live watch keeps them.
+      const runs = new Map<string, { start?: number; fired: boolean }>();
+      for (const r of readings.filter((x) => x.sense === trig.sense && deviceMatches(m, x)).sort((a, b) => ms(a.measured_at) - ms(b.measured_at))) {
         const t = ms(r.measured_at);
-        if (!isOut(r.value)) {
-          runStart = undefined;
-          fired = false;
+        if (r.kind === "event") {
+          if (holds(m, r)) out.push({ at: t, reading: r });
           continue;
         }
-        runStart ??= t;
-        if (!fired && t - runStart >= minDur) {
-          fired = true; // one per out-of-range run, as the live watch does
-          out.push({ at: t, reading: { sense: r.sense, value: r.value, unit: r.unit } });
+        const run = runs.get(r.device_id ?? "") ?? { fired: false };
+        runs.set(r.device_id ?? "", run);
+        if (!holds(m, r)) {
+          run.start = undefined;
+          run.fired = false;
+          continue;
+        }
+        run.start ??= t;
+        if (!run.fired && t - run.start >= minDur) {
+          run.fired = true; // one per run that holds, as the live watch does
+          out.push({ at: t, reading: r });
         }
       }
       return out;

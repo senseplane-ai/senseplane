@@ -7,11 +7,11 @@ import type { Event, Source, Watch } from "senseplane";
 import { errorText } from "../../api/extra";
 import { Link } from "../../router";
 import { useApp } from "../../shell/AppData";
-import { formatReading, isVideo } from "../../shell/sources";
+import { type Reading, formatReading, isVideo, readingKey, readingLabel } from "../../shell/sources";
 import { Button, Card, Frame, StatusDot } from "../../ui";
 import { clock } from "./time";
 
-type Now = { captured_at: string; snapshot_url?: string; readings?: { sense: string; value: number; unit: string; measured_at?: string }[] };
+type Now = { captured_at: string; snapshot_url?: string; readings?: Reading[] };
 
 export function RightNow({ source }: { source: Source }) {
   const { client } = useApp();
@@ -39,7 +39,7 @@ export function RightNow({ source }: { source: Source }) {
       {streaming && isVideo(source) && <Frame src={now?.snapshot_url} alt={`Latest frame from ${source.name}`} />}
       {now?.readings?.length ? (
         <ul className="cam-readings-inline">
-          {now.readings.map((r) => <li key={r.sense}><span className="muted">{r.sense}</span> <strong>{formatReading(r)}</strong></li>)}
+          {now.readings.map((r) => <li key={readingKey(r)}><span className="muted">{readingLabel(r)}</span> <strong>{formatReading(r)}</strong></li>)}
         </ul>
       ) : null}
       {failed && streaming && <p className="muted">The latest frame couldn&apos;t be loaded.</p>}

@@ -8,36 +8,9 @@ from datetime import UTC, datetime
 import pytest
 
 from senseplane.client import AuthError, SenseplaneError
-from senseplane.forwarder import Forwarder, to_reading
+from senseplane.forwarder import Forwarder
 
 AT = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
-
-
-@pytest.mark.parametrize(
-    ("device_class", "state", "unit", "want"),
-    [
-        ("temperature", "21.46", "°C", {"sense": "temperature", "value": 21.46, "unit": "celsius"}),
-        ("temperature", "71.6", "°F", {"sense": "temperature", "value": 22.0, "unit": "celsius"}),
-        ("temperature", "300.15", "K", {"sense": "temperature", "value": 27.0, "unit": "celsius"}),
-        ("humidity", "48", "%", {"sense": "humidity", "value": 48.0, "unit": "percent"}),
-        ("temperature", "unavailable", "°C", None),
-        ("temperature", "unknown", "°C", None),
-        ("temperature", "nan", "°C", None),
-        ("humidity", "48", "g/m³", None),
-        ("pressure", "1013", "hPa", None),
-        (None, "1", None, None),
-    ],
-)
-def test_to_reading(device_class, state, unit, want):
-    got = to_reading(device_class, state, unit, AT)
-    if want is None:
-        assert got is None
-    else:
-        assert got == {**want, "at": "2026-10-16T12:00:00+00:00"}
-
-
-def test_to_reading_only_senses_the_source_has():
-    assert to_reading("humidity", "50", "%", AT, senses=["temperature"]) is None
 
 
 def reading(v):

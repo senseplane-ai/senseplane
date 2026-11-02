@@ -6,7 +6,7 @@
 // last hour, then manage the running watches. A watch alerts or just keeps
 // track (ADR 0057); packs add a ready-made set of watches in one step.
 import { useMemo, useState } from "react";
-import { LABELS, type Source, type Trigger, type Webhook } from "senseplane";
+import { LABELS, type Source, type Trigger, type Webhook, senseName, stateWord } from "senseplane";
 import { labelText } from "../../shell/sources";
 import {
   type ActiveHours, type Channel, type Day, type Destination, type WatchMode, type WatchPack, type WatchTestResult, type WatchX,
@@ -47,7 +47,12 @@ export function describeTrigger(t: Trigger): string {
     }
     case "motion": return `motion${x.zone ? ` in ${x.zone.replaceAll("_", " ")}` : ""}${dur}`;
     case "sound": return `sound: ${String(x.class).replaceAll("_", " ")}${dur}`;
-    case "sensor": return `${x.sense}${x.above !== undefined ? ` > ${x.above}` : ""}${x.below !== undefined ? ` < ${x.below}` : ""}${dur}`;
+    case "sensor": {
+      const who = x.device ?? senseName(String(x.sense));
+      if (x.state !== undefined) return `${who} ${stateWord(String(x.sense), x.state === true)}${dur}`;
+      if (x.above === undefined && x.below === undefined) return `${who}${x.detail ? ` (${x.detail})` : ""}`;
+      return `${who}${x.above !== undefined ? ` > ${x.above}` : ""}${x.below !== undefined ? ` < ${x.below}` : ""}${dur}`;
+    }
     case "schedule": return `every ${x.every_min} min`;
     case "sequence": return (x.steps as Trigger[]).map(describeTrigger).join(", then ");
     case "condition": return x.every_min ? `Checked every ${x.every_min} min` : x.at ? `Checked ${onDays(x.days)} at ${x.at}` : "Checked on a schedule";

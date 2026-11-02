@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "codegen": "openapi-typescript ../../spec/openapi.yaml -o src/generated/schema.ts && node scripts/header.mjs src/generated/schema.ts && node scripts/labels.mjs",
+    "codegen": "openapi-typescript ../../spec/openapi.yaml -o src/generated/schema.ts && node scripts/header.mjs src/generated/schema.ts && node scripts/labels.mjs && node scripts/senses.mjs",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"
   },

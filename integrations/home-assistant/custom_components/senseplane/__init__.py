@@ -1,6 +1,7 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Senseplane: forward Home Assistant temperature and humidity sensors as readings.
+"""Senseplane: forward Home Assistant sensors as readings: temperatures and other
+numbers, doors, motion, leaks, smoke, plugs, lights and locks, doorbells and buttons.
 
 Each config entry is one Senseplane sensor source (one integration token).
 State changes of the chosen entities are queued and sent in batches; see
@@ -12,29 +13,24 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .client import SenseplaneClient
 from .const import CONF_ENTITIES, CONF_SOURCE_ID, CONF_TOKEN, CONF_URL
-from .forwarder import Forwarder, to_reading
+from .forwarder import Forwarder
+from .mapping import to_reading
 
 _LOGGER = logging.getLogger(__name__)
 
 type SenseplaneConfigEntry = ConfigEntry[Forwarder]
 
 
-def _reading(state: State | None):
+def _reading(state: State | None, initial: bool = False):
     if state is None:
         return None
-    return to_reading(
-        state.attributes.get(ATTR_DEVICE_CLASS),
-        state.state,
-        state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
-        state.last_updated,
-    )
+    return to_reading(state.entity_id, state.state, dict(state.attributes), state.last_updated, initial=initial)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SenseplaneConfigEntry) -> bool:
@@ -48,7 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SenseplaneConfigEntry) -
 
     # The current value first, so the source has a reading straight away.
     for entity_id in entities:
-        if (reading := _reading(hass.states.get(entity_id))) is not None:
+        if (reading := _reading(hass.states.get(entity_id), initial=True)) is not None:
             forwarder.add(reading)
 
     @callback

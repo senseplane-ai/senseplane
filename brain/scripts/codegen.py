@@ -1,7 +1,8 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
 """Generates Pydantic models from spec/schemas into the senseplane_brain.spec package,
-and copies spec/labels.json (the detector's labels) next to them."""
+and copies spec/labels.json (the detector's labels) and spec/senses.json (the
+known sensor senses) next to them."""
 
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ subprocess.run(
     check=True,
 )
 shutil.copyfile(ROOT.parent / "spec" / "labels.json", OUT / "labels.json")
+shutil.copyfile(ROOT.parent / "spec" / "senses.json", OUT / "senses.json")
 for f in sorted(OUT.glob("*.py")):
     f.write_text(HEADER + f.read_text())
 print(f"wrote {OUT.relative_to(ROOT)}/")

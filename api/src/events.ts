@@ -10,6 +10,7 @@ import type { Destination, EventsTable } from "./data/schema.js";
 import type { MediaClaims, PlaybackSigner } from "./playback.js";
 import { queueEventForChannels } from "./channels.js";
 import { deliveryKick, rememberEventTrace } from "./workers.js";
+import type { ReadingOut } from "./readings.js";
 
 export type EventRow = Selectable<EventsTable>;
 
@@ -25,7 +26,8 @@ export interface NewEvent {
   confidence: number | null;
   /** watch.triggered: whether a vision model confirmed it (false: check skipped, no model). */
   verified?: boolean | null;
-  value?: { sense: string; value: number; unit: string } | null;
+  /** Sensor events: the reading that fired it (spec/schemas/reading.json). */
+  value?: ReadingOut | null;
   snapshot_key?: string | null;
   snapshot_bytes?: number | null;
   /** When to cut the event clip (video events); null for sensor events. */

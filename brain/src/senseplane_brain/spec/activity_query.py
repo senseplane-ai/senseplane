@@ -41,9 +41,23 @@ class Sensor(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    sense: Annotated[str, Field(description='temperature or humidity')]
+    sense: Annotated[
+        str,
+        Field(
+            description='temperature, humidity, power, contact, motion, switch, doorbell, ... (spec/senses.json)'
+        ),
+    ]
+    device: Annotated[
+        str | None, Field(description='Only this device on the source (its id or name)')
+    ] = None
     above: float | None = None
     below: float | None = None
+    state: Annotated[
+        bool | None,
+        Field(
+            description='States: the spans with this value (contact true: while open; switch true: while on)'
+        ),
+    ] = None
 
 
 class What(BaseModel):
@@ -66,7 +80,7 @@ class What(BaseModel):
     sensor: Annotated[
         Sensor | None,
         Field(
-            description='A sensor: its readings, or the spans above/below a threshold'
+            description='A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments'
         ),
     ] = None
     zone: Annotated[
@@ -102,7 +116,7 @@ class Then(BaseModel):
     sensor: Annotated[
         Sensor | None,
         Field(
-            description='A sensor: its readings, or the spans above/below a threshold'
+            description='A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments'
         ),
     ] = None
     zone: Annotated[

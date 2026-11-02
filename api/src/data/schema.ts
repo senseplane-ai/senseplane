@@ -106,7 +106,7 @@ export interface BridgesTable {
 }
 
 export type Zone = { name: string; polygon: number[][] };
-export type Thresholds = Partial<Record<"temperature" | "humidity", { above?: number; below?: number }>>;
+export type Thresholds = Partial<Record<string, { above?: number; below?: number }>>;
 
 export interface EventsTable {
   id: string;
@@ -166,6 +166,11 @@ export interface SensorReadingsTable {
   sense: string;
   value: number;
   unit: string;
+  /** number, state (value 1/0) or event (value 1); ADR 0060. */
+  kind: ColumnType<"number" | "state" | "event", "number" | "state" | "event" | undefined, never>;
+  device_id: string | null;
+  device_name: string | null;
+  detail: string | null;
   measured_at: ColumnType<Date, Date | string, Date | string>;
 }
 

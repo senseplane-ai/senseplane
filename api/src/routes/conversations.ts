@@ -18,6 +18,8 @@ import type { ApiBus } from "../indexer.js";
 import { type ObjectStorage, readObject } from "../storage.js";
 import type { ActivityQuery } from "../activity-query.js";
 import { ask as askActivity } from "./activity.js";
+import { isSensorSense, toReading } from "../readings.js";
+import { latestReadings } from "./source-config.js";
 
 /** Earlier turns sent to the brain with each question. */
 const HISTORY_TURNS = 12;
@@ -298,6 +300,16 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
           const jpeg = await readObject(deps.storage, e.snapshot_key).catch(() => undefined);
           if (!jpeg) return { error: "the snapshot is gone" };
           return { ...out(e), jpeg_b64: jpeg.toString("base64") };
+        }
+        if (name === "read_sensors") {
+          // Sensors right now: the latest reading per sense and device, within the agent's grants (ADR 0060).
+          const ids = scope.filter((id) => allowed.get(id)?.senses.some(isSensorSense));
+          const only = typeof args.sense === "string" && args.sense ? args.sense : undefined;
+          const sources = await deps.data.withAccount(accountId, async (s) => Promise.all(ids.map(async (id) => ({
+            source_id: id, name: allowed.get(id)!.name,
+            readings: (await latestReadings(s, id)).filter((r) => canSense(req, id, r.row.sense) && (!only || r.row.sense === only)).map((r) => toReading(r.row, r.since)),
+          }))));
+          return { sources: sources.filter((x) => x.readings.length) };
         }
         if (name === "query_activity") {
           // The question's sources stay inside this conversation's; numbers come from the API, not the model (ADR 0057).

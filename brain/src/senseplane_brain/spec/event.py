@@ -11,6 +11,7 @@ from typing import Annotated
 
 from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field
 
+from . import reading
 from . import sense as sense_1
 
 
@@ -119,15 +120,6 @@ class Source(BaseModel):
     location: str | None = None
 
 
-class Value(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    sense: sense_1.Sense
-    value: float
-    unit: str
-
-
 class Event(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -146,7 +138,10 @@ class Event(BaseModel):
             description='For watch.triggered: true when a vision model confirmed the watch, false when the watch has a check but no model ran (the event fired on its cheap trigger alone). Null for events without a model check.'
         ),
     ] = None
-    value: Value | None
+    value: Annotated[
+        reading.Reading | None,
+        Field(description='Sensor events: the reading that fired it'),
+    ]
     media: Annotated[Media, Field(description='Signed URLs, 15-minute expiry.')]
     ended_at: Annotated[
         AwareDatetime | None,

@@ -45,7 +45,11 @@ const fakeApi: typeof fetch = async (input, init) => {
   if (p === "/sources") return json({ data: SOURCES, next_cursor: null });
   if (p === "/sources/src_cam/now") return json({ source_id: "src_cam", captured_at: "2026-10-16T01:00:00Z", snapshot_url: "http://api/media/t/snapshot.jpg" });
   if (p === "/sources/src_cam/ask") return json({ answer: "A parcel is on the step.", confidence: 0.9, snapshot_url: "http://api/media/t2/snapshot.jpg" });
-  if (p === "/sources/src_th/now") return json({ source_id: "src_th", captured_at: "2026-10-16T01:00:00Z", readings: [{ sense: "temperature", value: 22.4, unit: "celsius", measured_at: "2026-10-16T01:00:00Z" }] });
+  if (p === "/sources/src_th/now") return json({ source_id: "src_th", captured_at: "2026-10-16T01:00:00Z", readings: [
+    { sense: "temperature", kind: "number", value: 22.4, unit: "celsius", measured_at: "2026-10-16T01:00:00Z" },
+    { sense: "contact", kind: "state", value: true, state: "open", since: "2026-10-16T00:50:00Z", device: { id: "binary_sensor.fridge", name: "Fridge door" }, measured_at: "2026-10-16T00:50:00Z" },
+    { sense: "doorbell", kind: "event", measured_at: "2026-10-16T00:40:00Z" },
+  ] });
   if (p === "/sources/src_th/history") return json({ data: [{ sense: "temperature", value: 21.0, unit: "celsius", measured_at: "2026-10-16T00:05:00Z" }] });
   if (p === "/watches" && req.method === "POST") {
     const b = await req.json();
@@ -113,7 +117,11 @@ describe("mcp tools", () => {
     expect(out.look!.content[0]).toMatchObject({ type: "image", mimeType: "image/jpeg", data: JPEG.toString("base64") });
     expect(out.listen!.isError).toBe(true); // the camera has no audio sense
     expect(body("listen").error.code).toBe("forbidden_sense");
-    expect(body("read_environment").sources[0].readings[0]).toMatchObject({ value: 22.4, trend_last_hour: "rising", change_last_hour: 1.4 });
+    expect(body("read_environment").sources[0].readings).toEqual([
+      { sense: "temperature", value: 22.4, unit: "celsius", text: "22.4 °C", measured_at: "2026-10-16T01:00:00Z", trend_last_hour: "rising", change_last_hour: 1.4 },
+      { sense: "contact", device: "Fridge door", state: "open", value: true, since: "2026-10-16T00:50:00Z", measured_at: "2026-10-16T00:50:00Z" },
+      { sense: "doorbell", last: "rang", at: "2026-10-16T00:40:00Z" },
+    ]);
     expect(body("watch_for")).toMatchObject({ watch_id: "wat_1", expires_at: "2026-10-16T02:00:00Z" });
     expect(body("what_happened").events[0]).toMatchObject({ summary: "A courier left a parcel.", clip_url: "http://api/c" });
     expect(body("measure")).toMatchObject({ value: 2, unit: "count", echo: { measure: "count", what: { watch_id: "wat_1" }, period: "today" } });

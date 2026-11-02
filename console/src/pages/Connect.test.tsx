@@ -69,16 +69,16 @@ describe("ConnectPage (MCP consent)", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("http://sp.test/oauth/approve", { request: "sealed_req", code: "cc_code" }));
     expect(api.called("POST", "/agents/connect")[0]!.body).toEqual({
       client_name: "Claude Code", redirect_host: "127.0.0.1:33418", binding: BINDING,
-      source_ids: [SRC.front, SRC.dock], senses: ["video", "temperature", "humidity"], abilities: ["watch"],
+      source_ids: [SRC.front, SRC.dock], senses: ["video", "sensors"], abilities: ["watch"],
     });
   });
 
   it("needs something to sense with before Allow", async () => {
     open();
     const allow = await screen.findByRole("button", { name: "Allow" });
-    for (const name of ["Look", "Read environment"]) fireEvent.click(screen.getByRole("button", { name }));
+    for (const name of ["Look", "Read sensors"]) fireEvent.click(screen.getByRole("button", { name }));
     expect(allow).toBeDisabled();
-    expect(screen.getByText("Pick at least one of Look, Listen or Read environment.")).toBeInTheDocument();
+    expect(screen.getByText("Pick at least one of Look, Listen or Read sensors.")).toBeInTheDocument();
   });
 
   it("pre-fills a reconnecting app's current access", async () => {

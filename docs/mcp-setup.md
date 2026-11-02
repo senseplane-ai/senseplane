@@ -161,7 +161,8 @@ What happens when you press Connect (ADR 0048):
    browser, that session is used and you skip this step.
 4. Pick the cameras and sensors, and what the app may do: **Look** (live
    pictures and questions about them), **Listen** (sound events, never
-   speech), **Read environment** (temperature and humidity), **Set watches**,
+   speech), **Read sensors** (temperature, doors and windows, plugs, leaks and
+   every other sensor, including ones added later), **Set watches**,
    and **See history and replay** (events, search and recordings older than
    two hours). Listen is off unless you turn it on.
 5. Press **Allow**. Senseplane creates an agent named after the app with that

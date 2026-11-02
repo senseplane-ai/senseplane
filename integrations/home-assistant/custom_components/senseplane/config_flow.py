@@ -1,6 +1,6 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Config flow: API URL + integration token, then the sensor entities to forward."""
+"""Config flow: API URL + integration token, then the entities to forward."""
 
 from __future__ import annotations
 
@@ -14,14 +14,15 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import AuthError, SenseplaneClient, SenseplaneError, normalize_url
-from .const import CONF_ENTITIES, CONF_SOURCE_ID, CONF_TOKEN, CONF_URL, DOMAIN, SENSES
+from .const import CONF_ENTITIES, CONF_SOURCE_ID, CONF_TOKEN, CONF_URL, DOMAIN, DOMAINS
 
 
-def _entities_schema(senses: list[str], default: list[str]) -> vol.Schema:
+def _entities_schema(default: list[str]) -> vol.Schema:
+    # Sensors, door and motion sensors, switches, lights, locks and event entities; ones Senseplane can't read are skipped.
     return vol.Schema(
         {
             vol.Required(CONF_ENTITIES, default=default): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor", device_class=[s for s in senses if s in SENSES], multiple=True)
+                selector.EntitySelectorConfig(domain=DOMAINS, multiple=True)
             )
         }
     )
@@ -74,7 +75,7 @@ class SenseplaneConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(title=self._source.get("name", "Senseplane"), data={**self._data, CONF_ENTITIES: user_input[CONF_ENTITIES]})
         return self.async_show_form(
             step_id="entities",
-            data_schema=_entities_schema(self._source.get("senses", list(SENSES)), []),
+            data_schema=_entities_schema([]),
             description_placeholders={"name": self._source.get("name", "")},
         )
 
@@ -111,4 +112,4 @@ class SenseplaneOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(data={CONF_ENTITIES: user_input[CONF_ENTITIES]})
         current = self.config_entry.options.get(CONF_ENTITIES, self.config_entry.data.get(CONF_ENTITIES, []))
-        return self.async_show_form(step_id="init", data_schema=_entities_schema(list(SENSES), current))
+        return self.async_show_form(step_id="init", data_schema=_entities_schema(current))

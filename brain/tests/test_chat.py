@@ -49,6 +49,14 @@ class FakeTools:
         return {"matches": [{"event_id": "evt_9", "source_id": "src_door", "source_name": "Front door", "at": "2026-10-16T08:02:00Z",
                              "summary": "A person takes a pill with water.", "verified": True}], "checks_used": 4, "candidates": 6, "unchecked": 2}
 
+    def read_sensors(self, args):
+        self.calls.append(("read_sensors", args))
+        return {"sources": [{"source_id": "src_flat", "name": "Flat", "readings": [
+            {"sense": "contact", "kind": "state", "value": True, "state": "open", "since": "2026-10-16T11:40:00Z", "device": {"id": "binary_sensor.fridge", "name": "Fridge door"},
+             "measured_at": "2026-10-16T11:40:00Z"},
+            {"sense": "temperature", "kind": "number", "value": 21.5, "unit": "celsius", "measured_at": "2026-10-16T11:58:00Z"},
+            {"sense": "doorbell", "kind": "event", "measured_at": "2026-10-16T09:00:00Z"}]}]}
+
     def view_event(self, event_id, question):
         self.calls.append(("view_event", {"event_id": event_id, "question": question}))
         return {"answer": "A person in a red coat holding a black phone."}
@@ -251,3 +259,20 @@ def test_stream_turn_assembles_tool_calls():
         ("tool_call", {"id": "call_a", "name": "search_history", "arguments": '{"query": "x"}'}),
         ("tool_call", {"id": "call_b", "name": "look", "arguments": "{}"}),
     ]
+
+
+def test_reads_sensors_now_with_states_since_and_local_times():
+    """ADR 0060: doors, plugs and numbers right now, without refs."""
+    flat = {"id": "src_flat", "name": "Flat", "location": "Kitchen", "type": "sensor", "status": "online", "senses": ["contact", "temperature", "doorbell"], "can_look": False}
+    model = scripted([("tool", "read_sensors", {"sense": "contact"})], [("delta", "The fridge door has been open since 12:40.")])
+    tools = FakeTools()
+    content, events = run({**REQ, "sources": [*SOURCES, flat], "question": "Is the fridge open?"}, model, tools)
+    assert tools.calls == [("read_sensors", {"sources": ["src_door", "src_rec", "src_flat"], "sense": "contact"})]
+    reply = json.loads([m for m in model.seen[1]["messages"] if m["role"] == "tool"][0]["content"])
+    assert reply["readings"][0] == {"source": "Flat", "sense": "contact", "time": reply["readings"][0]["time"], "device": "Fridge door", "state": "open",
+                                    "since": reply["readings"][0]["since"]}
+    assert "12:40" in reply["readings"][0]["since"]  # BST
+    assert reply["readings"][1]["value"] == 21.5 and reply["readings"][1]["unit"] == "celsius"
+    assert reply["readings"][2]["last"] == "happened"
+    assert content == "The fridge door has been open since 12:40."
+    assert "read_sensors" in [t["function"]["name"] for t in model.seen[0]["tools"]]

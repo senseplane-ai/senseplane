@@ -462,7 +462,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
     ...(mediaDriver?.publicUrl ? { whip: { publicUrl: mediaDriver.publicUrl, authorizeUrl: whipAuthorizeUrl, signer } } : {}),
   });
-  registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit });
+  registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
+    ...(mediaDriver?.disconnect ? { disconnect: (id: string) => mediaDriver.disconnect!(id, "removed") } : {}) });
   registerPairingRoutes(app, { data, audit, ...(auth.consoleUrls[0] ? { consoleUrl: auth.consoleUrls[0] } : {}) });
   const stoppers: (() => void | Promise<void>)[] = [];
   if (storage) {

@@ -406,6 +406,43 @@ export function BoxPage({ id }: { id: string }) {
       {box.matter && <BoxMatter box={box} onAdded={reload} />}
       {box.cameras_found != null && <BoxFound box={box} />}
       <BoxCameras box={box} />
+      <BoxRemove box={box} />
     </div>
+  );
+}
+
+/** Removing a box: its token stops working; its cameras and sensors stay with their history. */
+function BoxRemove({ box }: { box: Bridge }) {
+  const { extra, refreshSources } = useApp();
+  const toast = useToast();
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await extra.bridges.remove(box.id);
+      refreshSources();
+      toast(`${box.name} removed`);
+      navigate("/cameras");
+    } catch (err) {
+      toast(errorText(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Remove this box">
+      <p className="muted">
+        It stops sending at once and shows a new code if it starts again. Its cameras and sensors stay here with what they
+        recorded, offline, until you delete them.
+      </p>
+      {asking ? (
+        <div className="row">
+          <Button variant="danger" busy={busy} onClick={() => void remove()}>Remove {box.name}</Button>
+          <Button onClick={() => setAsking(false)}>Cancel</Button>
+        </div>
+      ) : (
+        <Button onClick={() => setAsking(true)}>Remove box</Button>
+      )}
+    </Card>
   );
 }

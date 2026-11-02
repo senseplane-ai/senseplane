@@ -29,6 +29,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.After
 import org.junit.Rule
 import org.junit.rules.ExternalResource
 import org.junit.Test
@@ -225,6 +226,17 @@ class PhoneBoxE2ETest {
             compose.onAllNodes(hasText(tab)).onFirst().performClick()
             compose.waitUntil(15_000) { compose.onAllNodes(hasText("Loading…")).fetchSemanticsNodes().isEmpty() }
             shot(name)
+        }
+    }
+
+    // The box this run paired is removed (its sources stay, offline), so reruns don't pile up boxes.
+    @After
+    fun removeBox() {
+        if (server.isEmpty() || ownerKey.isEmpty()) return
+        runCatching {
+            call("GET", "/v1/bridges")["data"]!!.jsonArray.map { it.jsonObject }
+                .filter { it["name"]?.jsonPrimitive?.content == "E2E phone" }
+                .forEach { call("DELETE", "/v1/bridges/${it["id"]!!.jsonPrimitive.content}") }
         }
     }
 

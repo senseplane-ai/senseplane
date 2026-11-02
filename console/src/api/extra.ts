@@ -244,6 +244,7 @@ export class ApiExtra {
     findPairing: (code: string) => this.request<{ code: string; name: string; expires_at: string }>("GET", `/bridges/pair?${new URLSearchParams({ code })}`),
     pair: (code: string, name?: string) => this.request<{ id: string; name: string }>("POST", "/bridges/pair", { code, ...(name ? { name } : {}) }),
     /** Add a Matter device through the box with the pairing code shared from its own app (ADR 0062). */
+    remove: (id: string) => this.request<void>("DELETE", `/bridges/${encodeURIComponent(id)}`),
     addMatter: (id: string, code: string) => this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/matter`, { code }),
     /** Cameras the box found, to pick from (ADR 0063). */
     camerasFound: (id: string) => this.request<{ data: BridgeCameraFound[] }>("GET", `/bridges/${encodeURIComponent(id)}/cameras-found`),

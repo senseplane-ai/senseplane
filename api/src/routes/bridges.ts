@@ -42,6 +42,8 @@ export interface BridgeDeps {
   /** The plan's largest stream, for a box that picks a camera's stream itself (a phone, ADR 0064). */
   maxResolution?(accountId: string): Promise<"720p" | "1080p">;
   audit?: AuditLog;
+  /** Cuts a camera's live stream off at the media plane (a removed box's cameras). */
+  disconnect?(sourceId: string): Promise<void>;
 }
 
 const healthBody = {
@@ -478,6 +480,8 @@ export interface BridgeAdminDeps {
   /** The plan's largest stream; a camera added from the list gets the profile that fits it (ADR 0063). */
   maxResolution?(accountId: string): Promise<"720p" | "1080p">;
   audit?: AuditLog;
+  /** Cuts a camera's live stream off at the media plane (a removed box's cameras). */
+  disconnect?(sourceId: string): Promise<void>;
 }
 
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
@@ -515,6 +519,28 @@ export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdmi
   app.get("/v1/bridges", async (req) => {
     const rows = await deps.data.withAccount(req.accountId!, (s) => s.db.selectFrom("bridges").selectAll().where("revoked_at", "is", null).orderBy("created_at").execute());
     return { data: rows.map(toBridge), next_cursor: null };
+  });
+
+  // Remove a box: its token stops working (a paired phone or add-on shows a new
+  // code), and its cameras and sensors stay with what they recorded, offline
+  // and no longer tied to a box.
+  app.delete<{ Params: { id: string } }>("/v1/bridges/:id", async (req, reply) => {
+    const accountId = req.accountId!;
+    const bridge = await bridgeOf(accountId, req.params.id);
+    const detached = await deps.data.withAccount(accountId, async (s) => {
+      const rows = await s.db.updateTable("sources").where("bridge_id", "=", bridge.id)
+        .set((eb) => ({ bridge_id: null, bridge_state: "offline", bridge_detail: "its box was removed", status: eb.case().when("status", "=", "paused").then(eb.ref("status")).else("offline").end() }))
+        .returning(["id", "type"]).execute();
+      await s.db.deleteFrom("bridge_entities").where("bridge_id", "=", bridge.id).execute();
+      await s.db.deleteFrom("bridge_cameras_found").where("bridge_id", "=", bridge.id).execute();
+      await s.db.deleteFrom("bridge_commands").where("bridge_id", "=", bridge.id).execute();
+      await s.db.updateTable("bridges").where("id", "=", bridge.id).set({ revoked_at: new Date() }).execute();
+      return rows;
+    });
+    // Its WHIP tokens are refused from now (the camera has no box); live streams are cut off too.
+    for (const r of detached) if (r.type === "rtsp") await deps.disconnect?.(r.id).catch(() => undefined);
+    await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.removed", target: bridge.id, status: 204, details: { sources: detached.length } });
+    return reply.code(204).send();
   });
 
   const bridgeOf = async (accountId: string, id: string) => {

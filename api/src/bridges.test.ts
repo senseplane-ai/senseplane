@@ -260,4 +260,24 @@ describe("ingest: bridges and sensor integrations", () => {
     expect(left.every((r: { value: number }) => r.value !== 18)).toBe(true);
     expect(left.length).toBeGreaterThan(0);
   });
+
+  it("removes a box: its token stops working, its cameras stay with their history, offline and cut off", async () => {
+    const made = await call("POST", "/v1/bridges", { name: "Old phone" });
+    expect(made.statusCode).toBe(201);
+    const { id, token } = made.json();
+    const cam = (await call("POST", "/v1/bridge/cameras", { rtsp_url: "rtsp://10.0.0.77/live" }, token)).json().source_id as string;
+    expect((await authorize(cam, token)).statusCode).toBe(200);
+    disconnected.length = 0;
+
+    expect((await call("DELETE", `/v1/bridges/${id}`)).statusCode).toBe(204);
+    expect((await call("GET", "/v1/bridge/config", undefined, token)).statusCode).toBe(401);
+    expect((await call("GET", "/v1/bridges")).json().data.map((b: { id: string }) => b.id)).not.toContain(id);
+    const kept = await row(cam);
+    expect(kept).toMatchObject({ bridge_id: null, status: "offline" });
+    expect(disconnected.list).toContain(cam);
+    expect((await authorize(cam, token)).statusCode).toBe(401); // its WHIP token is refused
+    expect((await call("DELETE", `/v1/bridges/${id}`)).statusCode).toBe(404);
+    const audit = await api.data.withAccount(accountId, (s) => s.db.selectFrom("audit_log").select(["action"]).where("target", "=", id).execute());
+    expect(audit.map((a) => a.action)).toContain("bridge.removed");
+  });
 });

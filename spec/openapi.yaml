@@ -829,6 +829,21 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Bridge'}
         default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}:
+    delete:
+      operationId: removeBridge
+      summary: Remove a bridge (box)
+      description: >-
+        Its token stops working at once (a paired phone or add-on shows a new
+        pairing code), and its cameras' live streams are cut off. Its cameras
+        and sensor sources stay with what they recorded, offline and no longer
+        tied to a bridge; delete them separately. Audited.
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '204': {description: Removed}
+        default: {$ref: '#/components/responses/Error'}
   /bridges/{id}/entities:
     get:
       operationId: listBridgeEntities

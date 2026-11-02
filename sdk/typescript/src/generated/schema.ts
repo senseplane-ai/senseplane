@@ -513,6 +513,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bridges/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a bridge (box)
+         * @description Its token stops working at once (a paired phone or add-on shows a new pairing code), and its cameras' live streams are cut off. Its cameras and sensor sources stay with what they recorded, offline and no longer tied to a bridge; delete them separately. Audited.
+         */
+        delete: operations["removeBridge"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridges/{id}/entities": {
         parameters: {
             query?: never;
@@ -4291,6 +4311,28 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Bridge"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeBridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

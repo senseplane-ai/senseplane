@@ -11,7 +11,9 @@
 // backoff and reports each camera's state. `--rtsp` claims the camera the
 // token was created for (or adds another camera to this bridge). With
 // `--ha-url` and `--ha-token`, or as a Home Assistant add-on, it also lists
-// Home Assistant's sensors and sends the ones a person chose (ADR 0061).
+// Home Assistant's sensors and sends the ones a person chose (ADR 0061). It
+// lists the ONVIF cameras on its network to pick from in the console and
+// adds one with the credentials a person enters (ADR 0063).
 package main
 
 import (
@@ -34,6 +36,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/camera"
 	"github.com/senseplane-ai/senseplane/bridge/internal/health"
 	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
+	"github.com/senseplane-ai/senseplane/bridge/internal/onvif"
 	"github.com/senseplane-ai/senseplane/bridge/internal/pairing"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 	"github.com/senseplane-ai/senseplane/bridge/internal/whip"
@@ -56,6 +59,7 @@ func main() {
 	haURL := flag.String("ha-url", os.Getenv("HA_URL"), "read sensors from this Home Assistant, e.g. http://homeassistant.local:8123 (env HA_URL; as an add-on the Supervisor's is used)")
 	haToken := flag.String("ha-token", os.Getenv("HA_TOKEN"), "a Home Assistant long-lived access token (env HA_TOKEN)")
 	matterURL := flag.String("matter-url", os.Getenv("MATTER_URL"), "read Matter devices through this Matter Server, e.g. ws://localhost:5580/ws (env MATTER_URL)")
+	findCameras := flag.Bool("find-cameras", os.Getenv("SENSEPLANE_FIND_CAMERAS") != "false", "look for ONVIF cameras on the local network so they can be picked in the console (env SENSEPLANE_FIND_CAMERAS=false turns it off; needs host networking)")
 	stateDir := flag.String("state-dir", os.Getenv("SENSEPLANE_STATE_DIR"), "keep the token got by pairing here (env SENSEPLANE_STATE_DIR; the add-on uses /data)")
 	boxName := flag.String("box-name", envOr("SENSEPLANE_BOX_NAME", "Home Assistant"), "the name a person sees when pairing")
 	check := flag.Bool("healthcheck", false, "probe the local /healthz and exit (for container health checks)")
@@ -164,7 +168,7 @@ func main() {
 			mu.Unlock()
 		}
 		paired := !strings.HasPrefix(*token, "brg_")
-		refused := run(ctx, *apiURL, tok, paired, rtsps, *name, *whipBase, ha, *matterURL, log, func(b *bridge.Bridge) {
+		refused := run(ctx, *apiURL, tok, paired, rtsps, *name, *whipBase, ha, *matterURL, *findCameras, log, func(b *bridge.Bridge) {
 			mu.Lock()
 			running = b
 			mu.Unlock()
@@ -182,7 +186,7 @@ func main() {
 }
 
 // run relays and reads until ctx ends; a paired box also stops when the API refuses its token (true).
-func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, matterURL string, log *slog.Logger, started func(*bridge.Bridge)) bool {
+func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, matterURL string, findCameras bool, log *slog.Logger, started func(*bridge.Bridge)) bool {
 	client := api.New(apiURL, token)
 
 	for _, u := range rtsps {
@@ -212,6 +216,10 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 			return mc.Commission(ctx, code)
 		}}
 		log.Info("reading Matter devices", "controller", matterURL)
+	}
+	if findCameras {
+		// ONVIF cameras on this network (and Home Assistant's) are listed to pick from (ADR 0063).
+		o.Finder = &bridge.Finder{Discover: func(ctx context.Context) ([]onvif.Found, error) { return onvif.Discover(ctx, onvif.DiscoverOptions{}) }}
 	}
 	if paired {
 		o.OnRefused = func() { refused = true; cancel() }

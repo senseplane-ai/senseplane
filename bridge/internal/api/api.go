@@ -100,6 +100,30 @@ type Health struct {
 	HomeAssistant *HomeHealth `json:"home_assistant,omitempty"`
 	// Matter is set when the bridge runs a Matter controller (ADR 0062).
 	Matter *MatterHealth `json:"matter,omitempty"`
+	// CamerasFound is how many cameras it lists to pick from, when it looks for them (ADR 0063).
+	CamerasFound *int `json:"cameras_found,omitempty"`
+}
+
+// FoundCamera is a camera the box found, on its network with ONVIF or in
+// Home Assistant, listed for a person to pick (ADR 0063). Never credentials.
+type FoundCamera struct {
+	// ID is the camera's ONVIF endpoint (urn:uuid:…), or the Home Assistant entity for a camera without ONVIF.
+	ID           string `json:"id"`
+	Address      string `json:"address,omitempty"`
+	XAddr        string `json:"xaddr,omitempty"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Name         string `json:"name,omitempty"`
+	ONVIF        bool   `json:"onvif"`
+	// HomeAssistant is the camera entity it matches (same address or MAC), with its name and room.
+	HomeAssistant *FoundEntity `json:"home_assistant,omitempty"`
+}
+
+// FoundEntity is a Home Assistant camera entity.
+type FoundEntity struct {
+	EntityID string `json:"entity_id"`
+	Name     string `json:"name"`
+	Area     string `json:"area,omitempty"`
 }
 
 // MatterHealth is the bridge's link to its Matter controller.
@@ -221,6 +245,14 @@ func (c *Client) PutEntities(ctx context.Context, entities []Entity) error {
 		entities = []Entity{}
 	}
 	return c.do(ctx, http.MethodPut, "/v1/bridge/entities", map[string]any{"entities": entities}, nil)
+}
+
+// PutCamerasFound replaces the list of cameras this box found to pick from.
+func (c *Client) PutCamerasFound(ctx context.Context, cameras []FoundCamera) error {
+	if cameras == nil {
+		cameras = []FoundCamera{}
+	}
+	return c.do(ctx, http.MethodPut, "/v1/bridge/cameras-found", map[string]any{"cameras": cameras}, nil)
 }
 
 // PostReadings sends readings of the chosen entities; the API files each under its entity's sensor source.

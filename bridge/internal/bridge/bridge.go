@@ -46,6 +46,8 @@ type Options struct {
 	Commands map[string]Handler
 	// Matter, when set, is a Matter controller whose devices are sensors too (ADR 0062).
 	Matter MatterLink
+	// Finder, when set, looks for ONVIF cameras on the network and adds one a person picks (ADR 0063).
+	Finder *Finder
 }
 
 // MatterLink runs a Matter controller connection, telling home about its devices.
@@ -66,7 +68,9 @@ type Bridge struct {
 	workers map[string]*worker
 	states  map[string]api.CameraHealth
 	changed chan struct{}
+	resync  chan struct{}
 	home    *home
+	found   *found
 }
 
 // New returns a bridge; call Run.
@@ -74,11 +78,31 @@ func New(o Options) *Bridge {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	b := &Bridge{o: o, workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1)}
+	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1)}
 	if o.HomeAssistant != nil || o.Matter != nil {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
 	}
+	if o.Finder != nil {
+		b.found = newFound(o.Client, o.Log, *o.Finder)
+		if b.home != nil {
+			b.home.cameras = b.found.cameras // Home Assistant's cameras name the ones found
+		}
+		cmds := map[string]Handler{"onvif_add_camera": b.addONVIF, "onvif_search": b.searchONVIF}
+		for k, h := range o.Commands {
+			cmds[k] = h
+		}
+		o.Commands = cmds
+	}
+	b.o = o
 	return b
+}
+
+// resyncSoon fetches the config now instead of at the next poll (a camera was just added).
+func (b *Bridge) resyncSoon() {
+	select {
+	case b.resync <- struct{}{}:
+	default:
+	}
 }
 
 func (b *Bridge) poke() {
@@ -129,6 +153,9 @@ func (b *Bridge) Run(ctx context.Context) {
 		}
 		go b.home.fwd.Run(ctx)
 	}
+	if b.found != nil {
+		go b.found.run(ctx)
+	}
 	if len(b.o.Commands) > 0 {
 		go b.runCommands(ctx)
 	}
@@ -160,6 +187,8 @@ func (b *Bridge) Run(ctx context.Context) {
 			cancel()
 			return
 		case <-pollT.C:
+			b.sync(ctx)
+		case <-b.resync:
 			b.sync(ctx)
 		case <-beatT.C:
 			b.report(ctx)
@@ -280,6 +309,9 @@ func (b *Bridge) report(ctx context.Context) {
 	h := api.Health{Version: b.o.Version, Cameras: b.Cameras()}
 	if b.home != nil {
 		h.HomeAssistant, h.Matter = b.home.health()
+	}
+	if b.found != nil {
+		h.CamerasFound = b.found.health()
 	}
 	if err := b.o.Client.Report(ctx, h); err != nil && ctx.Err() == nil {
 		b.o.Log.Warn("health report failed", "err", err)

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -41,6 +42,28 @@ type Handler interface {
 	Entities(list []api.Entity)
 	// State is every entity's state at start-up (initial) and each change after.
 	State(s State, initial bool)
+}
+
+// Camera is one of Home Assistant's camera entities, with what its device
+// registry says about it: the room, maker and model, and the camera's address
+// when the integration records it (configuration_url, a MAC), so the bridge
+// can match it to a camera it found with ONVIF (ADR 0063).
+type Camera struct {
+	EntityID     string
+	Name         string
+	Area         string
+	Manufacturer string
+	Model        string
+	// Host is the camera's address from its device's configuration URL, if any.
+	Host string
+	// MACs are its device's network connections.
+	MACs []string
+}
+
+// CameraHandler is a Handler that also wants Home Assistant's cameras, listed
+// at the same moments as Entities.
+type CameraHandler interface {
+	Cameras(list []Camera)
 }
 
 // Options configure the client.
@@ -267,7 +290,7 @@ func session(ctx context.Context, o Options, h Handler) error {
 	for _, s := range states {
 		current[s.EntityID] = s
 	}
-	h.Entities(reg.entities(current))
+	reg.list(h, current)
 	for _, s := range states {
 		h.State(s, true)
 	}
@@ -291,7 +314,7 @@ func session(ctx context.Context, o Options, h Handler) error {
 			relist = nil
 			if r, err := registries(sctx, c); err == nil {
 				reg = r
-				h.Entities(reg.entities(current))
+				reg.list(h, current)
 			}
 		case m, ok := <-events:
 			if !ok {
@@ -331,15 +354,20 @@ func getStates(ctx context.Context, c *conn) ([]State, error) {
 
 type registry struct {
 	areas   map[string]string // area_id → name
-	devices map[string]string // device_id → area_id
+	devices map[string]device // device_id → its room and what it is
 	entries map[string]struct {
 		area, device string
 		disabled     bool
 	}
 }
 
+type device struct {
+	area, manufacturer, model, host string
+	macs                            []string
+}
+
 func registries(ctx context.Context, c *conn) (*registry, error) {
-	r := &registry{areas: map[string]string{}, devices: map[string]string{}, entries: map[string]struct {
+	r := &registry{areas: map[string]string{}, devices: map[string]device{}, entries: map[string]struct {
 		area, device string
 		disabled     bool
 	}{}}
@@ -348,8 +376,12 @@ func registries(ctx context.Context, c *conn) (*registry, error) {
 		Name   string `json:"name"`
 	}
 	var devices []struct {
-		ID     string  `json:"id"`
-		AreaID *string `json:"area_id"`
+		ID               string     `json:"id"`
+		AreaID           *string    `json:"area_id"`
+		Manufacturer     *string    `json:"manufacturer"`
+		Model            *string    `json:"model"`
+		ConfigurationURL *string    `json:"configuration_url"`
+		Connections      [][]string `json:"connections"`
 	}
 	var entities []struct {
 		EntityID   string  `json:"entity_id"`
@@ -373,9 +405,16 @@ func registries(ctx context.Context, c *conn) (*registry, error) {
 		r.areas[a.AreaID] = a.Name
 	}
 	for _, d := range devices {
-		if d.AreaID != nil {
-			r.devices[d.ID] = *d.AreaID
+		dv := device{area: deref(d.AreaID), manufacturer: deref(d.Manufacturer), model: deref(d.Model)}
+		if u, err := url.Parse(deref(d.ConfigurationURL)); err == nil {
+			dv.host = u.Hostname()
 		}
+		for _, c := range d.Connections {
+			if len(c) == 2 && c[0] == "mac" {
+				dv.macs = append(dv.macs, strings.ToLower(c[1]))
+			}
+		}
+		r.devices[d.ID] = dv
 	}
 	for _, e := range entities {
 		v := r.entries[e.EntityID]
@@ -402,7 +441,7 @@ func (r *registry) entities(states map[string]State) []api.Entity {
 		e := r.entries[id]
 		area := e.area
 		if area == "" {
-			area = r.devices[e.device]
+			area = r.devices[e.device].area
 		}
 		name := str(s.Attributes, "friendly_name")
 		if name == "" {
@@ -412,4 +451,49 @@ func (r *registry) entities(states map[string]State) []api.Entity {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].EntityID < out[j].EntityID })
 	return out
+}
+
+// list tells h the entities Senseplane can take and, when it wants them, the cameras.
+func (r *registry) list(h Handler, states map[string]State) {
+	h.Entities(r.entities(states))
+	if ch, ok := h.(CameraHandler); ok {
+		ch.Cameras(r.cameras(states))
+	}
+}
+
+// cameras lists Home Assistant's camera entities with their room and device.
+func (r *registry) cameras(states map[string]State) []Camera {
+	out := []Camera{}
+	for id, s := range states {
+		if !strings.HasPrefix(id, "camera.") || r.entries[id].disabled {
+			continue
+		}
+		e := r.entries[id]
+		d := r.devices[e.device]
+		area := e.area
+		if area == "" {
+			area = d.area
+		}
+		name := str(s.Attributes, "friendly_name")
+		if name == "" {
+			name = id
+		}
+		c := Camera{EntityID: id, Name: name, Area: r.areas[area], Manufacturer: d.manufacturer, Model: d.model, Host: d.host, MACs: d.macs}
+		if c.Model == "" {
+			c.Model = str(s.Attributes, "model_name")
+		}
+		if c.Manufacturer == "" {
+			c.Manufacturer = str(s.Attributes, "brand")
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].EntityID < out[j].EntityID })
+	return out
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

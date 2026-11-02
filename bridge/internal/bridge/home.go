@@ -33,6 +33,8 @@ type home struct {
 	fwd    *sensors.Forwarder
 	log    *slog.Logger
 	notify func()
+	// cameras takes Home Assistant's camera entities (nil: nobody wants them).
+	cameras func([]homeassistant.Camera)
 
 	mu       sync.Mutex
 	links    map[string]*link
@@ -92,6 +94,13 @@ func (s source) Entities(list []api.Entity) {
 	s.h.links[s.name].entities = list
 	s.h.mu.Unlock()
 	s.h.notify()
+}
+
+// Cameras takes Home Assistant's camera entities, to name the cameras found on the network (ADR 0063).
+func (s source) Cameras(list []homeassistant.Camera) {
+	if s.h.cameras != nil {
+		s.h.cameras(list)
+	}
 }
 
 // Nodes is how many devices a Matter controller has.

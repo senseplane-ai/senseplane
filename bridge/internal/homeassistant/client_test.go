@@ -63,16 +63,20 @@ func (f *fakeHA) handler(w http.ResponseWriter, r *http.Request) {
 				{"entity_id": "sensor.kitchen_temp", "state": "21.5", "attributes": map[string]any{"device_class": "temperature", "unit_of_measurement": "°C", "friendly_name": "Kitchen temperature"}, "last_updated": "2026-10-16T08:00:00Z"},
 				{"entity_id": "media_player.tv", "state": "playing", "attributes": map[string]any{}, "last_updated": "2026-10-16T08:00:00Z"},
 				{"entity_id": "switch.old_plug", "state": "off", "attributes": map[string]any{}, "last_updated": "2026-10-16T08:00:00Z"},
+				{"entity_id": "camera.front_door", "state": "streaming", "attributes": map[string]any{"friendly_name": "Front door", "frontend_stream_type": "hls"}, "last_updated": "2026-10-16T08:00:00Z"},
+				{"entity_id": "camera.nest_doorbell", "state": "idle", "attributes": map[string]any{"friendly_name": "Doorbell", "brand": "Google Nest", "model_name": "Doorbell (battery)"}, "last_updated": "2026-10-16T08:00:00Z"},
 			}
 		case "config/area_registry/list":
 			result = []map[string]any{{"area_id": "kitchen", "name": "Kitchen"}}
 		case "config/device_registry/list":
-			result = []map[string]any{{"id": "dev_fridge", "area_id": "kitchen"}}
+			result = []map[string]any{{"id": "dev_fridge", "area_id": "kitchen"}, {"id": "dev_cam", "area_id": "kitchen", "manufacturer": "TP-Link", "model": "Tapo C200",
+				"configuration_url": "http://192.168.1.40:2020/", "connections": [][]string{{"mac", "AA:BB:CC:00:11:22"}}}}
 		case "config/entity_registry/list":
 			result = []map[string]any{
 				{"entity_id": "binary_sensor.fridge", "device_id": "dev_fridge", "area_id": nil},
 				{"entity_id": "sensor.kitchen_temp", "area_id": "kitchen"},
 				{"entity_id": "switch.old_plug", "disabled_by": "user"},
+				{"entity_id": "camera.front_door", "device_id": "dev_cam"},
 			}
 		}
 		f.mu.Lock()
@@ -105,8 +109,11 @@ type record struct {
 	mu       sync.Mutex
 	up       []bool
 	entities [][]api.Entity
+	cameras  [][]Camera
 	states   []string
 }
+
+func (r *record) Cameras(l []Camera) { r.mu.Lock(); r.cameras = append(r.cameras, l); r.mu.Unlock() }
 
 func (r *record) Connected(up bool) { r.mu.Lock(); r.up = append(r.up, up); r.mu.Unlock() }
 func (r *record) Entities(l []api.Entity) {
@@ -158,13 +165,28 @@ func TestReadsEntitiesWithRoomsStatesAndChangesAndReconnects(t *testing.T) {
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("entities = %+v (the TV isn't a sensor and the disabled plug is left out)", got)
 	}
-	waitFor(t, "initial states", func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return len(rec.states) == 4 })
+	// Its cameras, with the room, maker, model and address from the device registry (or the entity's own attributes).
+	rec.mu.Lock()
+	cams := rec.cameras
+	rec.mu.Unlock()
+	if len(cams) != 1 || len(cams[0]) != 2 {
+		t.Fatalf("cameras = %+v", cams)
+	}
+	front, bell := cams[0][0], cams[0][1]
+	if front.EntityID != "camera.front_door" || front.Name != "Front door" || front.Area != "Kitchen" || front.Manufacturer != "TP-Link" || front.Model != "Tapo C200" ||
+		front.Host != "192.168.1.40" || len(front.MACs) != 1 || front.MACs[0] != "aa:bb:cc:00:11:22" {
+		t.Fatalf("front door = %+v", front)
+	}
+	if bell.Name != "Doorbell" || bell.Area != "" || bell.Manufacturer != "Google Nest" || bell.Model != "Doorbell (battery)" || bell.Host != "" {
+		t.Fatalf("doorbell = %+v", bell)
+	}
+	waitFor(t, "initial states", func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return len(rec.states) == 6 })
 
 	f.push("binary_sensor.fridge", "on", map[string]any{"device_class": "door"})
 	waitFor(t, "a change", func() bool {
 		rec.mu.Lock()
 		defer rec.mu.Unlock()
-		return len(rec.states) == 5 && rec.states[4] == "change:binary_sensor.fridge=on"
+		return len(rec.states) == 7 && rec.states[6] == "change:binary_sensor.fridge=on"
 	})
 
 	// Home Assistant restarts: the session ends and comes back with a fresh snapshot.

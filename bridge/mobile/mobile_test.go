@@ -244,6 +244,7 @@ func TestAPhoneAddsAMatterDevice(t *testing.T) {
 	defer dev.Close()
 	st := &statuses{}
 	box := NewBox(srv.URL, t.TempDir(), "Kitchen phone", st)
+	box.matter.Trust = func(context.Context) native.Trust { return dev.Trust() } // no CSA ledger in tests
 	if err := box.SetMatterAddress(dev.Addr().String()); err != nil {
 		t.Fatal(err)
 	}

@@ -87,7 +87,7 @@ func waitFor(t *testing.T, what string, f func() bool) {
 func TestAddsADeviceAndReadsIt(t *testing.T) {
 	dev := newFakeDevice(t, 0, 20202021, 3840)
 	dir := t.TempDir()
-	c := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}}
+	c := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}, Trust: offline}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -159,7 +159,7 @@ func TestAddsADeviceAndReadsIt(t *testing.T) {
 	<-runDone
 
 	// A new controller on the same state directory knows the device and reconnects.
-	c2 := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}}
+	c2 := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}, Trust: offline}
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	rec2 := &recorder{}
@@ -171,12 +171,12 @@ func TestAddsADeviceAndReadsIt(t *testing.T) {
 
 func TestAnotherControllersCertificatesAreRefused(t *testing.T) {
 	dev := newFakeDevice(t, 0, 20202021, 3840)
-	c := &Controller{StateDir: t.TempDir(), Resolver: Fixed{dev.Addr()}}
+	c := &Controller{StateDir: t.TempDir(), Resolver: Fixed{dev.Addr()}, Trust: offline}
 	ctx := context.Background()
 	if _, err := c.Commission(ctx, manualCode(20202021, 3840)); err != nil {
 		t.Fatal(err)
 	}
-	other := &Controller{StateDir: t.TempDir(), Resolver: Fixed{dev.Addr()}}
+	other := &Controller{StateDir: t.TempDir(), Resolver: Fixed{dev.Addr()}, Trust: offline}
 	f, err := other.load()
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,9 @@ func TestAReferenceControllerAddsTheFakeDevice(t *testing.T) {
 		if derr != nil {
 			t.Skipf("can't listen on 5540: %v", derr)
 		}
+		dev.mu.Lock()
 		dev.Lenient = true // gomat doesn't arm the fail-safe
+		dev.mu.Unlock()
 		err = gomat.Commission(fabric, net.ParseIP("127.0.0.1"), 20202021, 100, 500)
 		dev.mu.Lock()
 		ok := err == nil && dev.done && dev.nodeID == 500 && dev.sessions == 1
@@ -239,7 +241,7 @@ func mkdir(p string) error { return os.Mkdir(p, 0o700) }
 func TestIdleUntilADeviceIsAdded(t *testing.T) {
 	dev := newFakeDevice(t, 0, 20202021, 3840)
 	dir := t.TempDir()
-	c := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}}
+	c := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}, Trust: offline}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rec := &recorder{}
@@ -270,3 +272,6 @@ func newFakeDevice(t *testing.T, port int, passcode uint32, disc uint16) *FakeDe
 	t.Cleanup(d.Close)
 	return d
 }
+
+// offline is trust with nothing in it: tests never fetch the CSA's ledger.
+func offline(context.Context) Trust { return Trust{} }

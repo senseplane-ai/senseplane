@@ -158,7 +158,12 @@ func PASE(ctx context.Context, t *Transport, peer *net.UDPAddr, passcode uint32)
 	if err := handshakeStatus(m3); err != nil {
 		return nil, err
 	}
-	return t.Secure(peer, localID, uint16(peerID), keys.i2r, keys.r2i, 0, 0, sessionParams(resp, 5))
+	s, err := t.Secure(peer, localID, uint16(peerID), keys.i2r, keys.r2i, 0, 0, sessionParams(resp, 5))
+	if err != nil {
+		return nil, err
+	}
+	s.challenge = keys.chal
+	return s, nil
 }
 
 // Credentials are what this controller proves itself with on its fabric.

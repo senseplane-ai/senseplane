@@ -60,9 +60,10 @@ type fabric struct {
 }
 
 type stored struct {
-	NodeID  uint64 `json:"node_id"`
-	Address string `json:"address,omitempty"` // last address, if mDNS can't find it
-	Added   string `json:"added"`
+	NodeID      uint64       `json:"node_id"`
+	Address     string       `json:"address,omitempty"` // last address, if mDNS can't find it
+	Added       string       `json:"added"`
+	Attestation *Attestation `json:"attestation,omitempty"`
 }
 
 func randomNodeID() uint64 {
@@ -125,12 +126,16 @@ type Controller struct {
 	Resolver Resolver
 	// Port is the local UDP port (0: any).
 	Port int
+	// Trust is what device attestation checks against (default: the CSA's
+	// CD keys, and the PAAs from its ledger, kept in StateDir).
+	Trust func(ctx context.Context) Trust
 
 	mu    sync.Mutex
 	f     *fabric
 	t     *Transport
 	added chan uint64
 	wake  chan struct{}
+	dcl   *DCL
 }
 
 // Devices is how many devices have been added.
@@ -284,7 +289,8 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 	}
 	defer pase.Close()
 	node := randomNodeID()
-	if err := c.addToFabric(ctx, pase, f, node); err != nil {
+	att, err := c.addToFabric(ctx, pase, f, node)
+	if err != nil {
 		return nil, err
 	}
 	// The device now answers as a node of our fabric: on the same address, or wherever mDNS says.
@@ -311,7 +317,7 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 	attrs, _, _ := Read(ctx, sess, []Path{All}, nil)
 	sess.Close()
 	c.mu.Lock()
-	f.Nodes = append(f.Nodes, stored{NodeID: node, Address: addr.String(), Added: time.Now().UTC().Format(time.RFC3339)})
+	f.Nodes = append(f.Nodes, stored{NodeID: node, Address: addr.String(), Added: time.Now().UTC().Format(time.RFC3339), Attestation: &att})
 	err = c.saveLocked(f)
 	ch := c.added
 	c.mu.Unlock()
@@ -329,50 +335,75 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 		}
 	}
 	n := matter.Node{NodeID: json.Number(strconv.FormatUint(node, 10)), Available: true, Attributes: attrMap(nil, attrs)}
-	c.log().Info("Matter device added", "node", node, "address", addr.String(), "sensors", len(n.Entities()))
-	return map[string]any{"node_id": strconv.FormatUint(node, 10), "sensors": len(n.Entities())}, nil
+	c.log().Info("Matter device added", "node", node, "address", addr.String(), "sensors", len(n.Entities()),
+		"vendor", fmt.Sprintf("%04X", att.VendorID), "product", fmt.Sprintf("%04X", att.ProductID), "certified", att.Certified, "note", att.Note)
+	out := map[string]any{"node_id": strconv.FormatUint(node, 10), "sensors": len(n.Entities()), "certified": att.Certified}
+	if att.Note != "" {
+		out["note"] = att.Note
+	}
+	return out, nil
+}
+
+func (c *Controller) trust(ctx context.Context) Trust {
+	if c.Trust != nil {
+		return c.Trust(ctx)
+	}
+	c.mu.Lock()
+	if c.dcl == nil {
+		c.dcl = &DCL{Dir: c.StateDir}
+	}
+	d := c.dcl
+	c.mu.Unlock()
+	paas, err := d.PAAs(ctx)
+	if err != nil {
+		c.log().Warn("couldn't get the CSA's list of Matter makers; devices are added as uncertified", "err", err)
+	}
+	return Trust{PAAs: paas, CDKeys: CSACDKeys()}
 }
 
 // addToFabric runs the commissioning steps over the PASE session (spec 5.5):
-// arm the fail-safe, get the device's key, give it our root and its
-// certificate. Device attestation isn't checked: whoever has the pairing
-// code has the device in hand or its owner's app.
-func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, node uint64) error {
+// arm the fail-safe, check the device's attestation, get its key, give it
+// our root and its certificate.
+func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, node uint64) (Attestation, error) {
 	res, err := Invoke(ctx, s, 0, clusterGeneralCommissioning, cmdArmFailSafe, func(w *TLV) {
 		w.Uint(0, failSafeSeconds)
 		w.Uint(1, 0)
 	})
 	if err != nil {
-		return fmt.Errorf("the device didn't start adding: %w", err)
+		return Attestation{}, fmt.Errorf("the device didn't start adding: %w", err)
 	}
 	if code, _ := res.FieldU(0); code != 0 {
 		if code == 1 {
-			return errors.New("the device is being added by another app right now; try again in a few minutes")
+			return Attestation{}, errors.New("the device is being added by another app right now; try again in a few minutes")
 		}
-		return fmt.Errorf("the device didn't start adding (error %d)", code)
+		return Attestation{}, fmt.Errorf("the device didn't start adding (error %d)", code)
+	}
+	att, err := attest(ctx, s, c.trust(ctx))
+	if err != nil {
+		return Attestation{}, err
 	}
 	nonce := random(32)
 	res, err = Invoke(ctx, s, 0, clusterOperationalCreds, cmdCSRRequest, func(w *TLV) { w.Bytes8(0, nonce) })
 	if err != nil {
-		return fmt.Errorf("the device didn't make a key: %w", err)
+		return Attestation{}, fmt.Errorf("the device didn't make a key: %w", err)
 	}
 	elems, err := DecodeTLV(res.FieldBytes(0))
 	if err != nil {
-		return fmt.Errorf("the device's key request: %w", err)
+		return Attestation{}, fmt.Errorf("the device's key request: %w", err)
 	}
 	if string(elems.FieldBytes(2)) != string(nonce) {
-		return errors.New("the device's key request answers another request")
+		return Attestation{}, errors.New("the device's key request answers another request")
 	}
 	pub, err := csrPublicKey(elems.FieldBytes(1))
 	if err != nil {
-		return err
+		return Attestation{}, err
 	}
 	noc, err := issueNOC(f.rootKey, f.Root, pub, node, f.FabricID)
 	if err != nil {
-		return err
+		return Attestation{}, err
 	}
 	if _, err := Invoke(ctx, s, 0, clusterOperationalCreds, cmdAddTrustedRoot, func(w *TLV) { w.Bytes8(0, f.Root) }); err != nil {
-		return fmt.Errorf("the device didn't take this box's root certificate: %w", err)
+		return Attestation{}, fmt.Errorf("the device didn't take this box's root certificate: %w", err)
 	}
 	res, err = Invoke(ctx, s, 0, clusterOperationalCreds, cmdAddNOC, func(w *TLV) {
 		w.Bytes8(0, noc)
@@ -381,15 +412,15 @@ func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, nod
 		w.Uint(4, adminVendorID)
 	})
 	if err != nil {
-		return fmt.Errorf("the device didn't take its certificate: %w", err)
+		return Attestation{}, fmt.Errorf("the device didn't take its certificate: %w", err)
 	}
 	if code, _ := res.FieldU(0); code != 0 {
 		if code == 5 {
-			return errors.New("the device has as many controllers as it can take; remove one in its app first")
+			return Attestation{}, errors.New("the device has as many controllers as it can take; remove one in its app first")
 		}
-		return fmt.Errorf("the device refused its certificate (error %d)", code)
+		return Attestation{}, fmt.Errorf("the device refused its certificate (error %d)", code)
 	}
-	return nil
+	return att, nil
 }
 
 // attrMap folds attribute values into a node's attribute map ("ep/cluster/attr" → JSON).

@@ -27,7 +27,7 @@ has a test that says when it is done; results are in [`milestones/`](milestones/
 
 - **Storage:** optional batched uploads (keep ~6 s segments for playback, upload them grouped into ~1-minute objects with a byte-range index) to cut object-store write operations about 10×.
 - **Ingest:** SRT; the Android app on the Play Store (built: camera, relay for IP cameras and a sensor hub, ADR 0064); push cameras pick the camera stream that fits `max_resolution`, never transcoding (the bridge does for cameras added from its network, ADR 0063).
-- **More sensors:** adding new Matter devices over Bluetooth, and checking device attestation (the built-in controller adds shared devices with a code, ADR 0065); a documented, signed readings webhook for IFTTT, n8n, Zapier, ESPHome, Shelly and scripts; MQTT in and out. Zigbee, Z-Wave and Thread radios stay with Home Assistant.
+- **More sensors:** adding new Matter devices over Bluetooth, and checking revoked device certificates (the built-in controller adds shared devices with a code and checks their attestation, ADR 0065); a documented, signed readings webhook for IFTTT, n8n, Zapier, ESPHome, Shelly and scripts; MQTT in and out. Zigbee, Z-Wave and Thread radios stay with Home Assistant.
 - **Open bridge outputs:** the bridge speaks only open standards and sends to any WHIP server, re-serves RTSP locally and publishes sensors over MQTT (in Home Assistant's discovery format) or a webhook, with Senseplane as one output among them.
 - **Privacy:** per-account encryption keys; face and plate redaction before the model.
 - **SDKs:** Python SDK.

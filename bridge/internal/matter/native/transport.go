@@ -266,6 +266,7 @@ type Session struct {
 	localNode, peerNode uint64
 	ephem               uint64 // our ephemeral node id, for unsecured sessions we start
 	timing              mrp
+	challenge           []byte // PASE's attestation challenge
 
 	mu         sync.Mutex
 	counter    uint32
@@ -777,10 +778,11 @@ func (s *Session) receive(h msgHeader, p protoHeader, payload []byte, from *net.
 		e.ackTimer = time.AfterFunc(ackDelay, e.flushAck)
 		e.mu.Unlock()
 	}
+	// Delivered under the exchange's lock: fail() closes e.in under it too, so a
+	// message never goes to a closed queue.
 	e.mu.Lock()
-	closed := e.closed || e.err != nil
-	e.mu.Unlock()
-	if closed {
+	defer e.mu.Unlock()
+	if e.closed || e.err != nil {
 		return
 	}
 	select {

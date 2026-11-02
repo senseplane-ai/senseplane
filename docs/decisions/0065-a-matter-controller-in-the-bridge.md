@@ -39,13 +39,21 @@ and kept in the state directory (`matter/matter.json`, mode 0600) with the
 devices added. Nothing starts until the first device is added: no socket,
 no keys, no work.
 
-**Not checked: device attestation.** Commissioners normally check that a
-device is a certified Matter product. Whoever has the pairing code has the
-device or its owner's app in hand, and Senseplane only reads the device;
-checking needs the Distributed Compliance Ledger's certificates and is left
-for later.
+**Device attestation.** While a device is added it proves what it is: its
+device certificate (DAC) and intermediate (PAI), a signature over a nonce
+and the PASE challenge with the DAC's key, and the certification
+declaration (CD) the CSA signed for the product. What the device proves
+about itself is required (the signature, the DAC signed by the PAI, one
+vendor and product in the certificates and the device): a device that gets
+it wrong isn't added. Whether it is *certified* is recorded, not required:
+the PAI must chain to a PAA on the CSA's Distributed Compliance Ledger
+(fetched by the box, kept a week in the state directory), and the CD must
+be signed by one of the CSA's CD keys (in the bridge, from
+connectedhomeip) as an official certification for this vendor and
+product. Development devices and unknown makers are added and marked
+uncertified, with the reason. Revocation lists aren't checked yet.
 
-**Not supported yet:** adding a new device over Bluetooth (set it up in its
+**Not supported yet:** revocation lists for device certificates, adding a new device over Bluetooth (set it up in its
 own app first, then share it), Thread devices without a border router at
 home, intermediate certificates, session resumption, and devices that
 split one attribute's list over messages in other ways than appending.
@@ -59,7 +67,8 @@ tried on real devices.
 
 - One Go binary covers Matter on phones, the add-on and the container.
 - We maintain a Matter stack. The tests check it against independent
-  implementations: certificates rebuilt byte for byte from Go's X.509
+  implementations: attestation against connectedhomeip's development
+  certificates and test CD, certificates rebuilt byte for byte from Go's X.509
   encoder and gomat's, AES-CCM and SPAKE2+ against gomat, and gomat's
   controller adding the fake device the tests use
   (`native.FakeDevice`, also `bridge/cmd/matter-fake-device` for

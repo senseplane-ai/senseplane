@@ -9,7 +9,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net/netip"
 	"sort"
 	"sync"
@@ -30,6 +34,11 @@ type FakeDevice struct {
 	iter     int
 	// Lenient accepts controllers that skip the fail-safe or mark their certificate as a CA.
 	Lenient bool
+	// Official makes its certification declaration an official certification (else a development one).
+	Official bool
+	// BadAttestation signs its attestation with the wrong key.
+	BadAttestation bool
+	att            fakeAttestation
 
 	mu        sync.Mutex
 	armed     bool
@@ -65,6 +74,10 @@ func NewFakeDevice(port int, passcode uint32, discriminator uint16, logf func(st
 		logf = func(string, ...any) {}
 	}
 	d := &FakeDevice{logf: logf, tr: tr, passcode: passcode, disc: discriminator, salt: random(32), iter: 1000, powerMW: 12300}
+	if d.att, err = newFakeAttestation(); err != nil {
+		tr.Close()
+		return nil, err
+	}
 	d.attrs = d.attributes()
 	tr.OnUnsecured(func(s *Session) { s.OnExchange(d.handshake) })
 	return d, nil
@@ -109,6 +122,8 @@ func (d *FakeDevice) attributes() map[Path]func(*TLV, int) {
 		{0, 29, 0}: devType(22), // root node
 		{0, 29, 3}: func(w *TLV, tag int) { w.Array(tag); w.Uint(Anon, 1); w.Uint(Anon, 2); w.End() },
 		{0, 40, 1}: str("Senseplane Test"),
+		{0, 40, 2}: func(w *TLV, tag int) { w.Uint(tag, fakeVID) },
+		{0, 40, 4}: func(w *TLV, tag int) { w.Uint(tag, fakePID) },
 		{0, 40, 3}: str("Fake Plug"),
 		{0, 40, 5}: str("Fake plug"),
 		{1, 29, 0}: devType(266), // on/off plug-in unit
@@ -194,6 +209,7 @@ func (d *FakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
 	if err != nil {
 		return
 	}
+	s.challenge = keys.chal
 	s.OnExchange(func(e *Exchange) { d.serve(e, false) })
 	_ = ex.Send(protoSecureChannel, opStatus, statusReport(0, protoSecureChannel, 0))
 }
@@ -250,7 +266,10 @@ func (d *FakeDevice) caseResponder(ctx context.Context, ex *Exchange, m Message)
 	tbe3, _ := DecodeTLV(plain)
 	creds := Credentials{RootPub: rootPub, FabricID: fabricID}
 	peerPub, err := checkNOC(creds, tbe3.FieldBytes(1), tbe3.FieldBytes(2), 0)
-	if err != nil && d.Lenient {
+	d.mu.Lock()
+	lenient := d.Lenient
+	d.mu.Unlock()
+	if err != nil && lenient {
 		// gomat's controller certificate is marked as a CA; the reference devices accept it.
 		if pc, perr := parseCert(tbe3.FieldBytes(1)); perr == nil && pc.verifiedBy(rootPub) && pc.fabric == fabricID {
 			peerPub, err = pc.spec.pub, nil
@@ -483,6 +502,34 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
 		d.armed = true
 		d.mu.Unlock()
 		_ = invokeResult(ex, path, 1, func(w *TLV) { w.Uint(0, 0); w.String(1, "") }, -1)
+	case cl == clusterOperationalCreds && cmd == cmdCertChainRequest:
+		kind, _ := fields.FieldU(0)
+		der := d.att.dac
+		if kind == certTypePAI {
+			der = d.att.pai
+		}
+		_ = invokeResult(ex, path, 3, func(w *TLV) { w.Bytes8(0, der) }, -1)
+	case cl == clusterOperationalCreds && cmd == cmdAttestationRequest:
+		d.mu.Lock()
+		official, bad := d.Official, d.BadAttestation
+		d.mu.Unlock()
+		cd, err := d.att.cd(official)
+		if err != nil {
+			_ = invokeResult(ex, path, 0, nil, 1)
+			return
+		}
+		var el TLV
+		el.Struct(Anon)
+		el.Bytes8(1, cd)
+		el.Bytes8(2, fields.FieldBytes(0))
+		el.Uint(3, 0)
+		el.End()
+		key := d.att.dacKey
+		if bad {
+			key, _ = ecdsa.GenerateKey(curve, rand.Reader)
+		}
+		sig, _ := signRaw(key, append(append([]byte{}, el.Bytes()...), ex.Session().challenge...))
+		_ = invokeResult(ex, path, 1, func(w *TLV) { w.Bytes8(0, el.Bytes()); w.Bytes8(1, sig) }, -1)
 	case cl == clusterOperationalCreds && cmd == cmdCSRRequest:
 		if !needArmed() {
 			return
@@ -625,4 +672,99 @@ func (d *FakeDevice) push(paths []Path, events []int) {
 			d.logf("fake device: report not answered: %v", err)
 		}
 	}
+}
+
+// --- The fake device's attestation: its own PAA, PAI and DAC, and a CD signed by its own key.
+
+const (
+	fakeVID = 0xFFF1
+	fakePID = 0x8000
+)
+
+type fakeAttestation struct {
+	paa, pai, dac []byte
+	dacKey        *ecdsa.PrivateKey
+	cdKey         *ecdsa.PrivateKey
+	cdSKID        []byte
+}
+
+func newFakeAttestation() (fakeAttestation, error) {
+	var a fakeAttestation
+	mk := func(name string, vid, pid uint16, ca bool, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) ([]byte, *ecdsa.PrivateKey, *x509.Certificate, error) {
+		key, err := ecdsa.GenerateKey(curve, rand.Reader)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		subj := pkix.Name{CommonName: name}
+		if vid != 0 {
+			subj.ExtraNames = append(subj.ExtraNames, pkix.AttributeTypeAndValue{Type: oidVendorID, Value: fmt.Sprintf("%04X", vid)})
+		}
+		if pid != 0 {
+			subj.ExtraNames = append(subj.ExtraNames, pkix.AttributeTypeAndValue{Type: oidProductID, Value: fmt.Sprintf("%04X", pid)})
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: new(big.Int).SetBytes(serial()), Subject: subj,
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: noExpiry,
+			BasicConstraintsValid: true, IsCA: ca, KeyUsage: x509.KeyUsageDigitalSignature,
+		}
+		if ca {
+			tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+			tmpl.MaxPathLen, tmpl.MaxPathLenZero = 1, false
+		}
+		if parent == nil {
+			parent, parentKey = tmpl, key
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, parentKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		c, err := x509.ParseCertificate(der)
+		return der, key, c, err
+	}
+	paa, paaKey, paaCert, err := mk("Senseplane Fake PAA", 0, 0, true, nil, nil)
+	if err != nil {
+		return a, err
+	}
+	pai, paiKey, paiCert, err := mk("Senseplane Fake PAI", fakeVID, 0, true, paaCert, paaKey)
+	if err != nil {
+		return a, err
+	}
+	dac, dacKey, _, err := mk("Senseplane Fake DAC", fakeVID, fakePID, false, paiCert, paiKey)
+	if err != nil {
+		return a, err
+	}
+	cdKey, err := ecdsa.GenerateKey(curve, rand.Reader)
+	if err != nil {
+		return a, err
+	}
+	a = fakeAttestation{paa: paa, pai: pai, dac: dac, dacKey: dacKey, cdKey: cdKey, cdSKID: keyID(&cdKey.PublicKey)}
+	return a, nil
+}
+
+func (a fakeAttestation) cd(official bool) ([]byte, error) {
+	certType := uint64(0)
+	if official {
+		certType = 2
+	}
+	var w TLV
+	w.Struct(Anon)
+	w.Uint(0, 1)
+	w.Uint(1, fakeVID)
+	w.Array(2)
+	w.Uint(Anon, fakePID)
+	w.End()
+	w.Uint(3, 266)
+	w.String(4, "ZIG20142ZB330003-24")
+	w.Uint(5, 0)
+	w.Uint(6, 0)
+	w.Uint(7, 9876)
+	w.Uint(8, certType)
+	w.End()
+	return signCD(w.Bytes(), a.cdKey, a.cdSKID)
+}
+
+// Trust is what a controller needs to count this fake device as certified.
+func (d *FakeDevice) Trust() Trust {
+	paa, _ := x509.ParseCertificate(d.att.paa)
+	return Trust{PAAs: []*x509.Certificate{paa}, CDKeys: map[string]*ecdsa.PublicKey{hex.EncodeToString(d.att.cdSKID): &d.att.cdKey.PublicKey}}
 }

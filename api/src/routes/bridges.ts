@@ -9,6 +9,7 @@
 // - POST /v1/bridge/health   heartbeat and per-camera state
 // - PUT  /v1/bridge/entities the Home Assistant entities it can send (ADR 0061)
 // - POST /v1/bridge/readings readings of the entities a person chose
+// - PUT  /v1/bridge/cameras-found  the cameras it found to pick from (ADR 0063)
 // Plus GET /v1/integration for a sensor integration token (`sit_…`), and the
 // console's side: POST/GET /v1/bridges and choosing a bridge's entities.
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from "fastify";
@@ -53,6 +54,7 @@ const healthBody = {
       type: "object", additionalProperties: false, required: ["connected"],
       properties: { connected: { type: "boolean" }, nodes: { type: "integer", minimum: 0 } },
     },
+    cameras_found: { type: "integer", minimum: 0 },
     cameras: {
       type: "array", maxItems: 256,
       items: {
@@ -68,6 +70,33 @@ const healthBody = {
 } as const;
 
 type CameraState = "connecting" | "online" | "reconnecting" | "offline";
+
+interface FoundListed {
+  id: string; address?: string; xaddr?: string; manufacturer?: string; model?: string; name?: string; onvif: boolean;
+  home_assistant?: { entity_id: string; name: string; area?: string };
+}
+const foundListedSchema = {
+  type: "object", additionalProperties: false, required: ["id", "onvif"],
+  properties: {
+    id: { type: "string", minLength: 1, maxLength: 200 }, address: { type: "string", maxLength: 255 },
+    xaddr: { type: "string", maxLength: 512, pattern: "^https?://" },
+    manufacturer: { type: "string", maxLength: 120 }, model: { type: "string", maxLength: 120 }, name: { type: "string", maxLength: 120 },
+    onvif: { type: "boolean" },
+    home_assistant: {
+      type: "object", additionalProperties: false, required: ["entity_id", "name"],
+      properties: { entity_id: { type: "string", maxLength: 200, pattern: "^camera\\.[a-z0-9_]+$" }, name: { type: "string", maxLength: 200 }, area: { type: "string", maxLength: 120 } },
+    },
+  },
+} as const;
+
+/** The host of an RTSP URL (lowercase), or undefined. */
+function rtspHost(url: string): string | undefined {
+  try {
+    return new URL(url.replace(/^rtsps?:/i, "http:")).hostname.toLowerCase() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The source status a bridge report implies; undefined leaves it to the media plane. */
 function statusFor(state: CameraState): string | undefined {
@@ -187,7 +216,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
-    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number } } }>(
+    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; cameras_found?: number } }>(
       "/v1/bridge/health",
       { schema: { body: healthBody } },
       async (req, reply) => {
@@ -199,6 +228,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
             last_seen_at: now, version: req.body.version ?? null,
             home_connected: ha ? ha.connected : null, home_entities: ha?.entities ?? null, home_sending: ha?.sending ?? null,
             matter_connected: req.body.matter ? req.body.matter.connected : null, matter_nodes: req.body.matter?.nodes ?? null,
+            cameras_found: req.body.cameras_found ?? null,
           }).where("id", "=", bridgeId).execute();
           if (ha) {
             // The box's sensors are online while it reads Home Assistant; otherwise their latest values are old news.
@@ -249,6 +279,27 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
           let gone = s.db.updateTable("bridge_entities").set({ listed: false, updated_at: new Date() }).where("bridge_id", "=", bridgeId).where("listed", "=", true);
           if (ids.length) gone = gone.where("entity_id", "not in", ids);
           await gone.execute();
+        });
+        return reply.code(204).send();
+      },
+    );
+
+    // The cameras the box found (ADR 0063), replacing what it listed before. Never credentials.
+    scope.put<{ Body: { cameras: FoundListed[] } }>(
+      "/v1/bridge/cameras-found",
+      { schema: { body: { type: "object", additionalProperties: false, required: ["cameras"], properties: { cameras: { type: "array", maxItems: 200, items: foundListedSchema } } } } },
+      async (req, reply) => {
+        const { bridgeId, accountId } = req.bridge!;
+        const now = new Date();
+        const seen = new Set<string>();
+        const rows = req.body.cameras.filter((c) => !seen.has(c.id) && seen.add(c.id)).map((c) => ({
+          account_id: accountId, bridge_id: bridgeId, found_id: c.id, address: c.address || null, xaddr: c.xaddr || null,
+          manufacturer: c.manufacturer || null, model: c.model || null, name: c.name || null, onvif: c.onvif,
+          ha_entity_id: c.home_assistant?.entity_id ?? null, ha_name: c.home_assistant?.name || null, ha_area: c.home_assistant?.area || null, seen_at: now,
+        }));
+        await deps.data.withAccount(accountId, async (s) => {
+          await s.db.deleteFrom("bridge_cameras_found").where("bridge_id", "=", bridgeId).execute();
+          if (rows.length) await s.db.insertInto("bridge_cameras_found").values(rows).execute();
         });
         return reply.code(204).send();
       },
@@ -324,7 +375,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         const { bridgeId, accountId } = req.bridge!;
         const done = await deps.data.withAccount(accountId, (s) => s.db.updateTable("bridge_commands").set({
           status: req.body.ok ? "done" : "failed", result: req.body.result ? JSON.stringify(req.body.result) : null,
-          error: req.body.ok ? null : (req.body.error ?? "failed").slice(0, 500), finished_at: new Date(),
+          error: req.body.ok ? null : redactUrls(req.body.error ?? "failed").slice(0, 500), finished_at: new Date(),
         }).where("id", "=", req.params.id).where("bridge_id", "=", bridgeId).where("status", "=", "taken").returning("kind").executeTakeFirst());
         if (!done) throw new ApiError(404, "not_found", "no such command waiting for a result");
         await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: `bridge.${done.kind}_${req.body.ok ? "done" : "failed"}`, target: req.params.id, status: 200 });
@@ -359,6 +410,8 @@ export async function markSilentBridges(data: DataAccess, log?: FastifyBaseLogge
 export interface BridgeAdminDeps {
   data: DataAccess;
   maxSources(accountId: string): Promise<number | null>;
+  /** The plan's largest stream; a camera added from the list gets the profile that fits it (ADR 0063). */
+  maxResolution?(accountId: string): Promise<"720p" | "1080p">;
   audit?: AuditLog;
 }
 
@@ -371,11 +424,12 @@ const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOStrin
  * the sensor source of its room, made on first use.
  */
 export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdminDeps) {
-  const toBridge = (b: { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null; matter_connected: boolean | null; matter_nodes: number | null }) => ({
+  const toBridge = (b: { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null; matter_connected: boolean | null; matter_nodes: number | null; cameras_found: number | null }) => ({
     id: b.id, name: b.name, version: b.version, created_at: iso(b.created_at), last_seen_at: iso(b.last_seen_at),
     online: !!b.last_seen_at && Date.now() - new Date(b.last_seen_at).getTime() < BRIDGE_SILENT_SECONDS * 1000,
     home_assistant: b.home_connected === null ? null : { connected: b.home_connected, entities: b.home_entities ?? 0, sending: b.home_sending ?? 0 },
     matter: b.matter_connected === null ? null : { connected: b.matter_connected, nodes: b.matter_nodes ?? 0 },
+    cameras_found: b.cameras_found,
   });
 
   app.post<{ Body: { name: string } }>(
@@ -482,6 +536,69 @@ export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdmi
         args_sealed: deps.data.box().encrypt(JSON.stringify({ code })), created_by: req.access?.actor ?? null,
       }).returningAll().executeTakeFirstOrThrow());
       await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.matter_requested", target: bridge.id, status: 202 });
+      return reply.code(202).send(toCommand(row));
+    },
+  );
+
+  /** Work for the box, its arguments sealed until the box takes them (ADR 0062). */
+  const command = (req: FastifyRequest, bridgeId: string, kind: string, args: Record<string, unknown>) =>
+    deps.data.withAccount(req.accountId!, (s) => s.db.insertInto("bridge_commands").values({
+      id: `bcm_${randomBytes(9).toString("base64url")}`, account_id: req.accountId!, bridge_id: bridgeId, kind,
+      args_sealed: deps.data.box().encrypt(JSON.stringify(args)), created_by: req.access?.actor ?? null,
+    }).returningAll().executeTakeFirstOrThrow());
+
+  // Cameras the box found (ADR 0063); one at the address of a camera the box already has shows it.
+  app.get<{ Params: { id: string } }>("/v1/bridges/:id/cameras-found", async (req) => {
+    const accountId = req.accountId!;
+    const bridge = await bridgeOf(accountId, req.params.id);
+    const { found, cams } = await deps.data.withAccount(accountId, async (s) => ({
+      found: await s.db.selectFrom("bridge_cameras_found").selectAll().where("bridge_id", "=", bridge.id).orderBy("onvif", "desc").orderBy("address").orderBy("found_id").execute(),
+      cams: await s.db.selectFrom("sources").select(["id", "rtsp_url"]).where("bridge_id", "=", bridge.id).where("type", "=", "rtsp").where("rtsp_url", "is not", null).orderBy("created_at").execute(),
+    }));
+    const byHost = new Map<string, string>();
+    for (const c of cams) {
+      const host = rtspHost(deps.data.box().decrypt(c.rtsp_url!));
+      if (host && !byHost.has(host)) byHost.set(host, c.id);
+    }
+    return {
+      data: found.map((f) => ({
+        id: f.found_id, address: f.address, manufacturer: f.manufacturer, model: f.model, name: f.name, onvif: f.onvif,
+        home_assistant: f.ha_entity_id ? { entity_id: f.ha_entity_id, name: f.ha_name ?? f.ha_entity_id, area: f.ha_area } : null,
+        source_id: (f.address && byHost.get(f.address.toLowerCase())) ?? null, seen_at: iso(f.seen_at),
+      })),
+      next_cursor: null,
+    };
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/bridges/:id/cameras-found/search", async (req, reply) => {
+    const bridge = await bridgeOf(req.accountId!, req.params.id);
+    if (bridge.cameras_found === null) throw new ApiError(409, "conflict", "This box doesn't look for cameras on its network.");
+    return reply.code(202).send(toCommand(await command(req, bridge.id, "onvif_search", {})));
+  });
+
+  // Add a camera the box found with ONVIF: the credentials go to the box sealed, the box gets the stream (ADR 0063).
+  app.post<{ Params: { id: string }; Body: { camera: string; username: string; password: string; name?: string } }>(
+    "/v1/bridges/:id/onvif",
+    { schema: { body: { type: "object", additionalProperties: false, required: ["camera", "username", "password"], properties: {
+      camera: { type: "string", maxLength: 200 }, username: { type: "string", minLength: 1, maxLength: 128 }, password: { type: "string", maxLength: 256 },
+      name: { type: "string", minLength: 1, maxLength: 120 },
+    } } } },
+    async (req, reply) => {
+      const accountId = req.accountId!;
+      const bridge = await bridgeOf(accountId, req.params.id);
+      const cam = await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridge_cameras_found").selectAll()
+        .where("bridge_id", "=", bridge.id).where("found_id", "=", req.body.camera).executeTakeFirst());
+      if (!cam) throw new ApiError(404, "not_found", "The box no longer lists this camera. Look again.");
+      if (!cam.onvif || !cam.xaddr) throw new ApiError(409, "conflict", "This camera can't be added from the list; add it with its RTSP address.");
+      const max = await deps.maxSources(accountId);
+      if (max !== null && (await deps.data.withAccount(accountId, (s) => s.sources.list())).length >= max) {
+        throw new ApiError(409, "source_limit_reached", `this account can have at most ${max} sources`, { max_registered_sources: max });
+      }
+      const name = req.body.name?.trim() || cam.ha_name || cam.model || `Camera ${cam.address ?? ""}`.trim();
+      const row = await command(req, bridge.id, "onvif_add_camera", {
+        xaddr: cam.xaddr, username: req.body.username, password: req.body.password, name, max_resolution: (await deps.maxResolution?.(accountId)) ?? "720p",
+      });
+      await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.onvif_requested", target: bridge.id, status: 202, details: { camera: cam.found_id } });
       return reply.code(202).send(toCommand(row));
     },
   );

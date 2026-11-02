@@ -110,6 +110,25 @@ export interface BridgesTable {
   /** The box's Matter controller (ADR 0062); null when it runs none. */
   matter_connected: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
   matter_nodes: ColumnType<number | null, number | null | undefined, number | null>;
+  /** How many cameras the box lists to pick from (ADR 0063); null when it doesn't look. */
+  cameras_found: ColumnType<number | null, number | null | undefined, number | null>;
+}
+
+/** A camera a box found, on its network (ONVIF) or in Home Assistant (ADR 0063). */
+export interface BridgeCamerasFoundTable {
+  account_id: string;
+  bridge_id: string;
+  found_id: string;
+  address: string | null;
+  xaddr: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  name: string | null;
+  onvif: boolean;
+  ha_entity_id: string | null;
+  ha_name: string | null;
+  ha_area: string | null;
+  seen_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** Work for a bridge (ADR 0062): taken by the box's long poll, then reported. */
@@ -567,6 +586,7 @@ export interface Database {
   bridge_entities: BridgeEntitiesTable;
   bridge_links: BridgeLinksTable;
   bridge_commands: BridgeCommandsTable;
+  bridge_cameras_found: BridgeCamerasFoundTable;
   users: UsersTable;
   user_identities: UserIdentitiesTable;
   memberships: MembershipsTable;

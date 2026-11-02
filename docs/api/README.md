@@ -250,7 +250,9 @@ shape:
 }
 ```
 
-- **Types:** `watch.triggered`, `detection.<label>` for every
+- **Types:** `watch.triggered`, `watch.unchecked` (a condition watch couldn't
+  tell: a camera wasn't recording or a box was offline for most of the time
+  asked about; it goes where the watch's alerts go), `detection.<label>` for every
   [detector label](labels.md) (`detection.person`, `detection.vehicle`,
   `detection.animal`, and everyday objects such as `detection.cup`,
   `detection.laptop`, `detection.backpack`), `sound.detected`, `sensor.threshold`, `reading.threshold`

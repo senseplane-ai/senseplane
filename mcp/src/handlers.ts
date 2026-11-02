@@ -127,7 +127,9 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
           const trend = Math.abs(delta) < still ? "steady" : delta > 0 ? "rising" : "falling";
           return { sense: r.sense, ...device, value, unit: r.unit, text: readingText(r), measured_at: r.measured_at, trend_last_hour: trend, change_last_hour: Math.round(delta * 10) / 10 };
         });
-        out.push({ source: s.id, name: s.name, location: s.location, readings });
+        // A box that is off (or can't reach Home Assistant) left these values behind: say so, never pass them off as now.
+        const offline = s.status === "offline" || s.status === "reconnecting";
+        out.push({ source: s.id, name: s.name, location: s.location, ...(offline ? { status: "offline", note: `Offline since ${(s as { status_since?: string }).status_since ?? "a while"}: these are the last readings, not what is true now.` } : {}), readings });
       }
       return text({ sources: out });
     },

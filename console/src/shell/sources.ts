@@ -90,6 +90,7 @@ export function labelText(label: string): string {
 /** "Person" from "detection.person", "Teddy bear" from "detection.teddy_bear"; "Watch fired" from "watch.triggered". */
 export function eventKind(type: string): string {
   if (type === "watch.triggered") return "Watch fired";
+  if (type === "watch.unchecked") return "Couldn't check";
   const label = detectionLabel(type);
   if (label) return labelName(label);
   const last = type.split(".").pop() ?? type;

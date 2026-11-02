@@ -13,7 +13,7 @@ import {
 
 // detection.* is every detector label, everyday objects included (detection.cup, detection.laptop, …).
 export const EVENT_TYPES = [
-  "watch.triggered", "detection.person", "detection.vehicle", "detection.animal", "detection.*", "sound.detected",
+  "watch.triggered", "watch.unchecked", "detection.person", "detection.vehicle", "detection.animal", "detection.*", "sound.detected",
   "sensor.threshold", "reading.threshold", "source.online", "source.offline", "source.view_changed",
 ];
 const typeLabel = (t: string) => (t === "detection.*" ? "detection.* (people, vehicles, animals and objects)" : t);

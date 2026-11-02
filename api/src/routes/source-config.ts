@@ -56,6 +56,8 @@ export async function ingestReadings(s: AccountScope, accountId: string, src: So
   // A sensor gains each new sense its readings bring (ADR 0060); grants still decide who sees it.
   const added = [...new Set(readings.map((r) => r.sense))].filter((x) => !src.senses.includes(x));
   if (added.length) await s.db.updateTable("sources").set({ senses: [...src.senses, ...added] }).where("id", "=", src.id).execute();
+  // A sensor that pushes its own readings is reporting; a box's sensors follow the box's health instead.
+  if (!src.bridge_id && (src.status === "pending" || src.status === "offline")) await s.db.updateTable("sources").set({ status: "online" }).where("id", "=", src.id).execute();
   for (const month of new Set(readings.map((r) => r.at.toISOString().slice(0, 7)))) {
     await sql`select ensure_readings_partition(${new Date(`${month}-01T00:00:00Z`)})`.execute(s.db);
   }

@@ -14,7 +14,7 @@ import type { WatchSchedule } from "./data/schema.js";
 import { createEvent } from "./events.js";
 import { startClaimLoop } from "./jobs.js";
 import { fromWall, localMidnight, wall } from "./local-time.js";
-import { ask } from "./routes/activity.js";
+import { ask, senseFor } from "./routes/activity.js";
 import { activeAt } from "./schedule.js";
 
 type Test = { op: "lt" | "lte" | "gt" | "gte" | "eq" | "ne"; value: number; of?: "value" | "ratio" | "delta" };
@@ -199,9 +199,11 @@ async function checkOne(data: DataAccess, accountId: string, watchId: string, no
     return false;
   }
   const query = (q: ActivityQuery): ActivityQuery => ({ ...q, sources: q.sources?.length ? q.sources : w.sources, time_zone: q.time_zone || tz });
+  // The event is of what the check measured, so grants for that sense see it (a door: contact; a sound: audio).
+  const sense = trig.type === "condition" ? senseFor(trig.query.what) : "video";
   const fire = async (key: string, summary: string) =>
     data.withAccount(accountId, (s) => createEvent(s, {
-      event_key: key, source_id: w.sources[0]!, type: "watch.triggered", sense: "video", occurred_at: new Date(now), summary,
+      event_key: key, source_id: w.sources[0]!, type: "watch.triggered", sense, occurred_at: new Date(now), summary,
       labels: [], zones: [], confidence: null, verified: null, watch_id: w.id,
     }));
   const done = (condition: boolean | null) =>
@@ -226,6 +228,16 @@ async function checkOne(data: DataAccess, accountId: string, watchId: string, no
   // A condition fires when it starts to hold; a daily check fires every day it holds.
   const start = result === true && (trig.at ? true : w.last_condition !== true);
   await done(result ?? null);
+  if (result === undefined && (trig.at || w.last_condition !== null)) {
+    // Too little was seen to tell: say so (each daily check, or once when a repeated check stops being able to tell), never "nothing happened".
+    const why = query(trig.query).what?.sensor ? "the sensors' box was offline" : "the cameras weren't recording";
+    await data.withAccount(accountId, (s) => createEvent(s, {
+      event_key: `unchecked:${w.id}:${new Date(slot).toISOString().slice(0, 16)}`, source_id: w.sources[0]!, type: "watch.unchecked", sense,
+      occurred_at: new Date(now), summary: `Couldn't check "${w.instruction}": ${why} for ${Math.round((1 - (recorded ?? 0)) * 100)}% of that time.`,
+      labels: [], zones: [], confidence: null, verified: null, watch_id: w.id,
+    }));
+    return false;
+  }
   if (!start) return false;
   const gaps = a.coverage.complete === false ? ` Only ${Math.round((recorded ?? 0) * 100)}% of that time was recorded.` : "";
   const ev = await fire(`cond:${w.id}:${new Date(slot).toISOString().slice(0, 16)}`, `${w.instruction}: ${valueText(a, tz)}${usualText(a)}.${gaps}`);

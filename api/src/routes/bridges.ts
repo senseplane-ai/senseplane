@@ -13,7 +13,7 @@
 // console's side: POST/GET /v1/bridges and choosing a bridge's entities.
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
-import type { DataAccess, Source } from "../data/access.js";
+import type { AccountScope, DataAccess, Source } from "../data/access.js";
 import { hashApiKey } from "../data/access.js";
 import { ApiError } from "../errors.js";
 import type { IngestSigner } from "../ingest.js";
@@ -71,6 +71,26 @@ function statusFor(state: CameraState): string | undefined {
   if (state === "offline") return "offline";
   if (state === "online") return "online";
   return undefined;
+}
+
+/** Extends the box's current span of reading Home Assistant, or starts one after a gap of three heartbeats. */
+async function extendLink(s: AccountScope, accountId: string, bridgeId: string, now: Date) {
+  const cur = await s.db.selectFrom("bridge_links").select("id").where("bridge_id", "=", bridgeId)
+    .where("ended_at", ">=", new Date(now.getTime() - BRIDGE_SILENT_SECONDS * 1000)).orderBy("ended_at", "desc").limit(1).executeTakeFirst();
+  if (cur) await s.db.updateTable("bridge_links").set({ ended_at: now }).where("id", "=", cur.id).execute();
+  else await s.db.insertInto("bridge_links").values({ account_id: accountId, bridge_id: bridgeId, started_at: now, ended_at: now }).execute();
+}
+
+/** When a box could read Home Assistant within [from, to); a span still being extended runs to `now`. */
+export async function linkedRanges(s: AccountScope, bridgeId: string, from: number, to: number, now = Date.now()): Promise<[number, number][]> {
+  const rows = await s.db.selectFrom("bridge_links").select(["started_at", "ended_at"]).where("bridge_id", "=", bridgeId)
+    .where("started_at", "<", new Date(to)).where("ended_at", ">=", new Date(from - BRIDGE_SILENT_SECONDS * 1000)).orderBy("started_at").execute();
+  return rows.map((r) => {
+    const end = new Date(r.ended_at).getTime();
+    // Reports come every 30 s: a span is good until the next one is due.
+    const until = now - end < BRIDGE_SILENT_SECONDS * 1000 ? now : end + BRIDGE_HEARTBEAT_SECONDS * 1000;
+    return [Math.max(from, new Date(r.started_at).getTime()), Math.min(to, until)] as [number, number];
+  }).filter(([a, b]) => b > a);
 }
 
 export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
@@ -170,10 +190,19 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         const { bridgeId, accountId } = req.bridge!;
         const ha = req.body.home_assistant;
         await deps.data.withAccount(accountId, async (s) => {
+          const now = new Date();
           await s.db.updateTable("bridges").set({
-            last_seen_at: new Date(), version: req.body.version ?? null,
+            last_seen_at: now, version: req.body.version ?? null,
             home_connected: ha ? ha.connected : null, home_entities: ha?.entities ?? null, home_sending: ha?.sending ?? null,
           }).where("id", "=", bridgeId).execute();
+          if (ha) {
+            // The box's sensors are online while it reads Home Assistant; otherwise their latest values are old news.
+            await s.db.updateTable("sources").set((eb) => ({
+              bridge_state: ha.connected ? "online" : "offline", bridge_detail: ha.connected ? null : "the box can't reach Home Assistant",
+              status: eb.case().when("status", "=", "paused").then("paused").else(ha.connected ? "online" : "offline").end(),
+            })).where("bridge_id", "=", bridgeId).where("type", "=", "sensor").execute();
+            if (ha.connected) await extendLink(s, accountId, bridgeId, now);
+          }
           for (const c of req.body.cameras) {
             const status = statusFor(c.state);
             // Only this bridge's cameras; the row filter makes a foreign id a no-op.

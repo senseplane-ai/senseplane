@@ -109,6 +109,15 @@ export interface BridgesTable {
   home_sending: ColumnType<number | null, number | null | undefined, number | null>;
 }
 
+/** A stretch when a box could read Home Assistant (ADR 0061), from its health reports. */
+export interface BridgeLinksTable {
+  id: Generated<string>;
+  account_id: string;
+  bridge_id: string;
+  started_at: ColumnType<Date, Date | string, Date | string>;
+  ended_at: ColumnType<Date, Date | string, Date | string>;
+}
+
 /** A Home Assistant entity a bridge can send (ADR 0061); `source_id` once a person chose it. */
 export interface BridgeEntitiesTable {
   account_id: string;
@@ -537,6 +546,7 @@ export interface Database {
   ingest_tokens: IngestTokensTable;
   bridges: BridgesTable;
   bridge_entities: BridgeEntitiesTable;
+  bridge_links: BridgeLinksTable;
   users: UsersTable;
   user_identities: UserIdentitiesTable;
   memberships: MembershipsTable;

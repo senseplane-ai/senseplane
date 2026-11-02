@@ -24,6 +24,7 @@
       "type": "string",
       "enum": [
         "watch.triggered",
+        "watch.unchecked",
         "detection.person",
         "detection.vehicle",
         "detection.animal",

@@ -6,6 +6,7 @@
 // nothing else gets in.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApi, type SenseplaneApi } from "./index.js";
+import { runScheduledWatches } from "./scheduled-watches.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
 
@@ -111,9 +112,39 @@ describe("bridges reading Home Assistant", () => {
     expect((await call(owner, "PATCH", `/v1/bridges/${bridge.id}/entities`, { choose: ["light.nowhere"] })).statusCode).toBe(404);
   });
 
+  it("says a box's sensors couldn't be checked while it was off, and never that nothing happened", async () => {
+    const kitchen = (await call(owner, "GET", `/v1/bridges/${bridge.id}/entities`)).json().data.find((e: { entity_id: string }) => e.entity_id === "binary_sensor.fridge").source_id;
+    const quiet = { error() {}, warn() {}, info() {} } as never;
+    // The box read Home Assistant for one hour of the last day.
+    await api.data.withAccount(acc, (s) => s.db.insertInto("bridge_links").values({ account_id: acc, bridge_id: bridge.id,
+      started_at: new Date(Date.now() - 10 * 3600_000), ended_at: new Date(Date.now() - 9 * 3600_000) }).execute());
+    const q = await call(owner, "POST", "/v1/activity/query", { measure: "count", what: { sensor: { sense: "contact", state: true, device: "Fridge door" } }, period: "last_24_hours", sources: [kitchen] });
+    expect(q.json().coverage.complete).toBe(false);
+    expect(q.json().coverage.recorded).toBeLessThan(0.2);
+    // A daily "the fridge wasn't opened" check can't tell, and says so.
+    const at = new Date(Date.now() - 60_000).toISOString().slice(11, 16);
+    await api.data.withAccount(acc, (s) => s.db.insertInto("watches").values({
+      id: "wat_fridge_absent", account_id: acc, instruction: "Tell me if the fridge wasn't opened", sources: [kitchen], mode: "alert",
+      compiled: JSON.stringify({ trigger: { type: "condition", query: { measure: "count", what: { sensor: { sense: "contact", state: true } }, period: "last_24_hours" }, test: { op: "eq", value: 0 }, at, time_zone: "UTC" }, cooldown_s: 0, active_hours: null }),
+      estimate: JSON.stringify({}), status: "active", warnings: [], compiler: "user",
+    } as never).execute());
+    await runScheduledWatches(api.data, quiet, Date.now());
+    const evs = (await call(owner, "GET", "/v1/events?type=watch.unchecked")).json().data;
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ watch_id: "wat_fridge_absent", summary: expect.stringMatching(/^Couldn't check "Tell me if the fridge wasn't opened": the sensors' box was offline for 9\d% of that time\.$/) });
+    // An agent with the sensors grant sees it: the event is of the door, not of video.
+    const agent = (await call(owner, "POST", "/v1/agents", { name: "Carer" })).json();
+    await call(owner, "POST", "/v1/grants", { agent_id: agent.id, source_ids: [kitchen], senses: ["sensors"] });
+    expect((await call(agent.api_key, "GET", "/v1/events?type=watch.unchecked")).json().data).toHaveLength(1);
+  });
+
   it("records whether Home Assistant is connected", async () => {
     expect((await call(bridge.token, "POST", "/v1/bridge/health", { cameras: [], home_assistant: { connected: true, entities: 3, sending: 1 } })).statusCode).toBe(204);
     expect((await call(owner, "GET", "/v1/bridges")).json().data[0]).toMatchObject({ online: true, home_assistant: { connected: true, entities: 3, sending: 1 } });
+    const kitchen = (await call(owner, "GET", `/v1/bridges/${bridge.id}/entities`)).json().data.find((e: { entity_id: string }) => e.entity_id === "binary_sensor.fridge").source_id;
+    expect((await call(owner, "GET", `/v1/sources/${kitchen}`)).json().status).toBe("online");
+    await call(bridge.token, "POST", "/v1/bridge/health", { cameras: [], home_assistant: { connected: false, entities: 3, sending: 1 } });
+    expect((await call(owner, "GET", `/v1/sources/${kitchen}`)).json().status).toBe("offline");
     // Without WHIP configured, cameras can't be claimed.
     expect((await call(bridge.token, "POST", "/v1/bridge/cameras", { rtsp_url: "rtsp://cam/1" })).statusCode).toBe(503);
   });

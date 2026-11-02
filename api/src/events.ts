@@ -51,7 +51,7 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
   if (!row) return undefined;
   rememberEventTrace(row.id); // webhook deliveries continue this event's trace
   const hooks = await s.db.selectFrom("webhooks").select(["id", "events"]).execute();
-  const watch = row.type === "watch.triggered" && row.watch_id
+  const watch = isWatchEvent(row.type) && row.watch_id
     ? await s.db.selectFrom("watches").select("notify").where("id", "=", row.watch_id).executeTakeFirst()
     : undefined;
   const route = routeEvent(row.type, watch?.notify, hooks);
@@ -77,6 +77,9 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
   return row;
 }
 
+/** A watch's own events go where the watch says: it fired, or it couldn't be checked. */
+const isWatchEvent = (type: string) => type === "watch.triggered" || type === "watch.unchecked";
+
 /**
  * Where an event goes (ADR 0043). A watch.triggered event of a watch with
  * `notify` goes only to the listed webhooks (whatever event types they
@@ -85,7 +88,7 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
  * always has it.
  */
 export function routeEvent(type: string, notify: Destination[] | null | undefined, hooks: { id: string; events: string[] }[]) {
-  if (type === "watch.triggered" && notify?.length) {
+  if (isWatchEvent(type) && notify?.length) {
     const want = new Set(notify.filter((d) => d.type === "webhook").map((d) => d.id));
     return {
       webhooks: hooks.filter((h) => want.has(h.id)).map((h) => h.id),

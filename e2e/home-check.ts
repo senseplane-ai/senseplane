@@ -8,7 +8,8 @@
 //     workspace approves it, and the box lists Home Assistant's entities;
 //  3. a person chooses two; switching the light in Home Assistant reaches
 //     Senseplane on the room's sensor source; an entity nobody chose doesn't;
-//  4. the box keeps its pairing across a restart.
+//  4. the box keeps its pairing across a restart;
+//  5. with Home Assistant gone, the room's sensors read as offline.
 //
 //   E2E_API_URL=http://localhost:38080 E2E_COMPOSE_PROJECT=sp-e2e \
 //   E2E_BRIDGE_IMAGE=senseplane/bridge:dev node home-check.ts
@@ -181,6 +182,15 @@ try {
   const logs = docker("logs", "--since", "10s", BOX_NAME);
   const bridges = (await call(owner, "GET", "/v1/bridges")).data;
   check("pairing_kept_across_restart", !/waiting to be paired/.test(logs) && /bridge started/.test(logs) && bridges.length === 1, { bridges: bridges.length });
+
+  // --- 5. Home Assistant goes away: the room's sensors read as offline -------------
+  docker("stop", HA_NAME);
+  const gone = await until("the room's sensors offline", 60_000, async () => {
+    const s = await call(owner, "GET", `/v1/sources/${room}`);
+    return s.status === "offline" ? s : undefined;
+  });
+  const after = (await call(owner, "GET", "/v1/bridges")).data.find((b: { id: string }) => b.id === box.id);
+  check("sensors_offline_without_home_assistant", !!gone && after?.home_assistant?.connected === false, { status: gone?.status, home_assistant: after?.home_assistant });
 } catch (err) {
   check("home_check_ran", false, String(err));
 } finally {

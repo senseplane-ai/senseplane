@@ -66,8 +66,18 @@ connected and how many sensors are sent.
 ## Consequences
 
 - Health reports say whether Home Assistant is connected and how many
-  entities are listed and sent; the console shows it. A box that is off
-  still needs to read as "can't check" in answers (milestone H, next).
+  entities are listed and sent; the console shows it. A box's sensor sources
+  are online while it reads Home Assistant and offline otherwise (or when it
+  stops reporting).
+- **Coverage.** Each report extends a span of "the box could read Home
+  Assistant" (`bridge_links`; a gap of three heartbeats starts a new one).
+  Questions about a box's sensors count only those spans as seen, as
+  recorded ranges do for cameras, so an absence ("the fridge wasn't opened")
+  is never answered from a stretch the box was off. A condition watch that
+  can't tell sends `watch.unchecked` where its alerts go, and the sensor
+  tools say a box is offline and that its values are the last ones, not now.
+  Sensors that push their own readings (the integration, scripts) have no
+  heartbeat, so they count as covered.
 - The custom integration stays for Home Assistant installs that can't run
   add-ons (Container, Core); it and the box can't both feed the same entity
   without sending it twice.

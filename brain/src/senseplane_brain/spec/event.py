@@ -17,6 +17,7 @@ from . import sense as sense_1
 
 class Type(StrEnum):
     watch_triggered = 'watch.triggered'
+    watch_unchecked = 'watch.unchecked'
     detection_person = 'detection.person'
     detection_vehicle = 'detection.vehicle'
     detection_animal = 'detection.animal'

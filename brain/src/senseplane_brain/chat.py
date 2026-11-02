@@ -249,7 +249,11 @@ class Session:
             if out.get("error"):
                 return {"error": out["error"]}
             found = []
+            offline = []
             for src in out.get("sources", []):
+                if "offline_since" in src:
+                    since = self.local(src["offline_since"]) if src.get("offline_since") else "a while"
+                    offline.append(f"{src.get('name') or src.get('source_id')} has been offline since {since}: its readings are the last ones, not now.")
                 for r in src.get("readings", []):
                     item = {"source": src.get("name") or src.get("source_id"), "sense": r["sense"], "time": self.local(r["measured_at"])}
                     if r.get("device"):
@@ -263,7 +267,10 @@ class Session:
                     else:
                         item["value"], item["unit"] = r.get("value"), r.get("unit")
                     found.append(item)
-            return {"readings": found} if found else {"readings": [], "note": "No sensor readings."}
+            res: dict = {"readings": found} if found else {"readings": [], "note": "No sensor readings."}
+            if offline:
+                res["offline"] = offline
+            return res
         if name == "check_history":
             ids = self.resolve(args.get("sources")) or self.scope
             self.status(f"Checking recordings on {self.names(ids)}…")

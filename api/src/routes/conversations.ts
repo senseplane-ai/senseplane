@@ -307,6 +307,8 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
           const only = typeof args.sense === "string" && args.sense ? args.sense : undefined;
           const sources = await deps.data.withAccount(accountId, async (s) => Promise.all(ids.map(async (id) => ({
             source_id: id, name: allowed.get(id)!.name,
+            // Offline: these are the last readings, not now (a box that is off, ADR 0061).
+            ...(["offline", "reconnecting"].includes(allowed.get(id)!.status) ? { offline_since: allowed.get(id)!.status_since ? new Date(allowed.get(id)!.status_since!).toISOString() : null } : {}),
             readings: (await latestReadings(s, id)).filter((r) => canSense(req, id, r.row.sense) && (!only || r.row.sense === only)).map((r) => toReading(r.row, r.since)),
           }))));
           return { sources: sources.filter((x) => x.readings.length) };

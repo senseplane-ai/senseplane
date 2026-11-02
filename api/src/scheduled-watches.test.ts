@@ -116,12 +116,13 @@ describe("scheduled watches", () => {
     await api.data.withAccount(acc, (s) => s.db.updateTable("watches").set({ status: "paused" }).where("id", "=", id).execute());
   });
 
-  it("doesn't alert about absence when the camera mostly wasn't recording", async () => {
+  it("doesn't alert about absence when the camera mostly wasn't recording, and says it couldn't check", async () => {
     // 12:00–19:00 wasn't recorded: "nobody between 12 and 19" can't be told.
     const id = await watch("Nobody in the kitchen in the afternoon", { type: "condition", query: { measure: "count", what: { label: "person", zone: "kitchen" }, between: { from: "12:00", to: "19:00" } },
       test: { op: "eq", value: 0 }, at: "19:30" });
     expect(await runScheduledWatches(api.data, log, at(19, 31))).toBe(0);
-    expect(await events(id)).toHaveLength(0);
+    expect(await events(id)).toEqual([expect.objectContaining({ type: "watch.unchecked",
+      summary: "Couldn't check \"Nobody in the kitchen in the afternoon\": the cameras weren't recording for 100% of that time." })]);
     const w = await api.data.withAccount(acc, (s) => s.db.selectFrom("watches").select(["last_checked_at", "last_condition"]).where("id", "=", id).executeTakeFirstOrThrow());
     expect(w.last_checked_at).not.toBeNull();
     expect(w.last_condition).toBeNull(); // couldn't tell

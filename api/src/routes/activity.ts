@@ -13,6 +13,7 @@ import type { AccountScope, DataAccess } from "../data/access.js";
 import { ApiError } from "../errors.js";
 import { STALE_ACTIVITY_S } from "../activity.js";
 import { deviceMatches } from "../readings.js";
+import { linkedRanges } from "./bridges.js";
 import { recordedRanges } from "./playback.js";
 
 /** The sense an activity of this kind needs. */
@@ -117,7 +118,19 @@ export function dbLoader(s: AccountScope, req: FastifyRequest | undefined, now =
       return out;
     },
     async coverage(what, ids, from, to) {
-      if (what.sensor) return null;
+      if (what.sensor) {
+        // A box's sensors are covered while it could read Home Assistant (ADR 0061); other sensors push when they can, so they count as covered.
+        const boxes = new Map((await s.db.selectFrom("sources").select(["id", "bridge_id"]).where("id", "in", ids.length ? ids : [""]).execute()).map((x) => [x.id, x.bridge_id]));
+        if (![...boxes.values()].some(Boolean)) return null;
+        const out = new Map<string, [number, number][]>();
+        for (const id of ids) {
+          const wins = allowed(req, id, what.sensor.sense, from, to);
+          const box = boxes.get(id);
+          const ranges = box ? await linkedRanges(s, box, from, to, now) : [[from, to] as [number, number]];
+          out.set(id, within(ranges.map(([a, b], i) => ({ id: String(i), source_id: id, zone: null, start: a, end: b, open: false, count: 0 })), wins).map((i) => [i.start, i.end]));
+        }
+        return out;
+      }
       const sense = senseFor(what);
       const out = new Map<string, [number, number][]>();
       for (const id of ids) {

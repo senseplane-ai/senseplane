@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -157,7 +159,9 @@ fun NavRow(title: String, sub: String? = null, subColor: Color = Ink.muted, dot:
 
 @Composable
 fun ToggleRow(title: String, sub: String?, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) = Row(
-    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+    // The whole row toggles (a bigger target, and one control for screen readers).
+    Modifier.fillMaxWidth().toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
+        .heightIn(min = 56.dp).padding(horizontal = 12.dp, vertical = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
 ) {
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -165,7 +169,7 @@ fun ToggleRow(title: String, sub: String?, checked: Boolean, enabled: Boolean = 
         if (sub != null) Text(sub, color = Ink.muted, fontSize = 12.sp)
     }
     Switch(
-        checked = checked, enabled = enabled, onCheckedChange = onChange,
+        checked = checked, enabled = enabled, onCheckedChange = null,
         colors = SwitchDefaults.colors(checkedTrackColor = Ink.live, checkedThumbColor = Ink.bg, uncheckedTrackColor = Ink.edge, uncheckedThumbColor = Ink.soft, uncheckedBorderColor = Ink.edge),
     )
 }

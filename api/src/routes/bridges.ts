@@ -49,6 +49,10 @@ const healthBody = {
       type: "object", additionalProperties: false, required: ["connected"],
       properties: { connected: { type: "boolean" }, entities: { type: "integer", minimum: 0 }, sending: { type: "integer", minimum: 0 } },
     },
+    matter: {
+      type: "object", additionalProperties: false, required: ["connected"],
+      properties: { connected: { type: "boolean" }, nodes: { type: "integer", minimum: 0 } },
+    },
     cameras: {
       type: "array", maxItems: 256,
       items: {
@@ -183,7 +187,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
-    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number } } }>(
+    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number } } }>(
       "/v1/bridge/health",
       { schema: { body: healthBody } },
       async (req, reply) => {
@@ -194,6 +198,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
           await s.db.updateTable("bridges").set({
             last_seen_at: now, version: req.body.version ?? null,
             home_connected: ha ? ha.connected : null, home_entities: ha?.entities ?? null, home_sending: ha?.sending ?? null,
+            matter_connected: req.body.matter ? req.body.matter.connected : null, matter_nodes: req.body.matter?.nodes ?? null,
           }).where("id", "=", bridgeId).execute();
           if (ha) {
             // The box's sensors are online while it reads Home Assistant; otherwise their latest values are old news.
@@ -288,6 +293,44 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         return reply.code(202).send(out);
       },
     );
+
+    // Work for the box (ADR 0062), long-polled: what is waiting is handed over once, its arguments then cleared.
+    scope.get<{ Querystring: { wait?: string } }>("/v1/bridge/commands", async (req) => {
+      const { bridgeId, accountId } = req.bridge!;
+      const until = Date.now() + Math.min(Math.max(Number(req.query.wait ?? 0) || 0, 0), 25) * 1000;
+      for (;;) {
+        const taken = await deps.data.withAccount(accountId, async (s) => {
+          const rows = await s.db.selectFrom("bridge_commands").select(["id", "kind", "args_sealed as args"]).where("bridge_id", "=", bridgeId)
+            .where("status", "=", "pending").orderBy("created_at").limit(10).forUpdate().skipLocked().execute();
+          if (rows.length) {
+            await s.db.updateTable("bridge_commands").set({ status: "taken", taken_at: new Date(), args_sealed: null })
+              .where("id", "in", rows.map((r) => r.id)).execute();
+          }
+          return rows;
+        });
+        if (taken.length || Date.now() >= until || req.raw.destroyed) {
+          return { data: taken.map((c) => ({ id: c.id, kind: c.kind, args: c.args ? JSON.parse(box().decrypt(c.args)) : {} })) };
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    });
+
+    scope.post<{ Params: { id: string }; Body: { ok: boolean; result?: Record<string, unknown>; error?: string } }>(
+      "/v1/bridge/commands/:id",
+      { schema: { body: { type: "object", additionalProperties: false, required: ["ok"], properties: {
+        ok: { type: "boolean" }, result: { type: "object", maxProperties: 20 }, error: { type: "string", maxLength: 500 },
+      } } } },
+      async (req, reply) => {
+        const { bridgeId, accountId } = req.bridge!;
+        const done = await deps.data.withAccount(accountId, (s) => s.db.updateTable("bridge_commands").set({
+          status: req.body.ok ? "done" : "failed", result: req.body.result ? JSON.stringify(req.body.result) : null,
+          error: req.body.ok ? null : (req.body.error ?? "failed").slice(0, 500), finished_at: new Date(),
+        }).where("id", "=", req.params.id).where("bridge_id", "=", bridgeId).where("status", "=", "taken").returning("kind").executeTakeFirst());
+        if (!done) throw new ApiError(404, "not_found", "no such command waiting for a result");
+        await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: `bridge.${done.kind}_${req.body.ok ? "done" : "failed"}`, target: req.params.id, status: 200 });
+        return reply.code(204).send();
+      },
+    );
   });
 
   // A sensor integration token learns which source it feeds (Home Assistant's config flow).
@@ -328,10 +371,11 @@ const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOStrin
  * the sensor source of its room, made on first use.
  */
 export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdminDeps) {
-  const toBridge = (b: { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null }) => ({
+  const toBridge = (b: { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null; matter_connected: boolean | null; matter_nodes: number | null }) => ({
     id: b.id, name: b.name, version: b.version, created_at: iso(b.created_at), last_seen_at: iso(b.last_seen_at),
     online: !!b.last_seen_at && Date.now() - new Date(b.last_seen_at).getTime() < BRIDGE_SILENT_SECONDS * 1000,
     home_assistant: b.home_connected === null ? null : { connected: b.home_connected, entities: b.home_entities ?? 0, sending: b.home_sending ?? 0 },
+    matter: b.matter_connected === null ? null : { connected: b.matter_connected, nodes: b.matter_nodes ?? 0 },
   });
 
   app.post<{ Body: { name: string } }>(
@@ -419,4 +463,41 @@ export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdmi
       return { data: (await listEntities(accountId, bridge.id)).map(toEntity), next_cursor: null };
     },
   );
+
+  const toCommand = (c: { id: string; kind: string; status: string; result: Record<string, unknown> | null; error: string | null; created_at: Date; finished_at: Date | null }) => ({
+    id: c.id, kind: c.kind, status: c.status, result: c.result, error: c.error, created_at: iso(c.created_at), finished_at: iso(c.finished_at),
+  });
+
+  // Add a Matter device through the box (ADR 0062): the code a person got by sharing it from its own app.
+  app.post<{ Params: { id: string }; Body: { code: string } }>(
+    "/v1/bridges/:id/matter",
+    { schema: { body: { type: "object", additionalProperties: false, required: ["code"], properties: { code: { type: "string", minLength: 8, maxLength: 64 } } } } },
+    async (req, reply) => {
+      const accountId = req.accountId!;
+      const bridge = await bridgeOf(accountId, req.params.id);
+      const code = matterCode(req.body.code);
+      if (!code) throw new ApiError(400, "validation_failed", "A Matter pairing code is 11 digits (like 3497-011-2332) or a QR code starting with MT:");
+      const row = await deps.data.withAccount(accountId, (s) => s.db.insertInto("bridge_commands").values({
+        id: `bcm_${randomBytes(9).toString("base64url")}`, account_id: accountId, bridge_id: bridge.id, kind: "matter_commission",
+        args_sealed: deps.data.box().encrypt(JSON.stringify({ code })), created_by: req.access?.actor ?? null,
+      }).returningAll().executeTakeFirstOrThrow());
+      await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.matter_requested", target: bridge.id, status: 202 });
+      return reply.code(202).send(toCommand(row));
+    },
+  );
+
+  app.get<{ Params: { id: string; cid: string } }>("/v1/bridges/:id/commands/:cid", async (req) => {
+    const row = await deps.data.withAccount(req.accountId!, (s) => s.db.selectFrom("bridge_commands").selectAll()
+      .where("bridge_id", "=", req.params.id).where("id", "=", req.params.cid).executeTakeFirst());
+    if (!row) throw new ApiError(404, "not_found", "command not found");
+    return toCommand(row);
+  });
+}
+
+/** A Matter pairing code as the box passes it on: 11 or 21 digits (the manual code), or an MT: QR payload; undefined if neither. */
+export function matterCode(input: string): string | undefined {
+  const t = input.trim();
+  if (/^MT:[0-9A-Z.-]{19,}$/i.test(t)) return t.toUpperCase();
+  const digits = t.replace(/[\s-]/g, "");
+  return /^\d{11}$|^\d{21}$/.test(digits) ? digits : undefined;
 }

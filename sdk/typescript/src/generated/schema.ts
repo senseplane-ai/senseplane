@@ -380,6 +380,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bridge/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Work for this box, long-polled
+         * @description Waits up to `wait` seconds (at most 25) for work and hands over what is waiting, once (ADR 0062); its arguments are cleared from the server as it is taken. The box reports each with POST /bridge/commands/{id}.
+         */
+        get: operations["takeBridgeCommands"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/commands/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** How a command went */
+        post: operations["finishBridgeCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridge/pair": {
         parameters: {
             query?: never;
@@ -454,6 +491,43 @@ export interface paths {
          * @description A chosen entity's readings go to the sensor source of its room (one per bridge and room, made on first use: "Kitchen sensors"; no room: "Home sensors"). Dropping one stops its readings; what was stored stays. Audited.
          */
         patch: operations["chooseBridgeEntities"];
+        trace?: never;
+    };
+    "/bridges/{id}/matter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a Matter device through the box
+         * @description With the pairing code a person got by sharing the device from its own app (Apple Home, Google Home, the maker's app) or from its label: 11 or 21 digits, or an `MT:` QR payload. The box commissions it over the network (ADR 0062); follow GET /bridges/{id}/commands/{cid}. Admins only. Audited.
+         */
+        post: operations["addMatterDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridges/{id}/commands/{cid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How work handed to a box went */
+        get: operations["getBridgeCommand"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/bridges/pair": {
@@ -1653,6 +1727,24 @@ export interface components {
                 /** @description How many a person chose */
                 sending?: number;
             };
+            /** @description Set by a bridge that runs a Matter controller (ADR 0062) */
+            matter?: {
+                connected: boolean;
+                nodes?: number;
+            };
+        };
+        BridgeCommand: {
+            id: string;
+            /** @description matter_commission */
+            kind: string;
+            /** @enum {string} */
+            status: "pending" | "taken" | "done" | "failed";
+            result?: Record<string, never> | null;
+            error?: string | null;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            finished_at?: string | null;
         };
         BridgeEntityListed: {
             entity_id: string;
@@ -1696,6 +1788,11 @@ export interface components {
             } | null;
             /** @description Only when created with POST /bridges: the bridge token, shown once */
             token?: string;
+            /** @description Its Matter controller (ADR 0062); null when it runs none */
+            matter?: {
+                connected?: boolean;
+                nodes?: number;
+            } | null;
         };
         ClipCreate: {
             source: string;
@@ -3792,6 +3889,66 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    takeBridgeCommands: {
+        parameters: {
+            query?: {
+                /** @description Seconds to wait for work (0–25) */
+                wait?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The work taken (possibly none) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            id: string;
+                            kind: string;
+                            args: Record<string, never>;
+                        }[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finishBridgeCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    ok: boolean;
+                    result?: Record<string, never>;
+                    error?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     startBridgePairing: {
         parameters: {
             query?: never;
@@ -3973,6 +4130,62 @@ export interface operations {
                         data: components["schemas"]["BridgeEntity"][];
                         next_cursor?: null | string;
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addMatterDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Handed to the box */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getBridgeCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+                /** @description The command's id */
+                cid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeCommand"];
                 };
             };
             default: components["responses"]["Error"];

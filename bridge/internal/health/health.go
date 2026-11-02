@@ -42,6 +42,11 @@ type Status struct {
 		Entities, Sending int
 	}
 	Cameras int
+	// Matter is nil when the bridge runs no Matter controller.
+	Matter *struct {
+		Connected bool
+		Nodes     int
+	}
 }
 
 // Handler returns the bridge's HTTP endpoints. cameras and status may be nil.
@@ -114,6 +119,7 @@ a{color:var(--live)}
 <div class="card"><span class="dot on"></span>Connected to Senseplane</div>
 {{with .HomeAssistant}}<div class="card"><span class="dot{{if .Connected}} on{{end}}"></span>{{if .Connected}}Reading Home Assistant: {{.Sending}} of {{.Entities}} sensors are sent{{else}}Can't reach Home Assistant right now{{end}}</div>
 <p class="muted">Choose which sensors Senseplane gets, and add cameras, in Senseplane under Cameras.</p>{{end}}
+{{with .Matter}}<div class="card"><span class="dot{{if .Connected}} on{{end}}"></span>{{if .Connected}}Matter: {{.Nodes}} device{{if ne .Nodes 1}}s{{end}}{{else}}Can't reach the Matter controller right now{{end}}</div>{{end}}
 {{if .Cameras}}<div class="card"><span class="dot on"></span>{{.Cameras}} camera{{if ne .Cameras 1}}s{{end}}</div>{{end}}
 {{end}}
 </main></body></html>`))

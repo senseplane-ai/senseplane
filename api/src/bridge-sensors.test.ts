@@ -6,6 +6,7 @@
 // nothing else gets in.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApi, type SenseplaneApi } from "./index.js";
+import { matterCode } from "./routes/bridges.js";
 import { runScheduledWatches } from "./scheduled-watches.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
@@ -136,6 +137,37 @@ describe("bridges reading Home Assistant", () => {
     const agent = (await call(owner, "POST", "/v1/agents", { name: "Carer" })).json();
     await call(owner, "POST", "/v1/grants", { agent_id: agent.id, source_ids: [kitchen], senses: ["sensors"] });
     expect((await call(agent.api_key, "GET", "/v1/events?type=watch.unchecked")).json().data).toHaveLength(1);
+  });
+
+  it("hands a Matter pairing code to the box once, sealed until then, and records how it went", async () => {
+    expect(matterCode("3497-011-2332")).toBe("34970112332");
+    expect(matterCode("mt:y.k9042c00kz-tsr710")).toBe("MT:Y.K9042C00KZ-TSR710");
+    expect(matterCode("1234")).toBeUndefined();
+    expect((await call(owner, "POST", `/v1/bridges/${bridge.id}/matter`, { code: "12345678" })).statusCode).toBe(400);
+    const r = await call(owner, "POST", `/v1/bridges/${bridge.id}/matter`, { code: "3497 011 2332" });
+    expect(r.statusCode).toBe(202);
+    const cmd = r.json();
+    expect(cmd).toMatchObject({ id: expect.stringMatching(/^bcm_/), kind: "matter_commission", status: "pending" });
+    const stored = await api.data.withAccount(acc, (s) => s.db.selectFrom("bridge_commands").select("args_sealed").where("id", "=", cmd.id).executeTakeFirstOrThrow());
+    expect(stored.args_sealed).not.toContain("34970112332");
+    // The box's long poll takes it (once), then reports.
+    const got = (await call(bridge.token, "GET", "/v1/bridge/commands?wait=0")).json().data;
+    expect(got).toEqual([{ id: cmd.id, kind: "matter_commission", args: { code: "34970112332" } }]);
+    expect((await call(bridge.token, "GET", "/v1/bridge/commands?wait=0")).json().data).toEqual([]);
+    expect((await api.data.withAccount(acc, (s) => s.db.selectFrom("bridge_commands").select("args_sealed").where("id", "=", cmd.id).executeTakeFirstOrThrow())).args_sealed).toBeNull();
+    expect((await call(bridge.token, "POST", `/v1/bridge/commands/${cmd.id}`, { ok: true, result: { node_id: 7 } })).statusCode).toBe(204);
+    expect((await call(owner, "GET", `/v1/bridges/${bridge.id}/commands/${cmd.id}`)).json()).toMatchObject({ status: "done", result: { node_id: 7 } });
+    expect((await call(bridge.token, "POST", `/v1/bridge/commands/${cmd.id}`, { ok: false })).statusCode).toBe(404); // reported already
+    // A long poll waits for work, and returns as soon as there is some.
+    const t0 = Date.now();
+    const waiting = call(bridge.token, "GET", "/v1/bridge/commands?wait=10");
+    await new Promise((res) => setTimeout(res, 1200));
+    const second = (await call(owner, "POST", `/v1/bridges/${bridge.id}/matter`, { code: "MT:Y.K9042C00KZ-TSR710" })).json();
+    const later = (await waiting).json().data;
+    expect(later.map((c: { id: string }) => c.id)).toEqual([second.id]);
+    expect(Date.now() - t0).toBeLessThan(6000);
+    await call(bridge.token, "POST", `/v1/bridge/commands/${second.id}`, { ok: false, error: "the code has expired" });
+    expect((await call(owner, "GET", `/v1/bridges/${bridge.id}/commands/${second.id}`)).json()).toMatchObject({ status: "failed", error: "the code has expired" });
   });
 
   it("records whether Home Assistant is connected", async () => {

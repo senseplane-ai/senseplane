@@ -37,6 +37,7 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--ha-token` | `HA_TOKEN` | A Home Assistant long-lived access token |
 | `--state-dir` | `SENSEPLANE_STATE_DIR` | Without `--token`: pair with a code and keep the token here |
 | `--box-name` | `SENSEPLANE_BOX_NAME` | The name a person sees when pairing (default `Home Assistant`) |
+| `--matter-url` | `MATTER_URL` | Read Matter devices through this Matter Server (`ws://localhost:5580/ws`) |
 
 Passwords in RTSP URLs never appear in logs or in what the bridge reports.
 
@@ -48,6 +49,20 @@ take (numbers such as temperature and power, door, motion and leak sensors,
 switches, lights and locks, doorbells and buttons; `spec/home-assistant/readings.json`)
 with their room, and sends readings only of the ones a person chose in the
 console. It never calls a Home Assistant service.
+
+## Matter
+
+With `--matter-url`, the bridge reads Matter devices through a Matter Server
+(matterjs-server or python-matter-server, the WebSocket API Home Assistant's
+Matter integration uses; run it with host networking). A person adds a device
+on the box's page in Senseplane with the code they get by sharing it from its
+own app (Apple Home, Google Home, the maker's app); the box commissions it and
+its sensors are listed to choose from, like Home Assistant's. The bridge never
+sends a device command (ADR 0062).
+
+`MATTER_URL=ws://127.0.0.1:5580/ws go test -run Live ./internal/matter/`
+checks the client against a real server and a device in pairing mode (the
+matter.js example plug, `matter-device --type=socket`, code 34970112332).
 
 ## Pairing with a code
 
@@ -77,7 +92,8 @@ polling, one relay per camera, health reports, the Home Assistant link),
 RTSP → Annex B access units with exact durations), `internal/whip` (WHIP
 client), `internal/homeassistant` (websocket client and state → reading
 mapping), `internal/sensors` (batched sending with backoff),
-`internal/pairing` (codes and the state file), `internal/health`.
+`internal/pairing` (codes and the state file), `internal/matter` (a Matter
+Server client and the attribute → reading mapping), `internal/health`.
 
 ## WHIP client
 

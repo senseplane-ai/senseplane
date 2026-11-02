@@ -6,7 +6,7 @@
 // Chosen sensors land on one sensor source per room ("Kitchen sensors").
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { senseName } from "senseplane";
-import { type Bridge, type BridgeEntity, errorText } from "../api/extra";
+import { type Bridge, type BridgeCommand, type BridgeEntity, errorText } from "../api/extra";
 import { Link, navigate, useLocation } from "../router";
 import { useApp } from "../shell/AppData";
 import { ago } from "../shell/sources";
@@ -18,6 +18,8 @@ export function boxStatus(b: Bridge): { tone: "live" | "warn" | "off"; text: str
   if (!b.online) return { tone: b.last_seen_at ? "warn" : "off", text: b.last_seen_at ? `Offline since ${ago(b.last_seen_at)}` : "Not connected yet" };
   if (b.home_assistant && !b.home_assistant.connected) return { tone: "warn", text: "Can't reach Home Assistant" };
   if (b.home_assistant) return { tone: "live", text: `${b.home_assistant.sending} of ${b.home_assistant.entities} sensors sent` };
+  if (b.matter && !b.matter.connected) return { tone: "warn", text: "Can't reach its Matter controller" };
+  if (b.matter) return { tone: "live", text: `${b.matter.nodes} Matter device${b.matter.nodes === 1 ? "" : "s"}` };
   return { tone: "live", text: "Online" };
 }
 
@@ -27,7 +29,7 @@ export function BoxesStrip() {
   const [boxes, setBoxes] = useState<Bridge[] | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => extra.bridges.list().then((r) => live && setBoxes(r.data.filter((b) => b.home_assistant))).catch(() => live && setBoxes([]));
+    const load = () => extra.bridges.list().then((r) => live && setBoxes(r.data.filter((b) => b.home_assistant || b.matter))).catch(() => live && setBoxes([]));
     void load();
     const t = setInterval(load, 30_000);
     return () => { live = false; clearInterval(t); };
@@ -40,7 +42,7 @@ export function BoxesStrip() {
         return (
           <Link key={b.id} to={`/boxes/${b.id}`} className="card box-card">
             <span className="box-card-name"><StatusDot tone={st.tone} />{b.name}</span>
-            <span className="muted">Home Assistant · {st.text}</span>
+            <span className="muted">{b.home_assistant ? "Home Assistant" : "Matter"} · {st.text}</span>
             <span className="box-card-action">Choose sensors →</span>
           </Link>
         );
@@ -172,6 +174,53 @@ function BoxCameras({ box }: { box: Bridge }) {
   );
 }
 
+/** Add a Matter device: share it from its own app (Apple Home, Google Home, the maker's app) and paste the code. */
+function BoxMatter({ box, onAdded }: { box: Bridge; onAdded: () => void }) {
+  const { extra } = useApp();
+  const [code, setCode] = useState("");
+  const [cmd, setCmd] = useState<BridgeCommand | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!cmd || cmd.status === "done" || cmd.status === "failed") return;
+    // The box takes it within seconds; joining a device takes up to a minute.
+    const t = setInterval(() => void extra.bridges.command(box.id, cmd.id).then((c) => {
+      setCmd(c);
+      if (c.status === "done") onAdded();
+    }).catch(() => undefined), 2000);
+    return () => clearInterval(t);
+  }, [cmd, extra, box.id, onAdded]);
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+    try {
+      setCmd(await extra.bridges.addMatter(box.id, code));
+      setCode("");
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+  const working = cmd && (cmd.status === "pending" || cmd.status === "taken");
+  return (
+    <Card title="Matter devices">
+      <p className="muted">A plug, sensor or lock that works with Matter can join this box too, even if it is already in Apple Home, Google Home or its maker's app: there, choose to share it (or turn on pairing mode) to get a code.</p>
+      <form onSubmit={add} className="link-form">
+        <Field label="Pairing code" hint="11 digits, like 3497-011-2332, or the text of its QR code (MT:…)." error={error || undefined}>
+          <Input mono value={code} maxLength={64} placeholder="3497-011-2332" onChange={(e) => setCode(e.target.value)} autoComplete="off" spellCheck={false} />
+        </Field>
+        <div><Button type="submit" disabled={!code.trim() || !!working}>Add device</Button></div>
+      </form>
+      {cmd && (
+        <p className="box-status" role="status">
+          {cmd.status === "pending" && <><StatusDot tone="off" />Waiting for the box…</>}
+          {cmd.status === "taken" && <><StatusDot tone="warn" />Adding the device; this can take a minute…</>}
+          {cmd.status === "done" && <><StatusDot tone="live" />Added. Choose its sensors above.</>}
+          {cmd.status === "failed" && <><StatusDot tone="warn" />Couldn't add it: {cmd.error}</>}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 /** /boxes/:id: the box's status and its Home Assistant sensors to choose from, by room. */
 export function BoxPage({ id }: { id: string }) {
   const { extra, refreshSources } = useApp();
@@ -180,16 +229,15 @@ export function BoxPage({ id }: { id: string }) {
   const [entities, setEntities] = useState<BridgeEntity[] | null>(null);
   const [saving, setSaving] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    let live = true;
-    const load = () => {
-      void extra.bridges.list().then((r) => live && setBox(r.data.find((b) => b.id === id) ?? null)).catch(() => live && setBox(null));
-      void extra.bridges.entities(id).then((r) => live && setEntities(r.data)).catch(() => live && setEntities([]));
-    };
-    load();
-    const t = setInterval(load, 30_000);
-    return () => { live = false; clearInterval(t); };
+  const reload = useCallback(() => {
+    void extra.bridges.list().then((r) => setBox(r.data.find((b) => b.id === id) ?? null)).catch(() => setBox(null));
+    void extra.bridges.entities(id).then((r) => setEntities(r.data)).catch(() => setEntities([]));
   }, [extra, id]);
+  useEffect(() => {
+    reload();
+    const t = setInterval(reload, 30_000);
+    return () => clearInterval(t);
+  }, [reload]);
   useEffect(() => { if (box) document.title = `${box.name} · Senseplane`; }, [box]);
 
   const rooms = useMemo(() => {
@@ -244,6 +292,7 @@ export function BoxPage({ id }: { id: string }) {
           </Card>
         );
       })}
+      {box.matter && <BoxMatter box={box} onAdded={reload} />}
       <BoxCameras box={box} />
     </div>
   );

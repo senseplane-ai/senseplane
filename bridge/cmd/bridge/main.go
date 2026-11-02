@@ -33,6 +33,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/bridge"
 	"github.com/senseplane-ai/senseplane/bridge/internal/camera"
 	"github.com/senseplane-ai/senseplane/bridge/internal/health"
+	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
 	"github.com/senseplane-ai/senseplane/bridge/internal/pairing"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 	"github.com/senseplane-ai/senseplane/bridge/internal/whip"
@@ -54,6 +55,7 @@ func main() {
 	flag.Var(&rtsps, "rtsp", "camera RTSP URL to claim or add (repeatable; env SENSEPLANE_RTSP, comma-separated)")
 	haURL := flag.String("ha-url", os.Getenv("HA_URL"), "read sensors from this Home Assistant, e.g. http://homeassistant.local:8123 (env HA_URL; as an add-on the Supervisor's is used)")
 	haToken := flag.String("ha-token", os.Getenv("HA_TOKEN"), "a Home Assistant long-lived access token (env HA_TOKEN)")
+	matterURL := flag.String("matter-url", os.Getenv("MATTER_URL"), "read Matter devices through this Matter Server, e.g. ws://localhost:5580/ws (env MATTER_URL)")
 	stateDir := flag.String("state-dir", os.Getenv("SENSEPLANE_STATE_DIR"), "keep the token got by pairing here (env SENSEPLANE_STATE_DIR; the add-on uses /data)")
 	boxName := flag.String("box-name", envOr("SENSEPLANE_BOX_NAME", "Home Assistant"), "the name a person sees when pairing")
 	check := flag.Bool("healthcheck", false, "probe the local /healthz and exit (for container health checks)")
@@ -112,6 +114,12 @@ func main() {
 		s := status
 		if running != nil {
 			s.Cameras = len(running.Cameras())
+			if m := running.MatterLinkHealth(); m != nil {
+				s.Matter = &struct {
+					Connected bool
+					Nodes     int
+				}{m.Connected, m.Nodes}
+			}
 			if h := running.Home(); h != nil {
 				s.HomeAssistant = &struct {
 					Connected         bool
@@ -156,7 +164,7 @@ func main() {
 			mu.Unlock()
 		}
 		paired := !strings.HasPrefix(*token, "brg_")
-		refused := run(ctx, *apiURL, tok, paired, rtsps, *name, *whipBase, ha, log, func(b *bridge.Bridge) {
+		refused := run(ctx, *apiURL, tok, paired, rtsps, *name, *whipBase, ha, *matterURL, log, func(b *bridge.Bridge) {
 			mu.Lock()
 			running = b
 			mu.Unlock()
@@ -174,7 +182,7 @@ func main() {
 }
 
 // run relays and reads until ctx ends; a paired box also stops when the API refuses its token (true).
-func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, log *slog.Logger, started func(*bridge.Bridge)) bool {
+func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, matterURL string, log *slog.Logger, started func(*bridge.Bridge)) bool {
 	client := api.New(apiURL, token)
 
 	for _, u := range rtsps {
@@ -192,6 +200,19 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 	defer cancel()
 	refused := false
 	o := bridge.Options{Client: client, Pull: camera.Pull, Dial: dialWHIP, Version: health.Version, WHIPBase: whipBase, Log: log, HomeAssistant: ha}
+	if matterURL != "" {
+		// Matter devices are sensors too, and a person can add one with a code shared from its app (ADR 0062).
+		mc := &matter.Controller{URL: matterURL, Log: log}
+		o.Matter = mc
+		o.Commands = map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			code, _ := args["code"].(string)
+			if code == "" {
+				return nil, errors.New("no pairing code")
+			}
+			return mc.Commission(ctx, code)
+		}}
+		log.Info("reading Matter devices", "controller", matterURL)
+	}
 	if paired {
 		o.OnRefused = func() { refused = true; cancel() }
 	}

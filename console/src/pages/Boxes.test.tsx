@@ -93,3 +93,29 @@ it("adds an IP camera through the box", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Add camera" }));
   await waitFor(() => expect(created).toEqual({ name: "Porch", type: "rtsp", rtsp_url: "rtsp://u:p@192.168.1.40:554/stream1", bridge_id: "brg_1" }));
 });
+
+it("adds a Matter device with a code shared from its app, on a box that runs Matter", async () => {
+  let status = "pending";
+  let body: unknown;
+  const f = fakeFetch({
+    "GET /bridges": { data: [{ ...BOX, home_assistant: null, matter: { connected: true, nodes: 1 } }] },
+    "GET /bridges/brg_1/entities": { data: [] },
+    "POST /bridges/brg_1/matter": async (_u: URL, init?: RequestInit) => { body = JSON.parse(String(init?.body)); return Response.json({ id: "bcm_1", kind: "matter_commission", status, result: null, error: null, created_at: "2026-11-02T08:00:00Z", finished_at: null }, { status: 202 }); },
+    "GET /bridges/brg_1/commands/bcm_1": () => Response.json({ id: "bcm_1", kind: "matter_commission", status, result: status === "done" ? { node_id: 2 } : null, error: null, created_at: "2026-11-02T08:00:00Z", finished_at: null }),
+  });
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  expect(await screen.findByText("1 Matter device")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/Pairing code/), { target: { value: "3497-011-2332" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+  expect(await screen.findByText("Waiting for the box…")).toBeInTheDocument();
+  expect(body).toEqual({ code: "3497-011-2332" });
+  status = "done";
+  expect(await screen.findByText("Added. Choose its sensors above.", {}, { timeout: 4000 })).toBeInTheDocument();
+});
+
+it("doesn't offer Matter on a box without it", async () => {
+  const f = fakeFetch({ "GET /bridges": { data: [BOX] }, "GET /bridges/brg_1/entities": { data: [] } });
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  expect(await screen.findByRole("heading", { name: "Mum's box" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Matter devices" })).toBeNull();
+});

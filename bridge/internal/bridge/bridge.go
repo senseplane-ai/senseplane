@@ -18,6 +18,7 @@ import (
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/api"
 	"github.com/senseplane-ai/senseplane/bridge/internal/homeassistant"
+	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 )
 
@@ -41,6 +42,15 @@ type Options struct {
 	SendEvery time.Duration
 	// OnRefused is called when the API refuses the bridge token (a paired box pairs again).
 	OnRefused func()
+	// Commands are the kinds of work this box can do (ADR 0062); nil: it takes none.
+	Commands map[string]Handler
+	// Matter, when set, is a Matter controller whose devices are sensors too (ADR 0062).
+	Matter MatterLink
+}
+
+// MatterLink runs a Matter controller connection, telling home about its devices.
+type MatterLink interface {
+	Run(ctx context.Context, to matter.Handler)
 }
 
 type worker struct {
@@ -65,7 +75,7 @@ func New(o Options) *Bridge {
 		o.Log = slog.Default()
 	}
 	b := &Bridge{o: o, workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1)}
-	if o.HomeAssistant != nil {
+	if o.HomeAssistant != nil || o.Matter != nil {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
 	}
 	return b
@@ -83,7 +93,17 @@ func (b *Bridge) Home() *api.HomeHealth {
 	if b.home == nil {
 		return nil
 	}
-	return b.home.health()
+	ha, _ := b.home.health()
+	return ha
+}
+
+// MatterLinkHealth is the link to the Matter controller (nil without one), for the status page.
+func (b *Bridge) MatterLinkHealth() *api.MatterHealth {
+	if b.home == nil {
+		return nil
+	}
+	_, mt := b.home.health()
+	return mt
 }
 
 // Cameras returns every camera's current state, sorted by source id (for /healthz).
@@ -101,9 +121,16 @@ func (b *Bridge) Cameras() []api.CameraHealth {
 // Run polls, relays and reports until ctx ends, then stops every camera and sends a last report.
 func (b *Bridge) Run(ctx context.Context) {
 	if b.home != nil {
-		ha := b.o.HomeAssistant
-		go homeassistant.Run(ctx, homeassistant.Options{URL: homeassistant.WebsocketURL(ha.URL), Token: ha.Token, Log: b.o.Log}, b.home)
+		if ha := b.o.HomeAssistant; ha != nil {
+			go homeassistant.Run(ctx, homeassistant.Options{URL: homeassistant.WebsocketURL(ha.URL), Token: ha.Token, Log: b.o.Log}, b.home.source(linkHomeAssistant))
+		}
+		if b.o.Matter != nil {
+			go b.o.Matter.Run(ctx, b.home.source(linkMatter))
+		}
 		go b.home.fwd.Run(ctx)
+	}
+	if len(b.o.Commands) > 0 {
+		go b.runCommands(ctx)
 	}
 	poll, beat := b.o.Poll, b.o.Heartbeat
 	if cfg := b.sync(ctx); cfg != nil {
@@ -252,7 +279,7 @@ func (b *Bridge) stopAll() {
 func (b *Bridge) report(ctx context.Context) {
 	h := api.Health{Version: b.o.Version, Cameras: b.Cameras()}
 	if b.home != nil {
-		h.HomeAssistant = b.home.health()
+		h.HomeAssistant, h.Matter = b.home.health()
 	}
 	if err := b.o.Client.Report(ctx, h); err != nil && ctx.Err() == nil {
 		b.o.Log.Warn("health report failed", "err", err)

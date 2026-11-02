@@ -118,6 +118,8 @@ export interface Bridge {
   last_seen_at: string | null;
   online: boolean;
   home_assistant: { connected: boolean; entities: number; sending: number } | null;
+  /** Its Matter controller (ADR 0062); null when it runs none. */
+  matter?: { connected: boolean; nodes: number } | null;
 }
 
 /** A Home Assistant entity a bridge can send; chosen ones go to their room's sensor source. */
@@ -131,6 +133,17 @@ export interface BridgeEntity {
   chosen: boolean;
   source_id: string | null;
   listed: boolean;
+}
+
+/** Work handed to a box: pending → taken → done or failed. */
+export interface BridgeCommand {
+  id: string;
+  kind: string;
+  status: "pending" | "taken" | "done" | "failed";
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
 }
 
 export class ApiExtra {
@@ -213,6 +226,9 @@ export class ApiExtra {
     /** A box waiting with a pairing code (ADR 0061). */
     findPairing: (code: string) => this.request<{ code: string; name: string; expires_at: string }>("GET", `/bridges/pair?${new URLSearchParams({ code })}`),
     pair: (code: string, name?: string) => this.request<{ id: string; name: string }>("POST", "/bridges/pair", { code, ...(name ? { name } : {}) }),
+    /** Add a Matter device through the box with the pairing code shared from its own app (ADR 0062). */
+    addMatter: (id: string, code: string) => this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/matter`, { code }),
+    command: (id: string, cid: string) => this.request<BridgeCommand>("GET", `/bridges/${encodeURIComponent(id)}/commands/${encodeURIComponent(cid)}`),
   };
   /** Raw events page for counts (the SDK paginates through everything). */
   eventsPage = (q: Record<string, string>) => this.request<{ data: import("senseplane").Event[]; next_cursor: string | null }>("GET", `/events?${new URLSearchParams(q)}`);

@@ -98,6 +98,14 @@ type Health struct {
 	Cameras []CameraHealth `json:"cameras"`
 	// HomeAssistant is set when the bridge reads a Home Assistant (ADR 0061).
 	HomeAssistant *HomeHealth `json:"home_assistant,omitempty"`
+	// Matter is set when the bridge runs a Matter controller (ADR 0062).
+	Matter *MatterHealth `json:"matter,omitempty"`
+}
+
+// MatterHealth is the bridge's link to its Matter controller.
+type MatterHealth struct {
+	Connected bool `json:"connected"`
+	Nodes     int  `json:"nodes"`
 }
 
 // HomeHealth is the bridge's link to Home Assistant.
@@ -254,4 +262,40 @@ func (c *Client) PairToken(ctx context.Context, deviceCode string) (*PairResult,
 		return nil, err
 	}
 	return &r, nil
+}
+
+// Command is work the API has for the bridge (ADR 0062).
+type Command struct {
+	ID   string         `json:"id"`
+	Kind string         `json:"kind"`
+	Args map[string]any `json:"args"`
+}
+
+// Commands waits up to `wait` for work and takes what is there.
+func (c *Client) Commands(ctx context.Context, wait time.Duration) ([]Command, error) {
+	var out struct {
+		Data []Command `json:"data"`
+	}
+	hc := *c
+	hc.HTTP = &http.Client{Timeout: wait + 15*time.Second}
+	if err := hc.do(ctx, http.MethodGet, fmt.Sprintf("/v1/bridge/commands?wait=%d", int(wait.Seconds())), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// Finish reports how a command went.
+func (c *Client) Finish(ctx context.Context, id string, result map[string]any, failure error) error {
+	body := map[string]any{"ok": failure == nil}
+	if result != nil {
+		body["result"] = result
+	}
+	if failure != nil {
+		msg := failure.Error()
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+		body["error"] = msg
+	}
+	return c.do(ctx, http.MethodPost, "/v1/bridge/commands/"+id, body, nil)
 }

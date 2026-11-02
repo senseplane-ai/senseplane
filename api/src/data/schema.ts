@@ -107,6 +107,25 @@ export interface BridgesTable {
   home_connected: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
   home_entities: ColumnType<number | null, number | null | undefined, number | null>;
   home_sending: ColumnType<number | null, number | null | undefined, number | null>;
+  /** The box's Matter controller (ADR 0062); null when it runs none. */
+  matter_connected: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
+  matter_nodes: ColumnType<number | null, number | null | undefined, number | null>;
+}
+
+/** Work for a bridge (ADR 0062): taken by the box's long poll, then reported. */
+export interface BridgeCommandsTable {
+  id: string;
+  account_id: string;
+  bridge_id: string;
+  kind: string;
+  args_sealed: string | null;
+  status: ColumnType<"pending" | "taken" | "done" | "failed", "pending" | "taken" | "done" | "failed" | undefined, "pending" | "taken" | "done" | "failed">;
+  result: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  error: string | null;
+  created_by: string | null;
+  created_at: Timestamp;
+  taken_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  finished_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
 /** A stretch when a box could read Home Assistant (ADR 0061), from its health reports. */
@@ -547,6 +566,7 @@ export interface Database {
   bridges: BridgesTable;
   bridge_entities: BridgeEntitiesTable;
   bridge_links: BridgeLinksTable;
+  bridge_commands: BridgeCommandsTable;
   users: UsersTable;
   user_identities: UserIdentitiesTable;
   memberships: MembershipsTable;

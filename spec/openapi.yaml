@@ -607,6 +607,62 @@ paths:
                   ignored: {type: integer}
                   events: {type: array, items: {type: string}}
         default: {$ref: '#/components/responses/Error'}
+  /bridge/commands:
+    get:
+      operationId: takeBridgeCommands
+      summary: Work for this box, long-polled
+      description: >-
+        Waits up to `wait` seconds (at most 25) for work and hands over what is
+        waiting, once (ADR 0062); its arguments are cleared from the server as
+        it is taken. The box reports each with POST /bridge/commands/{id}.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      parameters:
+        - {name: wait, in: query, required: false, description: Seconds to wait for work (0–25), schema: {type: integer, minimum: 0, maximum: 25}}
+      responses:
+        '200':
+          description: The work taken (possibly none)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, kind, args]
+                      properties:
+                        id: {type: string}
+                        kind: {type: string}
+                        args: {type: object}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/commands/{id}:
+    post:
+      operationId: finishBridgeCommand
+      summary: How a command went
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ok]
+              properties:
+                ok: {type: boolean}
+                result: {type: object}
+                error: {type: string, maxLength: 500}
+      responses:
+        '204': {description: Recorded}
+        default: {$ref: '#/components/responses/Error'}
   /bridge/pair:
     post:
       operationId: startBridgePairing
@@ -760,6 +816,50 @@ paths:
                 properties:
                   data: {type: array, items: {$ref: '#/components/schemas/BridgeEntity'}}
                   next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}/matter:
+    post:
+      operationId: addMatterDevice
+      summary: Add a Matter device through the box
+      description: >-
+        With the pairing code a person got by sharing the device from its own
+        app (Apple Home, Google Home, the maker's app) or from its label: 11
+        or 21 digits, or an `MT:` QR payload. The box commissions it over the
+        network (ADR 0062); follow GET /bridges/{id}/commands/{cid}. Admins only. Audited.
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: {type: string, minLength: 8, maxLength: 64}
+      responses:
+        '202':
+          description: Handed to the box
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeCommand'}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}/commands/{cid}:
+    get:
+      operationId: getBridgeCommand
+      summary: How work handed to a box went
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+        - {name: cid, in: path, required: true, description: The command's id, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeCommand'}
         default: {$ref: '#/components/responses/Error'}
   /bridges/pair:
     get:
@@ -2532,6 +2632,25 @@ components:
             connected: {type: boolean}
             entities: {type: integer, minimum: 0, description: How many entities it can send}
             sending: {type: integer, minimum: 0, description: How many a person chose}
+        matter:
+          type: object
+          additionalProperties: false
+          required: [connected]
+          description: Set by a bridge that runs a Matter controller (ADR 0062)
+          properties:
+            connected: {type: boolean}
+            nodes: {type: integer, minimum: 0}
+    BridgeCommand:
+      type: object
+      required: [id, kind, status]
+      properties:
+        id: {type: string}
+        kind: {type: string, description: 'matter_commission'}
+        status: {type: string, enum: [pending, taken, done, failed]}
+        result: {type: ['object', 'null']}
+        error: {type: ['string', 'null']}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: ['string', 'null'], format: date-time}
     BridgeEntityListed:
       type: object
       additionalProperties: false
@@ -2573,6 +2692,12 @@ components:
             entities: {type: integer}
             sending: {type: integer}
         token: {type: string, description: 'Only when created with POST /bridges: the bridge token, shown once'}
+        matter:
+          type: [object, 'null']
+          description: Its Matter controller (ADR 0062); null when it runs none
+          properties:
+            connected: {type: boolean}
+            nodes: {type: integer}
     ClipCreate:
       type: object
       required: [source, from, to]

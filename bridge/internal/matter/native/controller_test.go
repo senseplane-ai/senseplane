@@ -53,7 +53,11 @@ type recorder struct {
 func (r *recorder) Connected(up bool)          { r.mu.Lock(); r.connected = up; r.mu.Unlock() }
 func (r *recorder) Nodes(n int)                { r.mu.Lock(); r.nodes = n; r.mu.Unlock() }
 func (r *recorder) Entities(list []api.Entity) { r.mu.Lock(); r.entities = list; r.mu.Unlock() }
-func (r *recorder) Reading(x api.Reading)      { r.mu.Lock(); r.readings = append(r.readings, x); r.mu.Unlock() }
+func (r *recorder) Reading(x api.Reading) {
+	r.mu.Lock()
+	r.readings = append(r.readings, x)
+	r.mu.Unlock()
+}
 
 func (r *recorder) find(f func(api.Reading) bool) bool {
 	r.mu.Lock()

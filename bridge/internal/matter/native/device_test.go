@@ -607,4 +607,3 @@ func (r fixedResolver) Commissionable(context.Context, uint16, bool) ([]netip.Ad
 func (r fixedResolver) Operational(context.Context, string) ([]netip.AddrPort, error) {
 	return []netip.AddrPort{r.addr}, nil
 }
-

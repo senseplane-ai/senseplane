@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -100,7 +101,7 @@ func main() {
 	var mu sync.Mutex
 	status := health.Status{Paired: strings.HasPrefix(*token, "brg_")}
 	var running *bridge.Bridge
-	srv := &http.Server{Addr: *addr, Handler: health.Handler(func() []health.Camera {
+	srv := &http.Server{Addr: *addr, Handler: panelGuard(health.Handler(func() []health.Camera {
 		mu.Lock()
 		b := running
 		mu.Unlock()
@@ -132,7 +133,7 @@ func main() {
 			}
 		}
 		return s
-	}), ReadHeaderTimeout: 5 * time.Second}
+	})), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("health server failed", "err", err)
@@ -291,6 +292,26 @@ func homeAssistant(url, token string) *bridge.HomeAssistant {
 		return nil
 	}
 	return &bridge.HomeAssistant{URL: url, Token: token}
+}
+
+// panelGuard, as an add-on, lets only the Supervisor (ingress and the watchdog,
+// on its hassio network) and the box itself reach the panel: with host
+// networking (to find cameras, ADR 0063) it listens on the home network too,
+// and the panel shows the pairing code.
+func panelGuard(next http.Handler) http.Handler {
+	if os.Getenv("SUPERVISOR_TOKEN") == "" {
+		return next
+	}
+	_, hassio, _ := net.ParseCIDR("172.30.32.0/23")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		ip := net.ParseIP(host)
+		if ip == nil || !(ip.IsLoopback() || hassio.Contains(ip)) {
+			http.Error(w, "open this from Home Assistant", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func envOr(key, fallback string) string {

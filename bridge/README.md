@@ -38,6 +38,7 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--state-dir` | `SENSEPLANE_STATE_DIR` | Without `--token`: pair with a code and keep the token here |
 | `--box-name` | `SENSEPLANE_BOX_NAME` | The name a person sees when pairing (default `Home Assistant`) |
 | `--matter-url` | `MATTER_URL` | Read Matter devices through this Matter Server (`ws://localhost:5580/ws`) |
+| `--find-cameras` | `SENSEPLANE_FIND_CAMERAS` | Look for ONVIF cameras on the network to pick in the console (default on; `false` turns it off) |
 
 Passwords in RTSP URLs never appear in logs or in what the bridge reports.
 
@@ -49,6 +50,34 @@ take (numbers such as temperature and power, door, motion and leak sensors,
 switches, lights and locks, doorbells and buttons; `spec/home-assistant/readings.json`)
 with their room, and sends readings only of the ones a person chose in the
 console. It never calls a Home Assistant service.
+
+## Cameras on the network
+
+The bridge looks for ONVIF cameras on its network (WS-Discovery: a probe to
+`239.255.255.250:3702` every 5 minutes, and when someone presses "Look
+again") and lists them with the API, with their maker and model
+(`GetDeviceInformation` when the camera answers it without credentials, else
+the probe's scopes). With Home Assistant, each is named after the camera
+entity on the same address or MAC (device registry `configuration_url` and
+`connections`), with its room; Home Assistant cameras without a match are
+listed too, to add by address. A person picks one in the console and enters
+its username and password; they reach the bridge sealed through the command
+channel (`onvif_add_camera`), and the bridge asks the camera for its profiles
+and stream URI (WS-UsernameToken digest, HTTP digest if the camera wants it),
+takes the largest H.264 profile within the plan's `max_resolution` (usually
+the substream on 720p) and adds it like `--rtsp`. Nothing is transcoded
+(ADR 0063).
+
+Cameras answer the probe on the bridge's own address, so the bridge must be
+on the home network itself: the add-on runs with host networking, and the
+container needs `--network host` (Linux; Docker Desktop's VM network can't
+see the home network, so there `--find-cameras` finds nothing and cameras are
+added by address):
+
+```sh
+docker run -d --restart unless-stopped --name senseplane-bridge --network host -v senseplane-bridge:/data \
+  ghcr.io/senseplane-ai/bridge:0.3 --api https://senseplane.example.com --state-dir /data --listen 127.0.0.1:8099
+```
 
 ## Matter
 
@@ -93,7 +122,9 @@ RTSP → Annex B access units with exact durations), `internal/whip` (WHIP
 client), `internal/homeassistant` (websocket client and state → reading
 mapping), `internal/sensors` (batched sending with backoff),
 `internal/pairing` (codes and the state file), `internal/matter` (a Matter
-Server client and the attribute → reading mapping), `internal/health`.
+Server client and the attribute → reading mapping), `internal/onvif`
+(WS-Discovery and the device and media calls; `onviftest` is a fake camera
+for tests), `internal/health`.
 
 ## WHIP client
 

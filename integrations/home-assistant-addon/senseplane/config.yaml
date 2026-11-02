@@ -16,6 +16,10 @@ startup: application
 boot: auto
 # Reads states, areas and entities; never calls a service.
 homeassistant_api: true
+# On the home network itself, to find ONVIF cameras (a multicast probe that
+# cameras answer directly, ADR 0063). The panel still answers only the
+# Supervisor. Nothing listens for the internet.
+host_network: true
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:eye-outline

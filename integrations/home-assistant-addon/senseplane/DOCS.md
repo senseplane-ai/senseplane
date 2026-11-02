@@ -19,9 +19,24 @@ internet reaches into your home.
    can change it any time. Each room's sensors appear in Senseplane as one
    sensor, named after the room in Home Assistant.
 
-To add an IP camera through this box, open the box in Senseplane (**Cameras
-→** your box) and add the camera's RTSP address; the add-on pulls the stream
-on your network and sends it on, without re-encoding it.
+## Cameras
+
+Open the box in Senseplane (**Cameras →** your box). Under **Found on your
+network** it lists the IP cameras it found on your network (cameras with
+ONVIF, which most have; on some, such as Tapo, turn it on by creating a camera
+account in the camera's app), named after the same camera in Home Assistant
+when there is one: "Front door (Kitchen) · Tapo C200 at 192.168.1.40". Choose
+**Add**, enter the camera's username and password, and the add-on asks the
+camera for its stream and starts sending it. It picks the stream that fits
+your plan (often the camera's smaller second stream) and never re-encodes it.
+The password goes to the add-on only and is stored encrypted.
+
+A camera that isn't listed (no ONVIF, or a cloud camera that only Home
+Assistant can show) can still be added with its RTSP address on the same page.
+
+The add-on runs on the host network so it can find cameras: the search is a
+message every camera on the network hears, and they answer the add-on
+directly. Its panel still opens only from Home Assistant.
 
 ## What is sent
 

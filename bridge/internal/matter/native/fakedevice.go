@@ -13,22 +13,23 @@ import (
 	"net/netip"
 	"sort"
 	"sync"
-	"testing"
 	"time"
 )
 
-// fakeDevice is a Matter device on localhost, written from the spec: a plug
-// with OnOff and power measurement, and a two-position switch (a button).
-// It is strict where devices are (the fail-safe must be armed; CASE checks
-// the destination id and the controller's certificate chain) unless lenient.
-type fakeDevice struct {
-	t        *testing.T
+// FakeDevice is a Matter device written from the spec, for tests and for
+// developing without hardware (cmd/matter-fake-device): a plug with OnOff
+// and power measurement, and a two-position switch (a button). It is strict
+// where devices are (the fail-safe must be armed; CASE checks the
+// destination id and the controller's certificate chain) unless Lenient.
+type FakeDevice struct {
+	logf     func(string, ...any)
 	tr       *Transport
 	passcode uint32
 	disc     uint16
 	salt     []byte
 	iter     int
-	lenient  bool
+	// Lenient accepts controllers that skip the fail-safe or mark their certificate as a CA.
+	Lenient bool
 
 	mu        sync.Mutex
 	armed     bool
@@ -54,23 +55,43 @@ type fakeSub struct {
 	id uint64
 }
 
-func newFakeDevice(t *testing.T, port int, passcode uint32, disc uint16) *fakeDevice {
+// NewFakeDevice starts a device in pairing mode on this UDP port (0: any).
+func NewFakeDevice(port int, passcode uint32, discriminator uint16, logf func(string, ...any)) (*FakeDevice, error) {
 	tr, err := Listen(port, nil)
 	if err != nil {
-		t.Skipf("can't listen on %d: %v", port, err)
+		return nil, err
 	}
-	d := &fakeDevice{t: t, tr: tr, passcode: passcode, disc: disc, salt: random(32), iter: 1000, powerMW: 12300}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	d := &FakeDevice{logf: logf, tr: tr, passcode: passcode, disc: discriminator, salt: random(32), iter: 1000, powerMW: 12300}
 	d.attrs = d.attributes()
 	tr.OnUnsecured(func(s *Session) { s.OnExchange(d.handshake) })
-	t.Cleanup(tr.Close)
-	return d
+	return d, nil
 }
 
-func (d *fakeDevice) addr() netip.AddrPort {
+// Close stops the device.
+func (d *FakeDevice) Close() { d.tr.Close() }
+
+// Addr is the device's address on localhost.
+func (d *FakeDevice) Addr() netip.AddrPort {
 	return netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(d.tr.Port()))
 }
 
-func (d *fakeDevice) attributes() map[Path]func(*TLV, int) {
+// Port is the device's UDP port.
+func (d *FakeDevice) Port() int { return d.tr.Port() }
+
+// Code is the device's 11-digit pairing code.
+func (d *FakeDevice) Code() string { return manualCode(d.passcode, d.disc) }
+
+// On is whether the plug is on.
+func (d *FakeDevice) On() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.on
+}
+
+func (d *FakeDevice) attributes() map[Path]func(*TLV, int) {
 	devType := func(types ...uint64) func(*TLV, int) {
 		return func(w *TLV, tag int) {
 			w.Array(tag)
@@ -108,7 +129,7 @@ func (d *fakeDevice) attributes() map[Path]func(*TLV, int) {
 
 // --- Handshakes.
 
-func (d *fakeDevice) handshake(ex *Exchange) {
+func (d *FakeDevice) handshake(ex *Exchange) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	m, err := ex.Receive(ctx)
@@ -123,7 +144,7 @@ func (d *fakeDevice) handshake(ex *Exchange) {
 	}
 }
 
-func (d *fakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
+func (d *FakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
 	defer ex.Close()
 	r, err := DecodeTLV(req.Payload)
 	if err != nil {
@@ -177,7 +198,7 @@ func (d *fakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
 	_ = ex.Send(protoSecureChannel, opStatus, statusReport(0, protoSecureChannel, 0))
 }
 
-func (d *fakeDevice) caseResponder(ctx context.Context, ex *Exchange, m Message) {
+func (d *FakeDevice) caseResponder(ctx context.Context, ex *Exchange, m Message) {
 	defer ex.Close()
 	d.mu.Lock()
 	noc, key, rootPub, ipk, fabricID, nodeID := d.noc, d.opKey, d.rootPub, d.ipk, d.fabricID, d.nodeID
@@ -229,14 +250,14 @@ func (d *fakeDevice) caseResponder(ctx context.Context, ex *Exchange, m Message)
 	tbe3, _ := DecodeTLV(plain)
 	creds := Credentials{RootPub: rootPub, FabricID: fabricID}
 	peerPub, err := checkNOC(creds, tbe3.FieldBytes(1), tbe3.FieldBytes(2), 0)
-	if err != nil && d.lenient {
+	if err != nil && d.Lenient {
 		// gomat's controller certificate is marked as a CA; the reference devices accept it.
 		if pc, perr := parseCert(tbe3.FieldBytes(1)); perr == nil && pc.verifiedBy(rootPub) && pc.fabric == fabricID {
 			peerPub, err = pc.spec.pub, nil
 		}
 	}
 	if err != nil || !verifyRaw(peerPub, tbs(tbe3.FieldBytes(1), nil, s1.FieldBytes(4), ephPub), tbe3.FieldBytes(3)) {
-		d.t.Logf("fake device: Sigma3 rejected: %v", err)
+		d.logf("fake device: Sigma3 rejected: %v", err)
 		_ = ex.Send(protoSecureChannel, opStatus, statusReport(1, protoSecureChannel, 2))
 		return
 	}
@@ -255,7 +276,7 @@ func (d *fakeDevice) caseResponder(ctx context.Context, ex *Exchange, m Message)
 
 // --- The Interaction Model, server side.
 
-func (d *fakeDevice) serve(ex *Exchange, operational bool) {
+func (d *FakeDevice) serve(ex *Exchange, operational bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	defer ex.Close()
@@ -292,7 +313,7 @@ func (d *fakeDevice) serve(ex *Exchange, operational bool) {
 	}
 }
 
-func (d *fakeDevice) matching(req Elem, tag int) []Path {
+func (d *FakeDevice) matching(req Elem, tag int) []Path {
 	var out []Path
 	paths, _ := req.Field(tag)
 	for _, p := range paths.Items {
@@ -344,7 +365,7 @@ func attrReport(w *TLV, p Path, listIndexNull bool, value func(*TLV, int)) {
 
 // report sends values in chunks of three (lists as an empty list, then one
 // item at a time), as devices do when a report doesn't fit one message.
-func (d *fakeDevice) report(ctx context.Context, ex *Exchange, paths []Path, sub uint64, suppressLast, moreAfter bool) error {
+func (d *FakeDevice) report(ctx context.Context, ex *Exchange, paths []Path, sub uint64, suppressLast, moreAfter bool) error {
 	type item struct {
 		p      Path
 		append bool
@@ -440,14 +461,14 @@ func invokeResult(ex *Exchange, path Elem, respCmd int, fields func(*TLV), statu
 	return ex.Send(protoIM, opInvokeResponse, w.Bytes())
 }
 
-func (d *fakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
+func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
 	cmdData, _ := req.At(2, 0)
 	path, _ := cmdData.Field(0)
 	fields, _ := cmdData.Field(1)
 	cl, _ := path.FieldU(1)
 	cmd, _ := path.FieldU(2)
 	d.mu.Lock()
-	armed, lenient := d.armed, d.lenient
+	armed, lenient := d.armed, d.Lenient
 	d.mu.Unlock()
 	needArmed := func() bool {
 		if !armed && !lenient {
@@ -483,7 +504,7 @@ func (d *fakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
 		}
 		root, err := parseCert(fields.FieldBytes(0))
 		if err != nil || !root.spec.isCA || !root.verifiedBy(root.spec.pub) {
-			d.t.Logf("fake device: root rejected: %v", err)
+			d.logf("fake device: root rejected: %v", err)
 			_ = invokeResult(ex, path, 0, nil, 0x87)
 			return
 		}
@@ -502,7 +523,7 @@ func (d *fakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
 		status := uint64(0)
 		switch {
 		case err != nil || rootPub == nil || !noc.verifiedBy(rootPub):
-			d.t.Logf("fake device: NOC rejected: %v", err)
+			d.logf("fake device: NOC rejected: %v", err)
 			status = 3 // InvalidNOC
 		case opKey == nil || !noc.spec.pub.Equal(&opKey.PublicKey):
 			status = 1 // InvalidPublicKey
@@ -526,27 +547,35 @@ func (d *fakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
 		d.mu.Unlock()
 		_ = invokeResult(ex, path, 5, func(w *TLV) { w.Uint(0, 0) }, -1)
 	case cl == 6 && (cmd == 0 || cmd == 1):
-		d.set(cmd == 1)
+		d.Set(cmd == 1)
 		_ = invokeResult(ex, path, 0, nil, 0)
 	default:
 		_ = invokeResult(ex, path, 0, nil, 0x81)
 	}
 }
 
-// set changes OnOff and reports it to subscribers.
-func (d *fakeDevice) set(on bool) {
+// Set changes OnOff and reports it to subscribers.
+func (d *FakeDevice) Set(on bool) {
 	d.mu.Lock()
 	d.on = on
 	d.mu.Unlock()
 	d.push([]Path{{1, 6, 0}}, nil)
 }
 
-// press sends a short press (InitialPress, ShortRelease) from the switch.
-func (d *fakeDevice) press() {
+// SetPower changes the measured power (milliwatts) and reports it.
+func (d *FakeDevice) SetPower(mw int64) {
+	d.mu.Lock()
+	d.powerMW = mw
+	d.mu.Unlock()
+	d.push([]Path{{1, 144, 8}}, nil)
+}
+
+// Press sends a short press (InitialPress, ShortRelease) from the switch.
+func (d *FakeDevice) Press() {
 	d.push(nil, []int{0, 3})
 }
 
-func (d *fakeDevice) push(paths []Path, events []int) {
+func (d *FakeDevice) push(paths []Path, events []int) {
 	d.mu.Lock()
 	subs := append([]*fakeSub(nil), d.subs...)
 	d.mu.Unlock()
@@ -593,17 +622,7 @@ func (d *fakeDevice) push(paths []Path, events []int) {
 		cancel()
 		ex.Close()
 		if err != nil || m.Opcode != opStatusResponse {
-			d.t.Logf("fake device: report not answered: %v", err)
+			d.logf("fake device: report not answered: %v", err)
 		}
 	}
-}
-
-// fixedResolver answers with the fake device's address.
-type fixedResolver struct{ addr netip.AddrPort }
-
-func (r fixedResolver) Commissionable(context.Context, uint16, bool) ([]netip.AddrPort, error) {
-	return []netip.AddrPort{r.addr}, nil
-}
-func (r fixedResolver) Operational(context.Context, string) ([]netip.AddrPort, error) {
-	return []netip.AddrPort{r.addr}, nil
 }

@@ -19,6 +19,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/netip"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/bridge"
 	"github.com/senseplane-ai/senseplane/bridge/internal/camera"
 	"github.com/senseplane-ai/senseplane/bridge/internal/health"
+	"github.com/senseplane-ai/senseplane/bridge/internal/matter/native"
 	"github.com/senseplane-ai/senseplane/bridge/internal/onvif"
 	"github.com/senseplane-ai/senseplane/bridge/internal/pairing"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
@@ -61,6 +64,7 @@ type Box struct {
 	camName  string
 	camAdded bool
 	whipBase string
+	matter   *native.Controller
 }
 
 type status struct {
@@ -75,6 +79,8 @@ type status struct {
 	Found   int                `json:"found"`
 	// PhoneCamera is the source id of this phone's own camera, once added.
 	PhoneCamera string `json:"phone_camera,omitempty"`
+	// Matter is how many Matter devices this phone has added.
+	Matter int `json:"matter"`
 }
 
 // NewBox makes a box that talks to the Senseplane at apiURL and keeps its pairing in stateDir.
@@ -84,6 +90,8 @@ func NewBox(apiURL, stateDir, name string, l Listener) *Box {
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		status: status{State: "stopped", Cameras: []api.CameraHealth{}},
 		frames: newFanout(), phone: newLink(), bt: newBluetooth(),
+		// The phone is its own Matter controller (ADR 0065); it does nothing until a device is added.
+		matter: &native.Controller{StateDir: filepath.Join(stateDir, "matter")},
 	}
 }
 
@@ -98,6 +106,34 @@ func (b *Box) SetWHIPBase(url string) {
 // SetLogger sends the box's log lines to the app (for its logcat), one line per call.
 func (b *Box) SetLogger(w LineWriter) {
 	b.log = slog.New(slog.NewTextHandler(lineWriter{w}, nil))
+	b.matter.Log = b.log
+}
+
+// SetMatterAddress makes the Matter controller find every device at this
+// address ("host:port") instead of over mDNS (development: an emulator can't
+// see the home network). Call before Start.
+func (b *Box) SetMatterAddress(addr string) error {
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return err
+	}
+	b.matter.Resolver = native.Fixed{Addr: ap}
+	return nil
+}
+
+// AddMatterDevice adds a Matter device with its pairing code (11 digits or an
+// MT: QR text), shared from its app or Apple Home, Google Home or Alexa. It
+// returns {"node_id","sensors"} as JSON; its sensors are then listed to choose from.
+func (b *Box) AddMatterDevice(code string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	res, err := b.matter.Commission(ctx, code)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(res)
+	b.set(func(s *status) { s.Matter = b.matter.Devices() })
+	return string(out), nil
 }
 
 // LineWriter takes one log line.
@@ -201,8 +237,16 @@ func (b *Box) run(ctx context.Context, token string) bool {
 	refused := false
 	br := bridge.New(bridge.Options{
 		Client: client, Pull: b.pull, Dial: dial, Version: "android-" + health.Version, Log: b.log, WHIPBase: b.whipBase,
-		Sensors:   map[string]bridge.SensorLink{"phone": b.phone, "bluetooth": b.bt},
-		Finder:    &bridge.Finder{Discover: discover},
+		Sensors: map[string]bridge.SensorLink{"phone": b.phone, "bluetooth": b.bt},
+		Finder:  &bridge.Finder{Discover: discover},
+		Matter:  b.matter,
+		Commands: map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			code, _ := args["code"].(string)
+			if code == "" {
+				return nil, errors.New("no pairing code")
+			}
+			return b.matter.Commission(ctx, code)
+		}},
 		OnRefused: func() { refused = true; cancel() },
 	})
 	b.mu.Lock()
@@ -237,9 +281,11 @@ func (b *Box) report(ctx context.Context) {
 		}
 		cams := br.Cameras()
 		listed, sending := br.SensorCounts()
+		matterDevices := b.matter.Devices()
 		b.set(func(s *status) {
 			s.Cameras, s.Sensors, s.Sending = cams, listed, sending
 			s.Found = br.FoundCount()
+			s.Matter = matterDevices
 		})
 	}
 }

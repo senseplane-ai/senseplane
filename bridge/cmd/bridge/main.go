@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,6 +38,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/camera"
 	"github.com/senseplane-ai/senseplane/bridge/internal/health"
 	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
+	"github.com/senseplane-ai/senseplane/bridge/internal/matter/native"
 	"github.com/senseplane-ai/senseplane/bridge/internal/onvif"
 	"github.com/senseplane-ai/senseplane/bridge/internal/pairing"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
@@ -59,7 +61,7 @@ func main() {
 	flag.Var(&rtsps, "rtsp", "camera RTSP URL to claim or add (repeatable; env SENSEPLANE_RTSP, comma-separated)")
 	haURL := flag.String("ha-url", os.Getenv("HA_URL"), "read sensors from this Home Assistant, e.g. http://homeassistant.local:8123 (env HA_URL; as an add-on the Supervisor's is used)")
 	haToken := flag.String("ha-token", os.Getenv("HA_TOKEN"), "a Home Assistant long-lived access token (env HA_TOKEN)")
-	matterURL := flag.String("matter-url", os.Getenv("MATTER_URL"), "read Matter devices through this Matter Server, e.g. ws://localhost:5580/ws (env MATTER_URL)")
+	matterURL := flag.String("matter-url", os.Getenv("MATTER_URL"), "read Matter devices through this Matter Server, e.g. ws://localhost:5580/ws, or \"builtin\" for the bridge's own controller, which keeps its keys in --state-dir (env MATTER_URL)")
 	findCameras := flag.Bool("find-cameras", os.Getenv("SENSEPLANE_FIND_CAMERAS") != "false", "look for ONVIF cameras on the local network so they can be picked in the console (env SENSEPLANE_FIND_CAMERAS=false turns it off; needs host networking)")
 	stateDir := flag.String("state-dir", os.Getenv("SENSEPLANE_STATE_DIR"), "keep the token got by pairing here (env SENSEPLANE_STATE_DIR; the add-on uses /data)")
 	boxName := flag.String("box-name", envOr("SENSEPLANE_BOX_NAME", "Home Assistant"), "the name a person sees when pairing")
@@ -86,6 +88,10 @@ func main() {
 	}
 	if v := os.Getenv("SENSEPLANE_RTSP"); v != "" && len(rtsps) == 0 {
 		rtsps = strings.Split(v, ",")
+	}
+	if *matterURL == "builtin" && *stateDir == "" {
+		fmt.Fprintln(os.Stderr, "--matter-url builtin keeps the Matter keys in --state-dir; set one")
+		os.Exit(2)
 	}
 	// Without a token the box pairs with a code (ADR 0061), keeping the token in --state-dir.
 	if *apiURL == "" || (!strings.HasPrefix(*token, "brg_") && *stateDir == "") {
@@ -169,7 +175,7 @@ func main() {
 			mu.Unlock()
 		}
 		paired := !strings.HasPrefix(*token, "brg_")
-		refused := run(ctx, *apiURL, tok, paired, rtsps, *name, *whipBase, ha, *matterURL, *findCameras, log, func(b *bridge.Bridge) {
+		refused := run(ctx, *apiURL, tok, paired, rtsps, *name, *whipBase, ha, *matterURL, *stateDir, *findCameras, log, func(b *bridge.Bridge) {
 			mu.Lock()
 			running = b
 			mu.Unlock()
@@ -187,7 +193,7 @@ func main() {
 }
 
 // run relays and reads until ctx ends; a paired box also stops when the API refuses its token (true).
-func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, matterURL string, findCameras bool, log *slog.Logger, started func(*bridge.Bridge)) bool {
+func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, matterURL, stateDir string, findCameras bool, log *slog.Logger, started func(*bridge.Bridge)) bool {
 	client := api.New(apiURL, token)
 
 	for _, u := range rtsps {
@@ -207,7 +213,15 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 	o := bridge.Options{Client: client, Pull: camera.Pull, Dial: dialWHIP, Version: health.Version, WHIPBase: whipBase, Log: log, HomeAssistant: ha}
 	if matterURL != "" {
 		// Matter devices are sensors too, and a person can add one with a code shared from its app (ADR 0062).
-		mc := &matter.Controller{URL: matterURL, Log: log}
+		var mc interface {
+			bridge.MatterLink
+			Commission(ctx context.Context, code string) (map[string]any, error)
+		}
+		if matterURL == "builtin" {
+			mc = &native.Controller{StateDir: filepath.Join(stateDir, "matter"), Log: log} // ADR 0065
+		} else {
+			mc = &matter.Controller{URL: matterURL, Log: log}
+		}
 		o.Matter = mc
 		o.Commands = map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			code, _ := args["code"].(string)

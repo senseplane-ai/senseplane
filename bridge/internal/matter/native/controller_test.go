@@ -6,6 +6,8 @@ package native
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -85,7 +87,7 @@ func waitFor(t *testing.T, what string, f func() bool) {
 func TestAddsADeviceAndReadsIt(t *testing.T) {
 	dev := newFakeDevice(t, 0, 20202021, 3840)
 	dir := t.TempDir()
-	c := &Controller{StateDir: dir, Resolver: fixedResolver{dev.addr()}}
+	c := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -131,11 +133,11 @@ func TestAddsADeviceAndReadsIt(t *testing.T) {
 	if name != "Fake plug" {
 		t.Fatalf("named %q", name)
 	}
-	dev.set(true)
+	dev.Set(true)
 	waitFor(t, "the switch turning on", func() bool {
 		return rec.find(func(r api.Reading) bool { return r.Sense == "switch" && r.State != nil && *r.State })
 	})
-	dev.press()
+	dev.Press()
 	waitFor(t, "the button press", func() bool {
 		return rec.find(func(r api.Reading) bool { return r.Sense == "button" })
 	})
@@ -157,7 +159,7 @@ func TestAddsADeviceAndReadsIt(t *testing.T) {
 	<-runDone
 
 	// A new controller on the same state directory knows the device and reconnects.
-	c2 := &Controller{StateDir: dir, Resolver: fixedResolver{dev.addr()}}
+	c2 := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}}
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	rec2 := &recorder{}
@@ -169,12 +171,12 @@ func TestAddsADeviceAndReadsIt(t *testing.T) {
 
 func TestAnotherControllersCertificatesAreRefused(t *testing.T) {
 	dev := newFakeDevice(t, 0, 20202021, 3840)
-	c := &Controller{StateDir: t.TempDir(), Resolver: fixedResolver{dev.addr()}}
+	c := &Controller{StateDir: t.TempDir(), Resolver: Fixed{dev.Addr()}}
 	ctx := context.Background()
 	if _, err := c.Commission(ctx, manualCode(20202021, 3840)); err != nil {
 		t.Fatal(err)
 	}
-	other := &Controller{StateDir: t.TempDir(), Resolver: fixedResolver{dev.addr()}}
+	other := &Controller{StateDir: t.TempDir(), Resolver: Fixed{dev.Addr()}}
 	f, err := other.load()
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +189,7 @@ func TestAnotherControllersCertificatesAreRefused(t *testing.T) {
 	c.mu.Lock()
 	node := c.f.Nodes[0].NodeID
 	c.mu.Unlock()
-	if _, err := CASE(ctx, tr, udpAddr(dev.addr()), f.creds, node); err == nil {
+	if _, err := CASE(ctx, tr, udpAddr(dev.Addr()), f.creds, node); err == nil {
 		t.Fatal("a controller from another fabric got a session")
 	}
 }
@@ -196,10 +198,7 @@ func TestAnotherControllersCertificatesAreRefused(t *testing.T) {
 // adding the fake device shows the fake speaks PASE, CASE and the
 // certificates as real devices do, so the tests above mean something.
 func TestAReferenceControllerAddsTheFakeDevice(t *testing.T) {
-	dev := newFakeDevice(t, 5540, 20202021, 3840)
-	dev.lenient = true // gomat doesn't arm the fail-safe
-	dir := t.TempDir()
-	t.Chdir(dir)
+	t.Chdir(t.TempDir())
 	if err := mkdir("pem"); err != nil {
 		t.Fatal(err)
 	}
@@ -214,14 +213,60 @@ func TestAReferenceControllerAddsTheFakeDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	fabric := gomat.NewFabric(1, cm)
-	if err := gomat.Commission(fabric, net.ParseIP("127.0.0.1"), 20202021, 100, 500); err != nil {
-		t.Fatalf("gomat couldn't add the fake device: %v", err)
+	// gomat doesn't pad r and s in its signatures, so about one in a hundred
+	// is a byte short and (rightly) refused; a fresh one is signed each time.
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		dev, derr := NewFakeDevice(5540, 20202021, 3840, t.Logf)
+		if derr != nil {
+			t.Skipf("can't listen on 5540: %v", derr)
+		}
+		dev.Lenient = true // gomat doesn't arm the fail-safe
+		err = gomat.Commission(fabric, net.ParseIP("127.0.0.1"), 20202021, 100, 500)
+		dev.mu.Lock()
+		ok := err == nil && dev.done && dev.nodeID == 500 && dev.sessions == 1
+		dev.mu.Unlock()
+		dev.Close()
+		if ok {
+			return
+		}
 	}
-	dev.mu.Lock()
-	defer dev.mu.Unlock()
-	if !dev.done || dev.nodeID != 500 || dev.sessions != 1 {
-		t.Fatalf("done=%v node=%d sessions=%d", dev.done, dev.nodeID, dev.sessions)
-	}
+	t.Fatalf("gomat couldn't add the fake device: %v", err)
 }
 
-func mkdir(p string) error { return osMkdir(p) }
+func mkdir(p string) error { return os.Mkdir(p, 0o700) }
+
+func TestIdleUntilADeviceIsAdded(t *testing.T) {
+	dev := newFakeDevice(t, 0, 20202021, 3840)
+	dir := t.TempDir()
+	c := &Controller{StateDir: dir, Resolver: Fixed{dev.Addr()}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &recorder{}
+	go c.Run(ctx, rec)
+	time.Sleep(300 * time.Millisecond)
+	c.mu.Lock()
+	idle := c.t == nil && c.f == nil
+	c.mu.Unlock()
+	if !idle || c.Devices() != 0 {
+		t.Fatal("the controller opened a socket or made keys with no devices")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "matter.json")); err == nil {
+		t.Fatal("keys were made with no devices")
+	}
+	if _, err := c.Commission(ctx, manualCode(20202021, 3840)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "readings once a device is added", func() bool {
+		return rec.find(func(r api.Reading) bool { return r.Sense == "power" })
+	})
+}
+
+func newFakeDevice(t *testing.T, port int, passcode uint32, disc uint16) *FakeDevice {
+	d, err := NewFakeDevice(port, passcode, disc, t.Logf)
+	if err != nil {
+		t.Skipf("can't listen on %d: %v", port, err)
+	}
+	t.Cleanup(d.Close)
+	return d
+}

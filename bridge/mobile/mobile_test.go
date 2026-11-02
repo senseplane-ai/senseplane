@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/senseplane-ai/senseplane/bridge/internal/matter/native"
 	"github.com/senseplane-ai/senseplane/bridge/internal/onvif"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 )
@@ -229,4 +230,47 @@ func TestAPhoneBoxPairsRelaysItsCameraAndSendsChosenSensors(t *testing.T) {
 	if !strings.Contains(box.Status(), `"state":"stopped"`) {
 		t.Fatalf("status %s", box.Status())
 	}
+}
+
+func TestAPhoneAddsAMatterDevice(t *testing.T) {
+	f := &fakeAPI{}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	discover = func(context.Context) ([]onvif.Found, error) { return nil, nil }
+	dev, err := native.NewFakeDevice(0, 20202021, 3840, t.Logf)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer dev.Close()
+	st := &statuses{}
+	box := NewBox(srv.URL, t.TempDir(), "Kitchen phone", st)
+	if err := box.SetMatterAddress(dev.Addr().String()); err != nil {
+		t.Fatal(err)
+	}
+	box.Start()
+	defer box.Stop()
+	waitFor(t, "running", func() bool { return st.seen(func(m map[string]any) bool { return m["state"] == "running" }) })
+
+	if _, err := box.AddMatterDevice("1234"); err == nil || !strings.Contains(err.Error(), "pairing code") {
+		t.Fatalf("not a code: %v", err)
+	}
+	res, err := box.AddMatterDevice(dev.Code())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, `"sensors":3`) {
+		t.Fatalf("added %s", res)
+	}
+	waitFor(t, "the plug's sensors listed", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		n := 0
+		for _, e := range f.entities {
+			if strings.HasPrefix(e["entity_id"].(string), "matter.") {
+				n++
+			}
+		}
+		return n == 3
+	})
+	waitFor(t, "the device counted", func() bool { return st.seen(func(m map[string]any) bool { return m["matter"] == 1.0 }) })
 }

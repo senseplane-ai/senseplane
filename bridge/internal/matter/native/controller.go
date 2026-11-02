@@ -130,6 +130,34 @@ type Controller struct {
 	f     *fabric
 	t     *Transport
 	added chan uint64
+	wake  chan struct{}
+}
+
+// Devices is how many devices have been added.
+func (c *Controller) Devices() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.f != nil {
+		return len(c.f.Nodes)
+	}
+	b, err := os.ReadFile(c.file())
+	if err != nil {
+		return 0
+	}
+	var f fabric
+	if json.Unmarshal(b, &f) != nil {
+		return 0
+	}
+	return len(f.Nodes)
+}
+
+func (c *Controller) wakeChan() chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wake == nil {
+		c.wake = make(chan struct{}, 1)
+	}
+	return c.wake
 }
 
 func (c *Controller) file() string { return filepath.Join(c.StateDir, "matter.json") }
@@ -202,6 +230,18 @@ func (c *Controller) transport() (*Transport, error) {
 }
 
 func udpAddr(ap netip.AddrPort) *net.UDPAddr { return net.UDPAddrFromAddrPort(ap) }
+
+// Fixed finds every device at one address (development: an emulator can't
+// see the home network's mDNS, so a device on the computer is given by address).
+type Fixed struct{ Addr netip.AddrPort }
+
+func (r Fixed) Commissionable(context.Context, uint16, bool) ([]netip.AddrPort, error) {
+	return []netip.AddrPort{r.Addr}, nil
+}
+
+func (r Fixed) Operational(context.Context, string) ([]netip.AddrPort, error) {
+	return []netip.AddrPort{r.Addr}, nil
+}
 
 // Commission adds a device with its pairing code (an 11-digit code or an MT:
 // QR text), over the network: from another app's "share" or "add to another
@@ -277,6 +317,10 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 	c.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	select {
+	case c.wakeChan() <- struct{}{}:
+	default:
 	}
 	if ch != nil {
 		select {
@@ -384,8 +428,21 @@ type event struct {
 	events    []EventValue
 }
 
-// Run keeps a session with every device added, until ctx ends.
+// Run keeps a session with every device added, until ctx ends. Until the
+// first device is added it opens nothing: no socket, no keys, no work.
 func (c *Controller) Run(ctx context.Context, h matter.Handler) {
+	h.Connected(true)
+	defer h.Connected(false)
+	wake := c.wakeChan()
+	for c.Devices() == 0 {
+		h.Nodes(0)
+		h.Entities([]api.Entity{})
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+		}
+	}
 	f, err := c.load()
 	if err != nil {
 		c.log().Error("Matter controller can't start", "err", err)
@@ -438,8 +495,6 @@ func (c *Controller) Run(ctx context.Context, h matter.Handler) {
 		start(id)
 	}
 	c.log().Info("Matter controller running", "devices", len(ids), "port", t.Port())
-	h.Connected(true)
-	defer h.Connected(false)
 	publish()
 	for {
 		select {

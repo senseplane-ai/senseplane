@@ -60,6 +60,7 @@ type Box struct {
 	camOn    bool
 	camName  string
 	camAdded bool
+	whipBase string
 }
 
 type status struct {
@@ -72,6 +73,8 @@ type status struct {
 	Sensors int                `json:"sensors"`
 	Sending int                `json:"sending"`
 	Found   int                `json:"found"`
+	// PhoneCamera is the source id of this phone's own camera, once added.
+	PhoneCamera string `json:"phone_camera,omitempty"`
 }
 
 // NewBox makes a box that talks to the Senseplane at apiURL and keeps its pairing in stateDir.
@@ -82,6 +85,14 @@ func NewBox(apiURL, stateDir, name string, l Listener) *Box {
 		status: status{State: "stopped", Cameras: []api.CameraHealth{}},
 		frames: newFanout(), phone: newLink(), bt: newBluetooth(),
 	}
+}
+
+// SetWHIPBase sends camera video to this base URL instead of the media plane's
+// public one (development: an emulator reaches the host as 10.0.2.2). Call before Start.
+func (b *Box) SetWHIPBase(url string) {
+	b.mu.Lock()
+	b.whipBase = strings.TrimRight(url, "/")
+	b.mu.Unlock()
 }
 
 // SetLogger sends the box's log lines to the app (for its logcat), one line per call.
@@ -189,7 +200,7 @@ func (b *Box) run(ctx context.Context, token string) bool {
 	defer cancel()
 	refused := false
 	br := bridge.New(bridge.Options{
-		Client: client, Pull: b.pull, Dial: dial, Version: "android-" + health.Version, Log: b.log,
+		Client: client, Pull: b.pull, Dial: dial, Version: "android-" + health.Version, Log: b.log, WHIPBase: b.whipBase,
 		Sensors:   map[string]bridge.SensorLink{"phone": b.phone, "bluetooth": b.bt},
 		Finder:    &bridge.Finder{Discover: discover},
 		OnRefused: func() { refused = true; cancel() },
@@ -250,10 +261,12 @@ func (b *Box) SetCamera(on bool, name string) {
 func (b *Box) addCamera(ctx context.Context, client *api.Client, name string) {
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	if _, err := client.Claim(cctx, PhoneCameraURL, name); err != nil {
+	cam, err := client.Claim(cctx, PhoneCameraURL, name)
+	if err != nil {
 		b.set(func(s *status) { s.Error = "couldn't add this phone's camera: " + err.Error() })
 		return
 	}
+	b.set(func(s *status) { s.PhoneCamera = cam.SourceID })
 	b.mu.Lock()
 	b.camAdded = true
 	br := b.running

@@ -159,6 +159,7 @@ func TestAPhoneBoxPairsRelaysItsCameraAndSendsChosenSensors(t *testing.T) {
 	})
 	waitFor(t, "running", func() bool { return st.seen(func(m map[string]any) bool { return m["state"] == "running" }) })
 	waitFor(t, "the phone's camera added", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.camera })
+	waitFor(t, "its source in the status", func() bool { return st.seen(func(m map[string]any) bool { return m["phone_camera"] == "src_phone" }) })
 
 	// Frames from Android's encoder reach the WHIP push (keyframe first).
 	stop := make(chan struct{})

@@ -163,6 +163,18 @@ are in [`spec/senses.json`](../spec/senses.json). A watch such as "Warn me if
 the temperature is above 27 for 5 min" or "Tell me if the fridge door is left
 open for 5 minutes" on that source fires a `reading.threshold` event.
 
+### A Home Assistant box
+
+On Home Assistant OS (a Green, a Yellow, a VM), install the Senseplane add-on
+from `https://github.com/senseplane-ai/home-assistant-addons`, set its server
+to your Senseplane address and open its panel: it shows a code. In the
+console, **Cameras → Add camera → Home Assistant → Enter the code**, then
+choose which sensors Senseplane gets; each room's sensors become one sensor
+source. Add IP cameras on the box's page with their RTSP address. Without
+add-ons, run the bridge container with `--ha-url`, `--ha-token` and
+`--state-dir` instead ([bridge/README.md](../bridge/README.md)); with a Matter
+Server, `--matter-url` adds Matter devices too.
+
 ## 4. Receive webhooks
 
 Run a tiny receiver that verifies signatures (save as `hook.mjs`):

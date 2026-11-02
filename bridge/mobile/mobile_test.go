@@ -57,9 +57,26 @@ func (f *fakeAPI) handler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(201)
 		j(map[string]any{"source_id": "src_phone", "name": body["name"]})
 	case "/v1/bridge/entities":
+		if r.Method == http.MethodGet {
+			out := []map[string]any{}
+			for _, e := range f.entities {
+				chosen := false
+				for _, c := range f.chosen {
+					chosen = chosen || c == e["entity_id"]
+				}
+				out = append(out, map[string]any{"entity_id": e["entity_id"], "name": e["name"], "sense": e["sense"], "kind": e["kind"], "chosen": chosen, "listed": true})
+			}
+			j(map[string]any{"data": out})
+			return
+		}
 		var body struct{ Entities []map[string]any }
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.entities = body.Entities
+		w.WriteHeader(204)
+	case "/v1/bridge/entities/choose":
+		var body struct{ Choose, Drop []string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.chosen = append(f.chosen, body.Choose...)
 		w.WriteHeader(204)
 	case "/v1/bridge/readings":
 		var body struct{ Readings []map[string]any }
@@ -80,9 +97,14 @@ type pub struct {
 	done chan error
 }
 
-func (p *pub) WriteAccessUnit([]byte, time.Duration) error { p.mu.Lock(); p.aus++; p.mu.Unlock(); return nil }
-func (p *pub) Done() <-chan error                          { return p.done }
-func (p *pub) Close() error                                { return nil }
+func (p *pub) WriteAccessUnit([]byte, time.Duration) error {
+	p.mu.Lock()
+	p.aus++
+	p.mu.Unlock()
+	return nil
+}
+func (p *pub) Done() <-chan error { return p.done }
+func (p *pub) Close() error       { return nil }
 
 type statuses struct {
 	mu   sync.Mutex
@@ -132,7 +154,9 @@ func TestAPhoneBoxPairsRelaysItsCameraAndSendsChosenSensors(t *testing.T) {
 	box.Start()
 	defer box.Stop()
 
-	waitFor(t, "the pairing code", func() bool { return st.seen(func(m map[string]any) bool { return m["state"] == "pairing" && m["code"] == "BCDF-GHJK" }) })
+	waitFor(t, "the pairing code", func() bool {
+		return st.seen(func(m map[string]any) bool { return m["state"] == "pairing" && m["code"] == "BCDF-GHJK" })
+	})
 	waitFor(t, "running", func() bool { return st.seen(func(m map[string]any) bool { return m["state"] == "running" }) })
 	waitFor(t, "the phone's camera added", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.camera })
 
@@ -169,14 +193,16 @@ func TestAPhoneBoxPairsRelaysItsCameraAndSendsChosenSensors(t *testing.T) {
 		t.Fatalf("encrypted: %q", why)
 	}
 	waitFor(t, "the Bluetooth sensor listed", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.entities) == 3 })
-	f.mu.Lock()
-	f.chosen = []string{"phone.battery", "bthome.38398f001122_contact"}
-	f.mu.Unlock()
-	// Choices reach the box on its next config poll; ask for it now, as the app would after a change.
-	box.mu.Lock()
-	br := box.running
-	box.mu.Unlock()
-	br.Refresh()
+	// The person chooses on the phone; the box picks the change up at once.
+	if err := box.Choose("phone.battery", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := box.Choose("bthome.38398f001122_contact", true); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := box.Sensors(); err != nil || !strings.Contains(list, `"chosen":true`) {
+		t.Fatalf("sensors %s %v", list, err)
+	}
 	box.PhoneReading("battery", "number", 86, "percent", "Battery")
 	box.PhoneReading("switch", "state", 0, "", "Plugged in")
 	waitFor(t, "chosen readings sent", func() bool {

@@ -170,6 +170,19 @@ describe("bridges reading Home Assistant", () => {
     expect((await call(owner, "GET", `/v1/bridges/${bridge.id}/commands/${second.id}`)).json()).toMatchObject({ status: "failed", error: "the code has expired" });
   });
 
+  it("lets a box choose its own sensors (a phone, ADR 0064), and tells it the plan's resolution", async () => {
+    expect((await call(bridge.token, "GET", "/v1/bridge/config")).json().max_resolution).toBe("720p");
+    const listed = (await call(bridge.token, "GET", "/v1/bridge/entities")).json().data;
+    expect(listed.find((e: { entity_id: string }) => e.entity_id === "switch.hall_lamp")).toMatchObject({ chosen: false, sense: "switch" });
+    expect((await call(bridge.token, "POST", "/v1/bridge/entities/choose", { choose: ["switch.hall_lamp"] })).statusCode).toBe(204);
+    const after = (await call(owner, "GET", `/v1/bridges/${bridge.id}/entities`)).json().data.find((e: { entity_id: string }) => e.entity_id === "switch.hall_lamp");
+    expect(after).toMatchObject({ chosen: true });
+    expect((await call(owner, "GET", `/v1/sources/${after.source_id}`)).json()).toMatchObject({ name: "Hall sensors", location: "Hall" });
+    expect((await call(bridge.token, "POST", "/v1/bridge/entities/choose", { choose: ["light.elsewhere"] })).statusCode).toBe(404);
+    expect((await call(bridge.token, "POST", "/v1/bridge/entities/choose", { drop: ["switch.hall_lamp"] })).statusCode).toBe(204);
+    expect((await call(bridge.token, "GET", "/v1/bridge/entities")).json().data.find((e: { entity_id: string }) => e.entity_id === "switch.hall_lamp").chosen).toBe(false);
+  });
+
   it("records whether Home Assistant is connected", async () => {
     expect((await call(bridge.token, "POST", "/v1/bridge/health", { cameras: [], home_assistant: { connected: true, entities: 3, sending: 1 } })).statusCode).toBe(204);
     expect((await call(owner, "GET", "/v1/bridges")).json().data[0]).toMatchObject({ online: true, home_assistant: { connected: true, entities: 3, sending: 1 } });

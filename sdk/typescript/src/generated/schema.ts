@@ -347,7 +347,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** This box's entities and which are chosen */
+        get: operations["getOwnBridgeEntities"];
         /**
          * The Home Assistant entities this bridge can send
          * @description Replaces the list (ADR 0061). Entities it no longer lists stay, marked `listed: false`, and stop being sent.
@@ -374,6 +375,26 @@ export interface paths {
          */
         put: operations["putBridgeCamerasFound"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/entities/choose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A box choosing its own sensors
+         * @description The person holding a paired phone chooses its sensors on it (ADR 0064), as an admin would with PATCH /bridges/{id}/entities. Audited as the bridge.
+         */
+        post: operations["chooseOwnBridgeEntities"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1789,6 +1810,11 @@ export interface components {
             cameras: components["schemas"]["BridgeCamera"][];
             /** @description The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only */
             sensors?: string[];
+            /**
+             * @description The plan's largest stream: a camera added from the list gets the profile that fits it
+             * @enum {string}
+             */
+            max_resolution?: "720p" | "1080p";
         };
         BridgeHealth: {
             version?: string;
@@ -3956,6 +3982,29 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getOwnBridgeEntities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BridgeEntity"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     putBridgeEntities: {
         parameters: {
             query?: never;
@@ -3997,6 +4046,32 @@ export interface operations {
         };
         responses: {
             /** @description Recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    chooseOwnBridgeEntities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    choose?: string[];
+                    drop?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Done */
             204: {
                 headers: {
                     [name: string]: unknown;

@@ -276,3 +276,42 @@ func (b *Bridge) searchONVIF(ctx context.Context, _ map[string]any) (map[string]
 	b.found.publish(ctx)
 	return map[string]any{"found": n}, nil
 }
+
+// FoundCameras is what the box found on its network (for the app's own list).
+func (b *Bridge) FoundCameras() []api.FoundCamera {
+	if b.found == nil {
+		return []api.FoundCamera{}
+	}
+	return b.found.list()
+}
+
+// AddFoundCamera adds a found ONVIF camera with its credentials, as the console's `onvif_add_camera` does.
+func (b *Bridge) AddFoundCamera(ctx context.Context, id, username, password, name, maxResolution string) (map[string]any, error) {
+	if b.found == nil {
+		return nil, errors.New("this box doesn't look for cameras")
+	}
+	b.found.mu.Lock()
+	cam, ok := b.found.onvif[id]
+	b.found.mu.Unlock()
+	if !ok {
+		return nil, errors.New("that camera isn't on the network any more; look again")
+	}
+	return b.addONVIF(ctx, map[string]any{"xaddr": cam.XAddr, "username": username, "password": password, "name": name, "max_resolution": maxResolution})
+}
+
+// SearchCameras looks for cameras now.
+func (b *Bridge) SearchCameras(ctx context.Context) (int, error) {
+	if b.found == nil {
+		return 0, errors.New("this box doesn't look for cameras")
+	}
+	return b.searchCount(ctx)
+}
+
+func (b *Bridge) searchCount(ctx context.Context) (int, error) {
+	r, err := b.searchONVIF(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := r["found"].(int)
+	return n, nil
+}

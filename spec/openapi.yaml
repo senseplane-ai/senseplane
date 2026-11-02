@@ -556,6 +556,23 @@ paths:
         '204': {description: Recorded}
         default: {$ref: '#/components/responses/Error'}
   /bridge/entities:
+    get:
+      operationId: getOwnBridgeEntities
+      summary: This box's entities and which are chosen
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/BridgeEntity'}}
+        default: {$ref: '#/components/responses/Error'}
     put:
       operationId: putBridgeEntities
       summary: The Home Assistant entities this bridge can send
@@ -601,6 +618,29 @@ paths:
                 cameras: {type: array, maxItems: 200, items: {$ref: '#/components/schemas/BridgeCameraFoundListed'}}
       responses:
         '204': {description: Recorded}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/entities/choose:
+    post:
+      operationId: chooseOwnBridgeEntities
+      summary: A box choosing its own sensors
+      description: >-
+        The person holding a paired phone chooses its sensors on it (ADR 0064),
+        as an admin would with PATCH /bridges/{id}/entities. Audited as the bridge.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                choose: {type: array, maxItems: 1000, items: {type: string}}
+                drop: {type: array, maxItems: 1000, items: {type: string}}
+      responses:
+        '204': {description: Done}
         default: {$ref: '#/components/responses/Error'}
   /bridge/readings:
     post:
@@ -2704,6 +2744,7 @@ components:
         poll_seconds: {type: integer}
         cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}, description: 'Empty when this deployment has no WHIP ingest'}
         sensors: {type: array, items: {type: string}, description: 'The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only'}
+        max_resolution: {type: string, enum: ['720p', '1080p'], description: "The plan's largest stream: a camera added from the list gets the profile that fits it"}
     BridgeHealth:
       type: object
       additionalProperties: false

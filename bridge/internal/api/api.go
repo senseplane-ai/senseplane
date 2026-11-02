@@ -37,6 +37,8 @@ type Config struct {
 	Cameras          []Camera `json:"cameras"`
 	// Sensors are the Home Assistant entities a person chose to send (ADR 0061); nothing else is sent.
 	Sensors []string `json:"sensors"`
+	// MaxResolution is the plan's largest stream ("720p", "1080p").
+	MaxResolution string `json:"max_resolution"`
 }
 
 // Device is what measured a reading: here, a Home Assistant entity.
@@ -330,4 +332,31 @@ func (c *Client) Finish(ctx context.Context, id string, result map[string]any, f
 		body["error"] = msg
 	}
 	return c.do(ctx, http.MethodPost, "/v1/bridge/commands/"+id, body, nil)
+}
+
+// ListedEntity is one of this box's entities and whether a person chose it.
+type ListedEntity struct {
+	EntityID string  `json:"entity_id"`
+	Name     string  `json:"name"`
+	Area     *string `json:"area"`
+	Sense    string  `json:"sense"`
+	Kind     string  `json:"kind"`
+	Chosen   bool    `json:"chosen"`
+	Listed   bool    `json:"listed"`
+}
+
+// OwnEntities lists this box's entities with what is chosen (a phone choosing on itself, ADR 0064).
+func (c *Client) OwnEntities(ctx context.Context) ([]ListedEntity, error) {
+	var out struct {
+		Data []ListedEntity `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v1/bridge/entities", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// Choose chooses and drops this box's entities.
+func (c *Client) Choose(ctx context.Context, choose, drop []string) error {
+	return c.do(ctx, http.MethodPost, "/v1/bridge/entities/choose", map[string]any{"choose": choose, "drop": drop}, nil)
 }

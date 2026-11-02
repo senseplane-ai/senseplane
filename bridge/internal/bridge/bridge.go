@@ -85,6 +85,7 @@ type Bridge struct {
 	resync  chan struct{}
 	home    *home
 	found   *found
+	maxRes  string // the plan's largest stream, from the config
 }
 
 // New returns a bridge; call Run.
@@ -238,6 +239,9 @@ func (b *Bridge) sync(ctx context.Context) *api.Config {
 		}
 		return nil
 	}
+	b.mu.Lock()
+	b.maxRes = cfg.MaxResolution
+	b.mu.Unlock()
 	if b.home != nil {
 		b.home.publish(ctx)
 		b.home.choose(cfg.Sensors)
@@ -371,4 +375,14 @@ func (b *Bridge) SensorCounts() (listed, sending int) {
 		listed += len(l.entities)
 	}
 	return listed, len(b.home.selected)
+}
+
+// MaxResolution is the plan's largest stream, from the last config ("720p" until known).
+func (b *Bridge) MaxResolution() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.maxRes == "" {
+		return "720p"
+	}
+	return b.maxRes
 }

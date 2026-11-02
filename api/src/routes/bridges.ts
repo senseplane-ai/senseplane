@@ -39,6 +39,8 @@ export interface BridgeDeps {
   /** The media plane's public base (WHIP URLs) and where a camera's WHIP bearer is authorised. */
   whip?: { publicUrl: string; authorizeUrl: string; signer: IngestSigner };
   maxSources(accountId: string): Promise<number | null>;
+  /** The plan's largest stream, for a box that picks a camera's stream itself (a phone, ADR 0064). */
+  maxResolution?(accountId: string): Promise<"720p" | "1080p">;
   audit?: AuditLog;
 }
 
@@ -166,6 +168,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         // Cameras without an RTSP URL wait for `--rtsp` (or a PATCH) before the bridge can pull them.
         // Paused cameras are left out, so the bridge stops pulling them until they are resumed.
         cameras: deps.whip ? await Promise.all((await cameras(req)).filter((c) => c.rtsp_url && c.status !== "paused").map((c) => toCamera(req, c))) : [],
+        max_resolution: deps.maxResolution ? await deps.maxResolution(accountId) : "720p",
         // The Home Assistant entities a person chose; the bridge sends nothing else (ADR 0061).
         sensors: (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridgeId)
           .where("source_id", "is not", null).where("listed", "=", true).orderBy("entity_id").execute())).map((e) => e.entity_id),
@@ -305,6 +308,29 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
+    // A box choosing its own sensors (ADR 0064): the person holding a paired phone chooses on it, as an admin would in the console.
+    scope.get("/v1/bridge/entities", async (req) => {
+      const { bridgeId, accountId } = req.bridge!;
+      const rows = await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridge_entities").select(["entity_id", "name", "area", "sense", "kind", "source_id", "listed"])
+        .where("bridge_id", "=", bridgeId).orderBy("entity_id").execute());
+      return { data: rows.map((e) => ({ entity_id: e.entity_id, name: e.name, area: e.area, sense: e.sense, kind: e.kind, chosen: e.source_id !== null, listed: e.listed })) };
+    });
+    scope.post<{ Body: { choose?: string[]; drop?: string[] } }>(
+      "/v1/bridge/entities/choose",
+      { schema: { body: { type: "object", additionalProperties: false, properties: {
+        choose: { type: "array", maxItems: 1000, items: { type: "string", maxLength: 200 } },
+        drop: { type: "array", maxItems: 1000, items: { type: "string", maxLength: 200 } },
+      } } } },
+      async (req, reply) => {
+        const { bridgeId, accountId } = req.bridge!;
+        const max = await deps.maxSources(accountId);
+        await deps.data.withAccount(accountId, (s) => chooseEntities(s, bridgeId, req.body.choose ?? [], req.body.drop ?? [], max));
+        await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: "bridge.entities_chosen", target: bridgeId, status: 204,
+          details: { chose: req.body.choose?.length ?? 0, dropped: req.body.drop?.length ?? 0 } });
+        return reply.code(204).send();
+      },
+    );
+
     // Readings of chosen entities, each filed under its room's sensor source; anything else is ignored.
     scope.post<{ Body: { readings: ReadingInput[] } }>(
       "/v1/bridge/readings",
@@ -407,6 +433,45 @@ export async function markSilentBridges(data: DataAccess, log?: FastifyBaseLogge
   return silent.length;
 }
 
+/**
+ * Chooses and drops a bridge's entities (ADR 0061): a chosen entity goes to the
+ * sensor source of its room on that bridge, made on first use. Shared by the
+ * console and by a box choosing for itself (a phone, ADR 0064).
+ */
+export async function chooseEntities(s: AccountScope, bridgeId: string, choose_: string[], drop: string[], max: number | null) {
+  if (drop.length) {
+    await s.db.updateTable("bridge_entities").set({ source_id: null, updated_at: new Date() }).where("bridge_id", "=", bridgeId).where("entity_id", "in", drop).execute();
+  }
+  const choose = choose_.length
+    ? await s.db.selectFrom("bridge_entities").selectAll().where("bridge_id", "=", bridgeId).where("entity_id", "in", choose_).where("source_id", "is", null).execute()
+    : [];
+  const unknown = choose_.filter((id) => !choose.some((e) => e.entity_id === id));
+  const already = unknown.length ? await s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridgeId).where("entity_id", "in", unknown).execute() : [];
+  const missing = unknown.filter((id) => !already.some((e) => e.entity_id === id));
+  if (missing.length) throw new ApiError(404, "not_found", `not listed by this bridge: ${missing.join(", ")}`);
+  // One sensor source per bridge and room ("Kitchen"); entities without a room go to "Home".
+  const rooms = new Map<string, string>();
+  for (const e of choose) {
+    const room = e.area ?? "";
+    let sourceId = rooms.get(room);
+    if (!sourceId) {
+      let q = s.db.selectFrom("sources").select("id").where("bridge_id", "=", bridgeId).where("type", "=", "sensor");
+      q = room ? q.where("location", "=", room) : q.where("location", "is", null);
+      sourceId = (await q.orderBy("created_at").executeTakeFirst())?.id;
+      if (!sourceId) {
+        if (max !== null && (await s.sources.list()).length >= max) {
+          throw new ApiError(409, "source_limit_reached", `this account can have at most ${max} sources`, { max_registered_sources: max });
+        }
+        const src = await s.sources.create({ name: room ? `${room} sensors` : "Home sensors", type: "sensor", senses: [e.sense], record_audio: false, ...(room ? { location: room } : {}) });
+        await s.db.updateTable("sources").set({ bridge_id: bridgeId }).where("id", "=", src.id).execute();
+        sourceId = src.id;
+      }
+      rooms.set(room, sourceId);
+    }
+    await s.db.updateTable("bridge_entities").set({ source_id: sourceId, updated_at: new Date() }).where("bridge_id", "=", bridgeId).where("entity_id", "=", e.entity_id).execute();
+  }
+}
+
 export interface BridgeAdminDeps {
   data: DataAccess;
   maxSources(accountId: string): Promise<number | null>;
@@ -479,39 +544,7 @@ export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdmi
       const accountId = req.accountId!;
       const bridge = await bridgeOf(accountId, req.params.id);
       const max = await deps.maxSources(accountId);
-      await deps.data.withAccount(accountId, async (s) => {
-        if (req.body.drop?.length) {
-          await s.db.updateTable("bridge_entities").set({ source_id: null, updated_at: new Date() }).where("bridge_id", "=", bridge.id).where("entity_id", "in", req.body.drop).execute();
-        }
-        const choose = req.body.choose?.length
-          ? await s.db.selectFrom("bridge_entities").selectAll().where("bridge_id", "=", bridge.id).where("entity_id", "in", req.body.choose).where("source_id", "is", null).execute()
-          : [];
-        const unknown = (req.body.choose ?? []).filter((id) => !choose.some((e) => e.entity_id === id));
-        const already = unknown.length ? await s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridge.id).where("entity_id", "in", unknown).execute() : [];
-        const missing = unknown.filter((id) => !already.some((e) => e.entity_id === id));
-        if (missing.length) throw new ApiError(404, "not_found", `not listed by this bridge: ${missing.join(", ")}`);
-        // One sensor source per bridge and room ("Kitchen"); entities without a room go to "Home".
-        const rooms = new Map<string, string>();
-        for (const e of choose) {
-          const room = e.area ?? "";
-          let sourceId = rooms.get(room);
-          if (!sourceId) {
-            let q = s.db.selectFrom("sources").select("id").where("bridge_id", "=", bridge.id).where("type", "=", "sensor");
-            q = room ? q.where("location", "=", room) : q.where("location", "is", null);
-            sourceId = (await q.orderBy("created_at").executeTakeFirst())?.id;
-            if (!sourceId) {
-              if (max !== null && (await s.sources.list()).length >= max) {
-                throw new ApiError(409, "source_limit_reached", `this account can have at most ${max} sources`, { max_registered_sources: max });
-              }
-              const src = await s.sources.create({ name: room ? `${room} sensors` : "Home sensors", type: "sensor", senses: [e.sense], record_audio: false, ...(room ? { location: room } : {}) });
-              await s.db.updateTable("sources").set({ bridge_id: bridge.id }).where("id", "=", src.id).execute();
-              sourceId = src.id;
-            }
-            rooms.set(room, sourceId);
-          }
-          await s.db.updateTable("bridge_entities").set({ source_id: sourceId, updated_at: new Date() }).where("bridge_id", "=", bridge.id).where("entity_id", "=", e.entity_id).execute();
-        }
-      });
+      await deps.data.withAccount(accountId, (s) => chooseEntities(s, bridge.id, req.body.choose ?? [], req.body.drop ?? [], max));
       await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.entities_chosen", target: bridge.id, status: 200,
         details: { chose: req.body.choose?.length ?? 0, dropped: req.body.drop?.length ?? 0 } });
       return { data: (await listEntities(accountId, bridge.id)).map(toEntity), next_cursor: null };

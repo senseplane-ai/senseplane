@@ -38,15 +38,23 @@ devices is still to do (below).
   devices as sensors too, and adds one with a code shared from its own app.
   Work reaches a box through a long-polled command channel, which device
   control (milestone C) will use.
+- **Cameras found by the box** (ADR 0063): the box finds ONVIF cameras on its
+  network and lists them on its page, named after Home Assistant's camera on
+  the same address ("Front door (Kitchen) · Tapo C200 at 192.168.1.40"). A
+  person picks one and enters its username and password; they reach the box
+  sealed, and the box asks the camera for the H.264 stream that fits the
+  plan's `max_resolution` and adds it, no RTSP address typed. The add-on runs
+  on the host network for this. Relaying Home Assistant's own stream for
+  cameras without ONVIF was left out (ADR 0063 says why).
 
 ## Results
 
 | Check | Result |
 |---|---|
-| API (`vitest`) | 250 pass |
-| Console | 168 pass |
+| API (`vitest`) | 251 pass (with cameras found; the Valkey tests skip without their test Valkey) |
+| Console | 172 pass |
 | Brain | 104 pass (sensor compiler and `read_sensors` included) |
-| Bridge (`go test -race`) | all packages pass; Home Assistant client against a fake server, Matter client against a fake Matter Server |
+| Bridge (`go test -race`) | all packages pass; Home Assistant client (sensors and cameras) against a fake server, Matter client against a fake Matter Server, ONVIF discovery and streams against a fake camera |
 | Home Assistant integration | 51 pass, against the shared mapping vectors |
 | e2e `ingest` | home sensors: states per device, a "left open" watch, the doorbell, "fridge opened twice", `read_environment` with states |
 | e2e `home` (real Home Assistant 2026.10.4) | pairs with a code, lists 30 demo entities with rooms, a chosen light switched in Home Assistant arrives as on/off, an unchosen one never leaves, the pairing survives a restart, the room reads offline when Home Assistant stops |
@@ -64,7 +72,10 @@ a camera test that aged out with the calendar.
    `bridge-addon`), set the server, pair, choose the Shelly door sensor, open
    the fridge, ask "has the fridge been opened today?". Stop the add-on and
    check an absence watch says it can't check.
-2. **A Tapo camera through the box**: add its RTSP address on the box's page.
+2. **A Tapo camera through the box**: make its camera account in the Tapo
+   app, check it shows under "Found on your network" with its Home Assistant
+   name, add it with that account and see it record (the substream on a 720p
+   plan); also add one by its RTSP address.
 3. **Matter**: run a Matter Server next to a bridge container, share the
    Shelly plug from its app, add it with the code; and the opt-in live test
    (`MATTER_URL=… go test -run Live ./internal/matter/`), which couldn't be

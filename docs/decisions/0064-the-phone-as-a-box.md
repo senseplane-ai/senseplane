@@ -21,8 +21,8 @@ lists and sends sensors through the same API. Nothing on the server knows
 it is a phone, except the name a person gives it.
 
 **Its own camera is a relayed camera.** The phone's back camera is encoded
-by MediaCodec (H.264, 720p, 15 fps, about 2 Mbit/s; never above the plan's
-`max_resolution`) and handed to the bridge frame by frame (`PushFrame`),
+by MediaCodec (H.264, 720p, 15 fps, about 2 Mbit/s; 720p is the lowest
+`max_resolution` a plan has, so every plan takes it, and it keeps the phone cool) and handed to the bridge frame by frame (`PushFrame`),
 with SPS/PPS before each keyframe. The bridge adds it as one of its cameras
 with the address `rtsp://this-phone.senseplane.invalid/camera` (a reserved
 name that nothing resolves) and sends it over WHIP like any other camera,

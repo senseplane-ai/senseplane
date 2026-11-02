@@ -6,13 +6,14 @@
 //   1. create an account + API key (admin CLI in the api container)
 //   2. POST /v1/sources → capture_url
 //   3. open the capture page, stream for STREAM_SECONDS
-//   4. while streaming: measure how fresh the segment index is, and that the
-//      last minute downloads from object storage as continuous H.264
+//   4. while streaming: measure how fresh the segment index is, that the
+//      segments are encrypted at rest, and that the last minute plays through
+//      its signed playlist as continuous H.264
 //   5. press Stop; check the source goes offline
 // Prereqs: `docker compose --profile app up -d` (deploy/compose) and
 // `pnpm --filter @senseplane/console build && pnpm --filter @senseplane/console exec vite preview --port 5173 --strictPort`.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -90,8 +91,13 @@ const get = async (Key: string) =>
   Buffer.from(await (await s3.send(new GetObjectCommand({ Bucket: "senseplane", Key }))).Body!.transformToByteArray());
 const dir = mkdtempSync(join(tmpdir(), "sp-e2e-"));
 const file = join(dir, "last-minute.mp4");
+// At rest the segments are encrypted (ADR 0066): what the bucket holds isn't an fMP4 segment any more.
+const storedSeg = await get(rows[0]!.key);
+const encryptedAtRest = !["styp", "moof"].includes(storedSeg.subarray(4, 8).toString("latin1"));
+// Played the way a viewer does: the signed playlist, whose key link decrypts the segments.
 const tFetch = Date.now();
-writeFileSync(file, Buffer.concat([await get(rows[0]!.init_key), ...(await Promise.all(rows.map((r) => get(r.key))))]));
+const pb = await call("GET", `/v1/sources/${source.id}/playback?from=${new Date(new Date(rows[0]!.start_at).getTime()).toISOString()}&to=${new Date(now).toISOString()}`);
+execFileSync("ffmpeg", ["-v", "error", "-y", "-allowed_extensions", "ALL", "-i", pb.url, "-c", "copy", file]);
 const fetchMs = Date.now() - tFetch;
 const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", file]).toString());
 const v = probe.streams.find((s: { codec_type: string }) => s.codec_type === "video");
@@ -120,12 +126,13 @@ const result = {
     newestEndsSecondsBeforeCheck: Number(((now - coveredTo) / 1000).toFixed(1)),
     gapsOver1_5s: gaps,
     downloadMs: fetchMs,
+    encryptedAtRest,
     playableSeconds: Number(Number(probe.format.duration).toFixed(1)),
     video: `${v.codec_name} ${v.profile} ${v.width}x${v.height}`,
   },
   sourceStatusAfterStop: after.status,
   pass:
-    Math.max(...lags) <= 15_000 && (coveredTo - coveredFrom) >= 60_000 && gaps === 0 && v.codec_name === "h264" && after.status === "offline",
+    Math.max(...lags) <= 15_000 && (coveredTo - coveredFrom) >= 60_000 && gaps === 0 && v.codec_name === "h264" && after.status === "offline" && encryptedAtRest,
 };
 console.log(JSON.stringify(result, null, 2));
 process.exit(result.pass ? 0 : 1);

@@ -578,6 +578,30 @@ paths:
       responses:
         '204': {description: Recorded}
         default: {$ref: '#/components/responses/Error'}
+  /bridge/cameras-found:
+    put:
+      operationId: putBridgeCamerasFound
+      summary: The cameras this box found, to pick from
+      description: >-
+        Replaces the list (ADR 0063): ONVIF cameras on the box's network, each
+        with the Home Assistant camera it matches (same address or MAC), and
+        Home Assistant's cameras that match none. Never credentials.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [cameras]
+              properties:
+                cameras: {type: array, maxItems: 200, items: {$ref: '#/components/schemas/BridgeCameraFoundListed'}}
+      responses:
+        '204': {description: Recorded}
+        default: {$ref: '#/components/responses/Error'}
   /bridge/readings:
     post:
       operationId: postBridgeReadings
@@ -857,6 +881,80 @@ paths:
       responses:
         '200':
           description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeCommand'}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}/cameras-found:
+    get:
+      operationId: listBridgeCamerasFound
+      summary: Cameras the box found on its network and in Home Assistant
+      description: >-
+        ONVIF cameras the box found (ADR 0063), named after the Home Assistant
+        camera they match, and Home Assistant's cameras without ONVIF.
+        `source_id` is set once one was added (the same address as one of the
+        box's cameras).
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/BridgeCameraFound'}}
+                  next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}/cameras-found/search:
+    post:
+      operationId: searchBridgeCameras
+      summary: Ask the box to look for cameras now
+      description: The box looks every few minutes on its own; follow GET /bridges/{id}/commands/{cid}.
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '202':
+          description: Handed to the box
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeCommand'}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}/onvif:
+    post:
+      operationId: addOnvifCamera
+      summary: Add a camera the box found, with its username and password
+      description: >-
+        The credentials go to the box sealed (ADR 0062) and are cleared once it
+        takes them. The box asks the camera for its streams, picks the H.264
+        one that fits the plan's `max_resolution` (the substream when the main
+        stream is larger; nothing is transcoded) and adds it as one of its
+        cameras; the RTSP address is stored encrypted, as for a camera added by
+        its address. Follow GET /bridges/{id}/commands/{cid}: when done,
+        `result.source_id` is the new camera. Admins only. Audited.
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [camera, username, password]
+              properties:
+                camera: {type: string, maxLength: 200, description: The found camera's `id`}
+                username: {type: string, minLength: 1, maxLength: 128}
+                password: {type: string, maxLength: 256}
+                name: {type: string, minLength: 1, maxLength: 120, description: 'Default: its Home Assistant name, else its model'}
+      responses:
+        '202':
+          description: Handed to the box
           content:
             application/json:
               schema: {$ref: '#/components/schemas/BridgeCommand'}
@@ -2640,12 +2738,13 @@ components:
           properties:
             connected: {type: boolean}
             nodes: {type: integer, minimum: 0}
+        cameras_found: {type: integer, minimum: 0, description: 'Set by a bridge that looks for cameras (ADR 0063): how many it lists'}
     BridgeCommand:
       type: object
       required: [id, kind, status]
       properties:
         id: {type: string}
-        kind: {type: string, description: 'matter_commission'}
+        kind: {type: string, description: 'matter_commission, onvif_add_camera or onvif_search'}
         status: {type: string, enum: [pending, taken, done, failed]}
         result: {type: ['object', 'null']}
         error: {type: ['string', 'null']}
@@ -2662,6 +2761,44 @@ components:
         device_class: {type: string, maxLength: 64}
         sense: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
         kind: {type: string, enum: [number, state, event]}
+    BridgeCameraFoundListed:
+      type: object
+      additionalProperties: false
+      required: [id, onvif]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 200, description: 'Its ONVIF endpoint (urn:uuid:…), or the Home Assistant entity for a camera without ONVIF'}
+        address: {type: string, maxLength: 255, description: Its IP address on the home network}
+        xaddr: {type: string, maxLength: 512, pattern: '^https?://', description: Its ONVIF device service}
+        manufacturer: {type: string, maxLength: 120}
+        model: {type: string, maxLength: 120}
+        name: {type: string, maxLength: 120, description: The name in its ONVIF scopes}
+        onvif: {type: boolean, description: Found with ONVIF; only these can be added from the list}
+        home_assistant:
+          type: object
+          additionalProperties: false
+          required: [entity_id, name]
+          properties:
+            entity_id: {type: string, pattern: '^camera\.[a-z0-9_]+$', maxLength: 200}
+            name: {type: string, maxLength: 200}
+            area: {type: string, maxLength: 120, description: The room in Home Assistant}
+    BridgeCameraFound:
+      type: object
+      required: [id, onvif, seen_at]
+      properties:
+        id: {type: string}
+        address: {type: [string, 'null']}
+        manufacturer: {type: [string, 'null']}
+        model: {type: [string, 'null']}
+        name: {type: [string, 'null']}
+        onvif: {type: boolean}
+        home_assistant:
+          type: [object, 'null']
+          properties:
+            entity_id: {type: string}
+            name: {type: string}
+            area: {type: [string, 'null']}
+        source_id: {type: [string, 'null'], description: The box's camera at this address, once added}
+        seen_at: {type: string, format: date-time}
     BridgeEntity:
       type: object
       required: [entity_id, name, sense, kind, chosen, listed]
@@ -2698,6 +2835,7 @@ components:
           properties:
             connected: {type: boolean}
             nodes: {type: integer}
+        cameras_found: {type: [integer, 'null'], description: 'How many cameras it lists to pick from (ADR 0063); null when it doesn''t look'}
     ClipCreate:
       type: object
       required: [source, from, to]

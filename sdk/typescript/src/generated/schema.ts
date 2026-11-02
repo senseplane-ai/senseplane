@@ -360,6 +360,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bridge/cameras-found": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * The cameras this box found, to pick from
+         * @description Replaces the list (ADR 0063): ONVIF cameras on the box's network, each with the Home Assistant camera it matches (same address or MAC), and Home Assistant's cameras that match none. Never credentials.
+         */
+        put: operations["putBridgeCamerasFound"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridge/readings": {
         parameters: {
             query?: never;
@@ -524,6 +544,66 @@ export interface paths {
         get: operations["getBridgeCommand"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridges/{id}/cameras-found": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cameras the box found on its network and in Home Assistant
+         * @description ONVIF cameras the box found (ADR 0063), named after the Home Assistant camera they match, and Home Assistant's cameras without ONVIF. `source_id` is set once one was added (the same address as one of the box's cameras).
+         */
+        get: operations["listBridgeCamerasFound"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridges/{id}/cameras-found/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the box to look for cameras now
+         * @description The box looks every few minutes on its own; follow GET /bridges/{id}/commands/{cid}.
+         */
+        post: operations["searchBridgeCameras"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridges/{id}/onvif": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a camera the box found, with its username and password
+         * @description The credentials go to the box sealed (ADR 0062) and are cleared once it takes them. The box asks the camera for its streams, picks the H.264 one that fits the plan's `max_resolution` (the substream when the main stream is larger; nothing is transcoded) and adds it as one of its cameras; the RTSP address is stored encrypted, as for a camera added by its address. Follow GET /bridges/{id}/commands/{cid}: when done, `result.source_id` is the new camera. Admins only. Audited.
+         */
+        post: operations["addOnvifCamera"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1732,10 +1812,12 @@ export interface components {
                 connected: boolean;
                 nodes?: number;
             };
+            /** @description Set by a bridge that looks for cameras (ADR 0063): how many it lists */
+            cameras_found?: number;
         };
         BridgeCommand: {
             id: string;
-            /** @description matter_commission */
+            /** @description matter_commission, onvif_add_camera or onvif_search */
             kind: string;
             /** @enum {string} */
             status: "pending" | "taken" | "done" | "failed";
@@ -1755,6 +1837,43 @@ export interface components {
             sense: string;
             /** @enum {string} */
             kind: "number" | "state" | "event";
+        };
+        BridgeCameraFoundListed: {
+            /** @description Its ONVIF endpoint (urn:uuid:…), or the Home Assistant entity for a camera without ONVIF */
+            id: string;
+            /** @description Its IP address on the home network */
+            address?: string;
+            /** @description Its ONVIF device service */
+            xaddr?: string;
+            manufacturer?: string;
+            model?: string;
+            /** @description The name in its ONVIF scopes */
+            name?: string;
+            /** @description Found with ONVIF; only these can be added from the list */
+            onvif: boolean;
+            home_assistant?: {
+                entity_id: string;
+                name: string;
+                /** @description The room in Home Assistant */
+                area?: string;
+            };
+        };
+        BridgeCameraFound: {
+            id: string;
+            address?: string | null;
+            manufacturer?: string | null;
+            model?: string | null;
+            name?: string | null;
+            onvif: boolean;
+            home_assistant?: {
+                entity_id?: string;
+                name?: string;
+                area?: string | null;
+            } | null;
+            /** @description The box's camera at this address */
+            source_id?: string | null;
+            /** Format: date-time */
+            seen_at: string;
         };
         BridgeEntity: {
             entity_id: string;
@@ -1793,6 +1912,8 @@ export interface components {
                 connected?: boolean;
                 nodes?: number;
             } | null;
+            /** @description How many cameras it lists to pick from (ADR 0063); null when it doesn't look */
+            cameras_found?: number | null;
         };
         ClipCreate: {
             source: string;
@@ -3860,6 +3981,31 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    putBridgeCamerasFound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    cameras: components["schemas"]["BridgeCameraFoundListed"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     postBridgeReadings: {
         parameters: {
             query?: never;
@@ -4181,6 +4327,92 @@ export interface operations {
         responses: {
             /** @description OK */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBridgeCamerasFound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BridgeCameraFound"][];
+                        next_cursor?: null | string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    searchBridgeCameras: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Handed to the box */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addOnvifCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The found camera's `id` */
+                    camera: string;
+                    username: string;
+                    password: string;
+                    /** @description Default: its Home Assistant name, else its model */
+                    name?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Handed to the box */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1417,6 +1417,46 @@ export interface paths {
         patch: operations["updateAccount"];
         trace?: never;
     };
+    "/account/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The workspace's footage key, and a rotation in progress
+         * @description Recordings, clips, snapshots and exports are encrypted at rest with the workspace's key, which the server holds (ADR 0066). During a rotation, segments_left counts the recording segments still under an older key. Admins.
+         */
+        get: operations["getAccountKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/account/keys/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the workspace's footage key
+         * @description A new key encrypts new footage at once. A background job re-encrypts what was stored under the old key; when it is done (at least 15 minutes after the start), the old key is deleted, so copies made before (backups, a leaked bucket) can't be read any more. Playback keeps working throughout. Owner only; agents can't.
+         */
+        post: operations["rotateAccountKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/account/export": {
         parameters: {
             query?: never;
@@ -1648,6 +1688,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AccountKeys: {
+            current_version: number;
+            rotating: boolean;
+            /** Format: date-time */
+            rotation_started_at?: string;
+            segments_left?: number;
+        };
         Sense: components["schemas"]["sense"];
         Source: components["schemas"]["source"];
         Trigger: components["schemas"]["trigger"];
@@ -6015,6 +6062,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["account"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAccountKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountKeys"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rotateAccountKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountKeys"];
                 };
             };
             default: components["responses"]["Error"];

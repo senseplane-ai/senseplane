@@ -222,6 +222,30 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
     if (!/^exp_[0-9a-f]{20}$/.test(req.params.id)) throw new ApiError(404, "not_found", "export not found");
     return exportStatus(req, req.accountId!, req.params.id);
   });
+  // Key rotation (ADR 0066): a new key for new footage now, the old footage re-encrypted by a job, then the old key deleted.
+  app.post("/v1/account/keys/rotate", async (req, reply) => {
+    if (req.access?.agentId) throw new ApiError(403, "forbidden", "agents can't rotate the workspace's keys");
+    if (!deps.keys) throw new ApiError(503, "service_unavailable", "encryption at rest isn't configured");
+    const accountId = req.accountId!;
+    const version = await deps.keys.rotate(accountId);
+    return reply.code(202).send(await keyStatus(accountId, version));
+  });
+  app.get("/v1/account/keys", async (req) => {
+    if (!deps.keys) throw new ApiError(503, "service_unavailable", "encryption at rest isn't configured");
+    return keyStatus(req.accountId!, (await deps.keys.current(req.accountId!)).version);
+  });
+  const keyStatus = (accountId: string, current: number) => deps.data.withAccount(accountId, async (s) => {
+    const versions = (await s.db.selectFrom("account_keys").select(["version", "created_at"]).where("account_id", "=", accountId).orderBy("version").execute());
+    const count = async (t: "segments" | "clip_segments") =>
+      Number((await s.db.selectFrom(t).select((eb) => eb.fn.countAll<string>().as("n")).where("enc_version", "<", current).executeTakeFirst())?.n ?? 0);
+    const rotating = versions.length > 1;
+    return {
+      current_version: current,
+      rotating,
+      ...(rotating ? { rotation_started_at: versions.at(-1)!.created_at.toISOString(), segments_left: await count("segments") + await count("clip_segments") } : {}),
+    };
+  });
+
   app.delete("/v1/account", async (req, reply) => {
     const accountId = req.accountId!;
     await deps.data.withAccount(accountId, async (s) => {

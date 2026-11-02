@@ -22,7 +22,7 @@ const RANK: Record<Role, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
 export const atLeast = (role: Role, min: Role) => RANK[role] >= RANK[min];
 
 /** Reads that reveal more than the console's screens: admin and up. */
-const ADMIN_READS = new Set(["GET /v1/invites", "GET /v1/audit", "GET /v1/account/export/:id", "GET /v1/keys"]);
+const ADMIN_READS = new Set(["GET /v1/invites", "GET /v1/audit", "GET /v1/account/export/:id", "GET /v1/keys", "GET /v1/account/keys"]);
 
 /** Writes a viewer may make: their own workspace session and watching live. */
 const VIEWER_WRITES = new Set([
@@ -41,7 +41,7 @@ const MEMBER_WRITES = new Set([
 ]);
 
 /** Owner only. Workspace keys act above every role, so only an owner hands one out. */
-const OWNER_WRITES = new Set(["DELETE /v1/account", "POST /v1/keys", "DELETE /v1/keys/:id"]);
+const OWNER_WRITES = new Set(["DELETE /v1/account", "POST /v1/keys", "DELETE /v1/keys/:id", "POST /v1/account/keys/rotate"]);
 
 /** The lowest role that may call a route. */
 export function requiredRole(method: string, url: string | undefined): Role {

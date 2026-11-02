@@ -44,6 +44,7 @@ extension interface (ADR 0007). Tenancy is enforced by row-level security
 | `S3_PUBLIC_ENDPOINT` | no | Browser-reachable S3 URL: segments redirect to presigned URLs instead of streaming through the API |
 | `PLAYBACK_SIGNING_SECRET` | production | HMAC secret for playback URLs (generated outside production) |
 | `MEDIA_ENCRYPTION_KEY` | production | At least 32 characters; wraps each account's footage keys: recordings, clips, snapshots and exports are encrypted at rest (generated and stored outside production; ADR 0066). Back it up apart from the database: losing it loses every recording |
+| `MEDIA_ENCRYPTION_KEY_PREVIOUS` | — | The old master key(s), comma-separated, during a master key rotation; the `keys.rewrap` job moves every account key onto `MEDIA_ENCRYPTION_KEY` (docs/self-host.md) |
 | `SECRETS_ENCRYPTION_KEY` | production | At least 32 characters; encrypts webhook signing secrets at rest (generated and stored outside production; ADR 0027). Keep it stable: losing it means re-creating webhooks |
 | `DEMO_ORIGINS` | no | Comma-separated browser origins allowed to call the live demo API (`/v1/demo/*`, `/v1/capture/join`). Default: the local dev site only; set your website's origin to enable the demo |
 | `CONSOLE_URL` | no | Console origin(s) sign-in may return to, comma-separated (default http://localhost:5173); invite links use the first |

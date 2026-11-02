@@ -25,6 +25,8 @@ export interface ObjectStorage {
   deleteMany(keys: string[]): Promise<number>;
   /** Deletes every object under a prefix; returns how many. */
   deletePrefix(prefix: string): Promise<number>;
+  /** Every object key under a prefix (key rotation walks an account's snapshots and exports). */
+  list?(prefix: string): AsyncIterable<string>;
   /** A presigned PUT for one object, for the media plane's feed egress (spec/media upload_url). */
   presignPut(key: string, contentType: string, expiresInSeconds: number): Promise<string>;
   /** Presigned GET URL when a public endpoint is configured, otherwise undefined. */
@@ -82,6 +84,14 @@ export function createObjectStorage(cfg: StorageConfig): ObjectStorage {
         token = page.IsTruncated ? page.NextContinuationToken : undefined;
       } while (token);
       return total;
+    },
+    async *list(prefix) {
+      let token: string | undefined;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken: token }));
+        for (const o of page.Contents ?? []) if (o.Key) yield o.Key;
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
     },
     async presignPut(key, contentType, expiresIn) {
       return getSignedUrl(uploader, new PutObjectCommand({ Bucket, Key: key, ContentType: contentType }), { expiresIn });

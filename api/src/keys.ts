@@ -20,27 +20,60 @@ const WRAP_PREFIX = "wk:v1:";
 export interface KeyWrapper {
   wrap(dataKey: Buffer, accountId: string): Promise<string>;
   unwrap(wrapped: string, accountId: string): Promise<Buffer>;
+  /** The key wrapped again under the current master key, or undefined when it already is (master key rotation). */
+  rewrap?(wrapped: string, accountId: string): Promise<string | undefined>;
 }
 
-/** The master key from MEDIA_ENCRYPTION_KEY (at least 32 characters), AES-256-GCM. */
-export function envKeyWrapper(keyMaterial: string): KeyWrapper {
-  if (!keyMaterial || keyMaterial.length < 32) throw new Error("MEDIA_ENCRYPTION_KEY must be at least 32 characters");
-  const kek = createHash("sha256").update("senseplane media keys\0").update(keyMaterial).digest();
+/**
+ * The master key from MEDIA_ENCRYPTION_KEY (at least 32 characters), AES-256-GCM.
+ * During a master key rotation the old keys (MEDIA_ENCRYPTION_KEY_PREVIOUS)
+ * still unwrap until the rewrap job has moved every account onto the new one.
+ */
+export function envKeyWrapper(keyMaterial: string, previous: string[] = []): KeyWrapper {
+  const kekOf = (m: string) => {
+    if (!m || m.length < 32) throw new Error("MEDIA_ENCRYPTION_KEY must be at least 32 characters");
+    return createHash("sha256").update("senseplane media keys\0").update(m).digest();
+  };
+  const kek = kekOf(keyMaterial);
+  const olds = previous.filter((p) => p && p !== keyMaterial).map(kekOf);
+  const open = (k: Buffer, wrapped: string, accountId: string) => {
+    if (!wrapped.startsWith(WRAP_PREFIX)) throw new Error("unknown wrapped key format");
+    const raw = Buffer.from(wrapped.slice(WRAP_PREFIX.length), "base64url");
+    const d = createDecipheriv("aes-256-gcm", k, raw.subarray(0, 12));
+    d.setAAD(Buffer.from(accountId));
+    d.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([d.update(raw.subarray(28)), d.final()]);
+  };
+  const wrap = async (dataKey: Buffer, accountId: string) => {
+    const iv = randomBytes(12);
+    const c = createCipheriv("aes-256-gcm", kek, iv);
+    c.setAAD(Buffer.from(accountId));
+    const body = Buffer.concat([c.update(dataKey), c.final()]);
+    return WRAP_PREFIX + Buffer.concat([iv, c.getAuthTag(), body]).toString("base64url");
+  };
   return {
-    async wrap(dataKey, accountId) {
-      const iv = randomBytes(12);
-      const c = createCipheriv("aes-256-gcm", kek, iv);
-      c.setAAD(Buffer.from(accountId));
-      const body = Buffer.concat([c.update(dataKey), c.final()]);
-      return WRAP_PREFIX + Buffer.concat([iv, c.getAuthTag(), body]).toString("base64url");
-    },
+    wrap,
     async unwrap(wrapped, accountId) {
-      if (!wrapped.startsWith(WRAP_PREFIX)) throw new Error("unknown wrapped key format");
-      const raw = Buffer.from(wrapped.slice(WRAP_PREFIX.length), "base64url");
-      const d = createDecipheriv("aes-256-gcm", kek, raw.subarray(0, 12));
-      d.setAAD(Buffer.from(accountId));
-      d.setAuthTag(raw.subarray(12, 28));
-      return Buffer.concat([d.update(raw.subarray(28)), d.final()]);
+      try {
+        return open(kek, wrapped, accountId);
+      } catch (err) {
+        for (const old of olds) {
+          try {
+            return open(old, wrapped, accountId);
+          } catch {
+            // the next old key
+          }
+        }
+        throw err;
+      }
+    },
+    async rewrap(wrapped, accountId) {
+      try {
+        open(kek, wrapped, accountId);
+        return undefined;
+      } catch {
+        return wrap(await this.unwrap(wrapped, accountId), accountId);
+      }
     },
   };
 }
@@ -68,6 +101,10 @@ export interface KeyRing {
   get(accountId: string, version: number): Promise<Buffer | undefined>;
   /** Forgets the cached keys of an account (after deleting them). */
   forget(accountId: string): void;
+  /** Starts a rotation: a new key becomes current; older versions stay until their footage is re-encrypted. */
+  rotate(accountId: string): Promise<number>;
+  /** Deletes every version older than the current one (the rotation is done). */
+  retire(accountId: string): Promise<number>;
 }
 
 export function createKeyRing(data: DataAccess, wrapper: KeyWrapper): KeyRing {
@@ -119,6 +156,24 @@ export function createKeyRing(data: DataAccess, wrapper: KeyWrapper): KeyRing {
       cache.delete(accountId);
       currentOf.delete(accountId);
       loadedAt.delete(accountId);
+    },
+    async rotate(accountId) {
+      const key = randomBytes(32);
+      const wrapped = await wrapper.wrap(key, accountId);
+      const version = await data.withAccount(accountId, async (s) => {
+        const top = await s.db.selectFrom("account_keys").select((eb) => eb.fn.max("version").as("v")).where("account_id", "=", accountId).executeTakeFirst();
+        const next = (top?.v ?? 0) + 1;
+        await s.db.insertInto("account_keys").values({ account_id: accountId, version: next, wrapped }).execute();
+        return next;
+      });
+      this.forget(accountId);
+      return version;
+    },
+    async retire(accountId) {
+      const current = (await this.current(accountId)).version;
+      const gone = await data.withAccount(accountId, (s) => s.db.deleteFrom("account_keys").where("account_id", "=", accountId).where("version", "<", current).executeTakeFirst());
+      this.forget(accountId);
+      return Number(gone.numDeletedRows);
     },
   };
 }

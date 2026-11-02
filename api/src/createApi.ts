@@ -54,6 +54,7 @@ import { metricsAllowed, registerRateLimits, trustProxyFromEnv } from "./rate-li
 import { hashApiKey } from "./data/access.js";
 import type { FastifyRequest } from "fastify";
 import { type KeyWrapper, createKeyRing, envKeyWrapper, newMediaKey } from "./keys.js";
+import { reencryptKeys, rewrapKeys } from "./rotation.js";
 import { type ObjectStorage, type StorageConfig, createObjectStorage, encryptingStorage } from "./storage.js";
 import { sweepOnce } from "./sweeper.js";
 import { isProduction } from "./ingest.js";
@@ -358,7 +359,10 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     if (isProduction()) throw new Error("MEDIA_ENCRYPTION_KEY is required in production");
     mediaKey = (await data.secrets.get("media_encryption_key")) ?? (await data.secrets.putIfAbsent("media_encryption_key", newMediaKey()));
   }
-  const keyRing = createKeyRing(data, options.keyWrapper ?? envKeyWrapper(mediaKey!));
+  // A master key rotation keeps the old key(s) here until the rewrap job has moved every account (ADR 0066).
+  const previousMediaKeys = (process.env.MEDIA_ENCRYPTION_KEY_PREVIOUS ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+  const keyWrapper = options.keyWrapper ?? envKeyWrapper(mediaKey!, previousMediaKeys);
+  const keyRing = createKeyRing(data, keyWrapper);
   const plainStorage = options.storage ? ("deleteMany" in options.storage ? options.storage : createObjectStorage(options.storage)) : undefined;
   const storage = plainStorage ? encryptingStorage(plainStorage, keyRing) : undefined;
   let bus: ApiBus | undefined = options.bus;
@@ -497,6 +501,9 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       { name: "bridges.silent", everyS: 30, run: () => markSilentBridges(data, app.log) },
       { name: "activities.close_stale", everyS: 30, run: () => closeStaleActivities(data) },
       { name: "accounts.purge", everyS: 30, leaseS: 1800, run: () => purgeDeletedAccounts({ data, bus, storage }, app.log) },
+      // Key rotation (ADR 0066): accounts mid-rotation get their footage re-encrypted; old master keys re-wrapped.
+      ...(plainStorage ? [{ name: "keys.reencrypt", everyS: 30, leaseS: 300, run: () => reencryptKeys({ data, storage: plainStorage, keys: keyRing, wrapper: keyWrapper, log: app.log }, 45_000) }] : []),
+      ...(previousMediaKeys.length && plainStorage ? [{ name: "keys.rewrap", everyS: 600, run: () => rewrapKeys({ data, storage: plainStorage, keys: keyRing, wrapper: keyWrapper, log: app.log }) }] : []),
       // Live sessions the media plane stopped reporting (3 missed minute reports) are closed and metered.
       ...(mediaDriver ? [{ name: "media.feeds", everyS: 30, run: () => mediaDriver.sweepFeeds() }] : []),
       { name: "storage.sample", everyS: 3600, run: () => sampleStorage(data) },

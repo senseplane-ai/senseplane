@@ -167,6 +167,7 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `BRIDGE_IMAGE` | `ghcr.io/senseplane-ai/bridge:0.2` | Image name in the `docker run` command shown for IP cameras |
 | `SECRETS_ENCRYPTION_KEY` | generated outside production | Encrypts webhook secrets and camera RTSP URLs at rest (keep it with your backups) |
 | `MEDIA_ENCRYPTION_KEY` | generated outside production | Wraps each account's keys for its recordings, clips, snapshots and exports, which are encrypted at rest (ADR 0066). **Back it up somewhere other than the database:** without it, nothing recorded can be played again |
+| `MEDIA_ENCRYPTION_KEY_PREVIOUS` | unset | During a master key rotation: the old `MEDIA_ENCRYPTION_KEY` (comma-separated if several), until every account key is wrapped under the new one |
 
 ### Media plane (`media`)
 
@@ -424,3 +425,19 @@ Watch especially:
 - the brains' load and the API's balancer (`sp:brains`, ADR 0052);
 - webhook delivery failures (`GET /v1/webhooks/{id}/deliveries`);
 - `source.offline` events.
+
+## Rotating encryption keys
+
+Recordings, clips, snapshots and exports are encrypted at rest (ADR 0066).
+
+- **A workspace's key** (after a suspected leak, or on a schedule): the
+  owner calls `POST /v1/account/keys/rotate`. New footage uses the new key at
+  once; a background job re-encrypts what was stored, and deletes the old
+  key once it is done (at least 15 minutes after the start). Playback keeps
+  working throughout. `GET /v1/account/keys` shows the progress.
+- **The master key** (`MEDIA_ENCRYPTION_KEY`):
+  1. set the new key as `MEDIA_ENCRYPTION_KEY` and the old one as
+     `MEDIA_ENCRYPTION_KEY_PREVIOUS`, and restart every API process;
+  2. within ten minutes the `keys.rewrap` job wraps every workspace's key
+     under the new one, and logs when it has (no footage is touched);
+  3. remove `MEDIA_ENCRYPTION_KEY_PREVIOUS` and restart. Back up the new key.

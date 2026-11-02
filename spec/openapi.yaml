@@ -2202,6 +2202,33 @@ paths:
         '202':
           description: No content
         default: {$ref: '#/components/responses/Error'}
+  /account/keys:
+    get:
+      operationId: getAccountKeys
+      summary: The workspace's footage key, and a rotation in progress
+      description: >-
+        Recordings, clips, snapshots and exports are encrypted at rest with
+        the workspace's key, which the server holds (ADR 0066). During a
+        rotation, segments_left counts the recording segments still under an
+        older key. Admins.
+      tags: [account]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AccountKeys'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /account/keys/rotate:
+    post:
+      operationId: rotateAccountKeys
+      summary: Rotate the workspace's footage key
+      description: >-
+        A new key encrypts new footage at once. A background job re-encrypts
+        what was stored under the old key; when it is done (at least 15
+        minutes after the start), the old key is deleted, so copies made
+        before (backups, a leaked bucket) can't be read any more. Playback
+        keeps working throughout. Owner only; agents can't.
+      tags: [account]
+      responses:
+        '202': {description: Started, content: {application/json: {schema: {$ref: '#/components/schemas/AccountKeys'}}}}
+        default: {$ref: '#/components/responses/Error'}
   /account/export:
     post:
       operationId: exportAccount
@@ -2568,6 +2595,14 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    AccountKeys:
+      type: object
+      required: [current_version, rotating]
+      properties:
+        current_version: {type: integer, minimum: 1}
+        rotating: {type: boolean}
+        rotation_started_at: {type: string, format: date-time}
+        segments_left: {type: integer, minimum: 0}
     Sense: {$ref: './schemas/sense.json'}
     Source: {$ref: './schemas/source.json'}
     Trigger: {$ref: './schemas/trigger.json'}

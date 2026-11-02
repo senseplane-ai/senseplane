@@ -69,8 +69,14 @@ removes them.
   little but costs nothing.
 - The hosted media plane (TribeNest's egress) needs the same change to
   offer encryption; until it does, its recordings are stored as before.
-- Not yet: rotating an account's key with re-encryption of its footage, and
-  re-wrapping all keys under a new master key. Both are background jobs on
-  top of the versioned keys.
+- **Rotation** (background jobs, ADR 0058). An account's key:
+  `POST /v1/account/keys/rotate` (owner) makes a new version current; the
+  `keys.reencrypt` job re-encrypts recordings, clip copies, snapshots and
+  exports under older versions in batches (playback keeps working: each
+  segment's row moves with its object), then deletes the old versions, no
+  sooner than 15 minutes after the rotation started so cached keys and
+  uploads in flight have moved on. The master key: the old one goes in
+  `MEDIA_ENCRYPTION_KEY_PREVIOUS`, still opens keys, and the `keys.rewrap`
+  job wraps every account key under the new one.
 - Tested end to end against the object store: ffmpeg plays encrypted
   recordings and clips through their signed playlists and key links.

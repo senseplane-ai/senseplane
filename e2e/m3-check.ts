@@ -75,6 +75,8 @@ const stats: Record<string, { tp: number; fp: number; fn: number }> = {};
 const perFixture: Record<string, string[]> = {};
 let personLatencyMs: number | undefined;
 let personEvent: Record<string, any> | undefined;
+// Every clip with a person: when it was seen (the event's occurred_at) and when the webhook came, from its entry.
+const personTimes: Record<string, { seenAfterEntryMs: number; webhookAfterEntryMs: number }> = {};
 for (const r of runs) {
   const evs = received.filter((x) => x.event.source.id === r.source);
   perFixture[r.fixture] = evs.map((x) => `${labelOf(x.event)}@${((x.at - r.startedAt) / 1000).toFixed(1)}s`);
@@ -90,8 +92,10 @@ for (const r of runs) {
   const entered = truth.expect.find((e) => e.label === "person");
   const person = evs.find((x) => labelOf(x.event) === "person");
   if (entered && person) {
-    personLatencyMs = person.at - (r.startedAt + entered.from * 1000);
-    personEvent = person.event;
+    const entry = r.startedAt + entered.from * 1000;
+    personTimes[r.fixture] = { seenAfterEntryMs: Date.parse(person.event.occurred_at) - entry, webhookAfterEntryMs: person.at - entry };
+    personLatencyMs = Math.max(personLatencyMs ?? 0, person.at - entry); // the slowest clip counts
+    personEvent ??= person.event;
   }
 }
 
@@ -114,6 +118,7 @@ const result = {
   perClass: report,
   perFixture,
   personWebhookAfterEnteringMs: personLatencyMs,
+  personTimes,
   personEventHadClipUrlOnDelivery: Boolean(personEvent?.media?.clip_url),
   personEventHadSnapshot: Boolean(personEvent?.media?.snapshot_url),
   eventClipSaved: clipSaved,

@@ -115,3 +115,17 @@ detections, 97.1 % of vehicles, 87 % of animals and 88.6 % of everyday
 objects; most misses scored just under the threshold. Percentile and Entropy
 calibration, and keeping the prediction layers in float, did not do better.
 The watches fire as in round 1.
+
+## Follow-up: confirming at once (2026-11-02)
+
+Live, the m3 check's slower doorstep clip (doorstep-delivery-reversed) had
+drifted to a 4.0 s webhook after the person entered, against the 2 s goal,
+while the offline numbers above held. Under load the brain processes each
+camera's latest frame and drops the rest, so a new track's second hit (the
+tracker's `confirm_hits`) could come several frames later. In the cascade
+the confirm detector is already that second look: a track it scores above
+the event threshold now counts on its first hit. Offline: parcel 0.2 → 0.0 s,
+delivery 0.6 → 0.4 s (0.4–0.9 s over frame phases), precision and recall
+unchanged at 1.0. Live (m3): 1.2 s and 1.9 s, both under 2 s. The m3 check
+now reports every person clip and counts the slowest, with when the person
+was first seen, so seeing and delivering can be told apart.

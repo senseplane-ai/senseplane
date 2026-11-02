@@ -150,6 +150,10 @@ class SourcePipeline:
                 for track in self.tracker.tracks:
                     if track.last_seen == t:
                         track.verified_score = max(track.verified_score, track.score)
+                        # The confirm detector is the second look the tracker's hits stand for: a track it
+                        # scored high enough counts at once (live, the next frame may be dropped).
+                        if not track.confirmed and track.verified_score >= EVENT_MIN_SCORE.get(track.label, 1.0):
+                            track.confirmed = True
             for track in self.tracker.active:
                 if track.last_seen == t and self._event_score(track) >= EVENT_MIN_SCORE[track.label]:
                     out += self._on_confirmed(track, rgb, t)

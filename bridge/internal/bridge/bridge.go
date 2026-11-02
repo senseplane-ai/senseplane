@@ -46,8 +46,22 @@ type Options struct {
 	Commands map[string]Handler
 	// Matter, when set, is a Matter controller whose devices are sensors too (ADR 0062).
 	Matter MatterLink
+	// Sensors are other places readings come from, by name (a phone's own sensors, Bluetooth sensors nearby).
+	Sensors map[string]SensorLink
 	// Finder, when set, looks for ONVIF cameras on the network and adds one a person picks (ADR 0063).
 	Finder *Finder
+}
+
+// SensorLink feeds readings from somewhere else than Home Assistant or Matter.
+type SensorLink interface {
+	Run(ctx context.Context, to SensorSink)
+}
+
+// SensorSink is what a sensor link tells the bridge: whether it is up, its entities, and readings.
+type SensorSink interface {
+	Connected(up bool)
+	Entities(list []api.Entity)
+	Reading(r api.Reading)
 }
 
 // MatterLink runs a Matter controller connection, telling home about its devices.
@@ -79,7 +93,7 @@ func New(o Options) *Bridge {
 		o.Log = slog.Default()
 	}
 	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1)}
-	if o.HomeAssistant != nil || o.Matter != nil {
+	if o.HomeAssistant != nil || o.Matter != nil || len(o.Sensors) > 0 {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
 	}
 	if o.Finder != nil {
@@ -147,6 +161,9 @@ func (b *Bridge) Run(ctx context.Context) {
 	if b.home != nil {
 		if ha := b.o.HomeAssistant; ha != nil {
 			go homeassistant.Run(ctx, homeassistant.Options{URL: homeassistant.WebsocketURL(ha.URL), Token: ha.Token, Log: b.o.Log}, b.home.source(linkHomeAssistant))
+		}
+		for name, l := range b.o.Sensors {
+			go l.Run(ctx, b.home.source(name))
 		}
 		if b.o.Matter != nil {
 			go b.o.Matter.Run(ctx, b.home.source(linkMatter))
@@ -330,4 +347,28 @@ func (b *Bridge) rewrite(whip string) string {
 	u.Scheme, u.Host = base.Scheme, base.Host
 	u.Path = base.Path + u.Path
 	return u.String()
+}
+
+// Refresh fetches the config now instead of at the next poll (the app just added the phone's camera).
+func (b *Bridge) Refresh() { b.resyncSoon() }
+
+// FoundCount is how many cameras the box found on its network.
+func (b *Bridge) FoundCount() int {
+	if b.found == nil {
+		return 0
+	}
+	return *b.found.health()
+}
+
+// SensorCounts is how many sensors the box lists and how many a person chose.
+func (b *Bridge) SensorCounts() (listed, sending int) {
+	if b.home == nil {
+		return 0, 0
+	}
+	b.home.mu.Lock()
+	defer b.home.mu.Unlock()
+	for _, l := range b.home.links {
+		listed += len(l.entities)
+	}
+	return listed, len(b.home.selected)
 }

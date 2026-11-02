@@ -54,7 +54,7 @@ export const readingInputSchema = {
   properties: {
     sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40 },
     kind: { enum: ["number", "state", "event"] },
-    value: { anyOf: [{ type: "number" }, { type: "boolean" }] },
+    value: { type: ["number", "boolean"] },
     unit: { type: "string", pattern: "^[a-z0-9_]{1,32}$" },
     detail: { type: "string", maxLength: 64 },
     device: deviceSchema,

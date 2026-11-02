@@ -47,9 +47,17 @@ what the phone does: camera, notifications, and Bluetooth scan with
 activity, list cameras and set watches, using the same public API as the
 console. The camera and sensors keep working without signing in.
 
-**Not on the phone.** A phone is not a Matter controller here: the app
-points to the box with Home Assistant or the bridge container for Matter
-(ADR 0062). Encrypted BTHome sensors aren't read yet.
+**Matter on the phone.** The phone is its own Matter controller (ADR 0065):
+a device shared from Apple Home, Google Home, Alexa or the maker's app is
+added with its pairing code, and its sensors are listed like the others.
+Encrypted BTHome sensors aren't read yet.
+
+**Light on the phone.** Video goes only over Wi-Fi and other unmetered
+networks unless allowed in Settings (a camera is about 20 GB a day); a warm
+phone (Android's thermal status, moderate or worse) sends 10 frames a
+second at half the bitrate until it cools; Bluetooth scans in Android's
+low-power mode; the preview is drawn only while on screen; Matter starts
+only once a device is added.
 
 ## Consequences
 

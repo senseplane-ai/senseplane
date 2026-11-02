@@ -6,7 +6,7 @@
 // Chosen sensors land on one sensor source per room ("Kitchen sensors").
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { senseName } from "senseplane";
-import { type Bridge, type BridgeCommand, type BridgeEntity, errorText } from "../api/extra";
+import { type Bridge, type BridgeCameraFound, type BridgeCommand, type BridgeEntity, errorText } from "../api/extra";
 import { Link, navigate, useLocation } from "../router";
 import { useApp } from "../shell/AppData";
 import { ago } from "../shell/sources";
@@ -29,7 +29,7 @@ export function BoxesStrip() {
   const [boxes, setBoxes] = useState<Bridge[] | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => extra.bridges.list().then((r) => live && setBoxes(r.data.filter((b) => b.home_assistant || b.matter))).catch(() => live && setBoxes([]));
+    const load = () => extra.bridges.list().then((r) => live && setBoxes(r.data.filter((b) => b.home_assistant || b.matter || b.cameras_found))).catch(() => live && setBoxes([]));
     void load();
     const t = setInterval(load, 30_000);
     return () => { live = false; clearInterval(t); };
@@ -42,8 +42,8 @@ export function BoxesStrip() {
         return (
           <Link key={b.id} to={`/boxes/${b.id}`} className="card box-card">
             <span className="box-card-name"><StatusDot tone={st.tone} />{b.name}</span>
-            <span className="muted">{b.home_assistant ? "Home Assistant" : "Matter"} · {st.text}</span>
-            <span className="box-card-action">Choose sensors →</span>
+            <span className="muted">{b.home_assistant ? "Home Assistant" : b.matter ? "Matter" : "Bridge"} · {st.text}</span>
+            <span className="box-card-action">{b.home_assistant || b.matter ? "Choose sensors →" : `${b.cameras_found} camera${b.cameras_found === 1 ? "" : "s"} found →`}</span>
           </Link>
         );
       })}
@@ -174,6 +174,117 @@ function BoxCameras({ box }: { box: Bridge }) {
   );
 }
 
+/** "Front door (Kitchen)" from Home Assistant, else the camera's model; and "Tapo C200 at 192.168.1.40". */
+export function foundTitle(c: BridgeCameraFound): { title: string; detail: string } {
+  const what = c.model || c.manufacturer || c.name || "Camera";
+  const ha = c.home_assistant;
+  const title = ha ? `${ha.name}${ha.area ? ` (${ha.area})` : ""}` : what;
+  const detail = [ha ? what : c.manufacturer && c.model && !c.model.toLowerCase().includes(c.manufacturer.toLowerCase()) ? c.manufacturer : "", c.address ? `at ${c.address}` : ""]
+    .filter(Boolean).join(" ");
+  return { title, detail: detail || "Home Assistant camera" };
+}
+
+/** Follows work handed to a box until it is done or failed. */
+function useCommand(boxId: string, onDone: (c: BridgeCommand) => void) {
+  const { extra } = useApp();
+  const [cmd, setCmd] = useState<BridgeCommand | null>(null);
+  useEffect(() => {
+    if (!cmd || cmd.status === "done" || cmd.status === "failed") return;
+    const t = setInterval(() => void extra.bridges.command(boxId, cmd.id).then((c) => {
+      setCmd(c);
+      if (c.status === "done") onDone(c);
+    }).catch(() => undefined), 2000);
+    return () => clearInterval(t);
+  }, [cmd, extra, boxId, onDone]);
+  return [cmd, setCmd] as const;
+}
+
+/** One camera the box found: pick it, enter its username and password, and the box adds it. */
+function FoundRow({ box, cam, onAdded }: { box: Bridge; cam: BridgeCameraFound; onAdded: () => void }) {
+  const { extra } = useApp();
+  const [open, setOpen] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const done = useCallback(() => onAdded(), [onAdded]);
+  const [cmd, setCmd] = useCommand(box.id, done);
+  const { title, detail } = foundTitle(cam);
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+    try {
+      setCmd(await extra.bridges.addOnvif(box.id, { camera: cam.id, username: username.trim(), password }));
+      setPassword("");
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+  const working = cmd && (cmd.status === "pending" || cmd.status === "taken");
+  return (
+    <li className="found-cam">
+      <div className="found-cam-row">
+        <span><strong>{title}</strong> <span className="muted">· {detail}</span></span>
+        {cam.source_id ? <Link to={`/cameras/${cam.source_id}`}>Added</Link>
+          : cam.onvif ? (!open && <Button size="sm" onClick={() => setOpen(true)}>Add</Button>)
+          : <span className="muted">Add it with its RTSP address below</span>}
+      </div>
+      {open && !cam.source_id && cmd?.status !== "done" && (
+        <form onSubmit={add} className="link-form">
+          <p className="muted">The username and password you set for the camera in its app (on a Tapo, the camera account under Advanced settings). Only the box uses them.</p>
+          <Field label="Username"><Input value={username} maxLength={128} autoComplete="off" spellCheck={false} onChange={(e) => setUsername(e.target.value)} /></Field>
+          <Field label="Password" error={error || undefined}><Input type="password" value={password} maxLength={256} autoComplete="new-password" onChange={(e) => setPassword(e.target.value)} /></Field>
+          <div className="link-actions">
+            <Button type="submit" variant="primary" disabled={!username.trim() || !!working}>Add camera</Button>
+            <Button type="button" variant="ghost" onClick={() => { setOpen(false); setCmd(null); setError(""); }}>Cancel</Button>
+          </div>
+        </form>
+      )}
+      {cmd && (
+        <p className="box-status" role="status">
+          {cmd.status === "pending" && <><StatusDot tone="off" />Waiting for the box…</>}
+          {cmd.status === "taken" && <><StatusDot tone="warn" />Connecting to the camera…</>}
+          {cmd.status === "done" && <><StatusDot tone="live" />Added. It shows under Cameras within a minute.</>}
+          {cmd.status === "failed" && <><StatusDot tone="warn" />Couldn't add it: {cmd.error}</>}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** "Found on your network": cameras the box found, named after Home Assistant's, to add without typing an address (ADR 0063). */
+function BoxFound({ box }: { box: Bridge }) {
+  const { extra, refreshSources } = useApp();
+  const [list, setList] = useState<BridgeCameraFound[] | null>(null);
+  const load = useCallback(() => void extra.bridges.camerasFound(box.id).then((r) => setList(r.data)).catch(() => setList([])), [extra, box.id]);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [load]);
+  const added = useCallback(() => { load(); void refreshSources(); }, [load, refreshSources]);
+  const [search, setSearch] = useCommand(box.id, load);
+  const looking = search && (search.status === "pending" || search.status === "taken");
+  const lookAgain = async () => {
+    try {
+      setSearch(await extra.bridges.searchCameras(box.id));
+    } catch {
+      setSearch(null);
+    }
+  };
+  return (
+    <Card title="Found on your network" action={box.cameras_found != null &&
+      <Button size="sm" variant="ghost" disabled={!!looking} onClick={() => void lookAgain()}>{looking ? "Looking…" : "Look again"}</Button>}>
+      {list === null ? <p className="muted">Loading…</p> : !list.length ? (
+        <p className="muted">No cameras found yet. IP cameras on the same network as this box show up here when ONVIF is on in their app.</p>
+      ) : (
+        <ul className="found-cams">
+          {list.map((c) => <FoundRow key={c.id} box={box} cam={c} onAdded={added} />)}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 /** Add a Matter device: share it from its own app (Apple Home, Google Home, the maker's app) and paste the code. */
 function BoxMatter({ box, onAdded }: { box: Bridge; onAdded: () => void }) {
   const { extra } = useApp();
@@ -293,6 +404,7 @@ export function BoxPage({ id }: { id: string }) {
         );
       })}
       {box.matter && <BoxMatter box={box} onAdded={reload} />}
+      {box.cameras_found != null && <BoxFound box={box} />}
       <BoxCameras box={box} />
     </div>
   );

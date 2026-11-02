@@ -120,6 +120,23 @@ export interface Bridge {
   home_assistant: { connected: boolean; entities: number; sending: number } | null;
   /** Its Matter controller (ADR 0062); null when it runs none. */
   matter?: { connected: boolean; nodes: number } | null;
+  /** How many cameras it lists to pick from (ADR 0063); null when it doesn't look. */
+  cameras_found?: number | null;
+}
+
+/** A camera a box found on its network (ONVIF) or in Home Assistant (ADR 0063). */
+export interface BridgeCameraFound {
+  id: string;
+  address: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  name: string | null;
+  /** Found with ONVIF: it can be added with its username and password. */
+  onvif: boolean;
+  home_assistant: { entity_id: string; name: string; area: string | null } | null;
+  /** The box's camera at this address, once added. */
+  source_id: string | null;
+  seen_at: string;
 }
 
 /** A Home Assistant entity a bridge can send; chosen ones go to their room's sensor source. */
@@ -228,6 +245,11 @@ export class ApiExtra {
     pair: (code: string, name?: string) => this.request<{ id: string; name: string }>("POST", "/bridges/pair", { code, ...(name ? { name } : {}) }),
     /** Add a Matter device through the box with the pairing code shared from its own app (ADR 0062). */
     addMatter: (id: string, code: string) => this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/matter`, { code }),
+    /** Cameras the box found, to pick from (ADR 0063). */
+    camerasFound: (id: string) => this.request<{ data: BridgeCameraFound[] }>("GET", `/bridges/${encodeURIComponent(id)}/cameras-found`),
+    searchCameras: (id: string) => this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/cameras-found/search`),
+    addOnvif: (id: string, body: { camera: string; username: string; password: string; name?: string }) =>
+      this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/onvif`, body),
     command: (id: string, cid: string) => this.request<BridgeCommand>("GET", `/bridges/${encodeURIComponent(id)}/commands/${encodeURIComponent(cid)}`),
   };
   /** Raw events page for counts (the SDK paginates through everything). */

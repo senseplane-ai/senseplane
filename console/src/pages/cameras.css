@@ -45,6 +45,11 @@
 .link-form p { margin: 0; }
 .link-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .box-cams { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.found-cams { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.found-cam { display: flex; flex-direction: column; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.found-cam:first-child { border-top: 0; padding-top: 0; }
+.found-cam-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.found-cam-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 
 @media (max-width: 600px) {
   .cams-tools { width: 100%; }

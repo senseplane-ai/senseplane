@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { navigate } from "../router";
 import { appData, fakeFetch, renderWithApp } from "../test/render";
-import { BoxPage, LinkPage, boxStatus } from "./Boxes";
+import { BoxPage, LinkPage, boxStatus, foundTitle } from "./Boxes";
 
 afterEach(() => navigate("/", { replace: true }));
 
@@ -118,4 +118,79 @@ it("doesn't offer Matter on a box without it", async () => {
   renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
   expect(await screen.findByRole("heading", { name: "Mum's box" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Matter devices" })).toBeNull();
+});
+
+const FOUND = [
+  { id: "urn:uuid:cam-1", address: "192.168.1.40", manufacturer: "tp-link", model: "Tapo C200", name: "TP-IPC", onvif: true,
+    home_assistant: { entity_id: "camera.front_door", name: "Front door", area: "Kitchen" }, source_id: null, seen_at: "2026-11-02T08:00:00Z" },
+  { id: "urn:uuid:cam-2", address: "192.168.1.41", manufacturer: "Reolink", model: "RLC-510A", name: null, onvif: true, home_assistant: null, source_id: "src_porch", seen_at: "2026-11-02T08:00:00Z" },
+  { id: "camera.nest_doorbell", address: null, manufacturer: "Google Nest", model: null, name: null, onvif: false,
+    home_assistant: { entity_id: "camera.nest_doorbell", name: "Doorbell", area: null }, source_id: null, seen_at: "2026-11-02T08:00:00Z" },
+];
+
+it("names a camera it found after Home Assistant's, else its model", () => {
+  expect(foundTitle(FOUND[0] as never)).toEqual({ title: "Front door (Kitchen)", detail: "Tapo C200 at 192.168.1.40" });
+  expect(foundTitle(FOUND[1] as never)).toEqual({ title: "RLC-510A", detail: "Reolink at 192.168.1.41" });
+  expect(foundTitle(FOUND[2] as never)).toEqual({ title: "Doorbell", detail: "Google Nest" });
+});
+
+it("adds a camera found on the network with its username and password, and shows how it goes", async () => {
+  let status = "pending";
+  let body: unknown;
+  let found: unknown[] = FOUND;
+  const cmd = () => ({ id: "bcm_7", kind: "onvif_add_camera", status, result: status === "done" ? { source_id: "src_front" } : null, error: null, created_at: "2026-11-02T08:00:00Z", finished_at: null });
+  const f = fakeFetch({
+    "GET /bridges": { data: [{ ...BOX, cameras_found: 3 }] },
+    "GET /bridges/brg_1/entities": { data: [] },
+    "GET /bridges/brg_1/cameras-found": () => Response.json({ data: found }),
+    "POST /bridges/brg_1/onvif": async (_u: URL, init?: RequestInit) => { body = JSON.parse(String(init?.body)); return Response.json(cmd(), { status: 202 }); },
+    "GET /bridges/brg_1/commands/bcm_7": () => Response.json(cmd()),
+  });
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  const card = (await screen.findByRole("heading", { name: "Found on your network" })).closest("section")!;
+  expect(await within(card).findByText("Front door (Kitchen)")).toBeInTheDocument();
+  expect(within(card).getByText("· Tapo C200 at 192.168.1.40")).toBeInTheDocument();
+  expect(within(card).getByRole("link", { name: "Added" })).toHaveAttribute("href", "/cameras/src_porch");
+  expect(within(card).getByText("Add it with its RTSP address below")).toBeInTheDocument(); // the cloud camera
+  expect(within(card).getAllByRole("button", { name: "Add" })).toHaveLength(1);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Add" }));
+  fireEvent.change(within(card).getByLabelText("Username"), { target: { value: "admin" } });
+  fireEvent.change(within(card).getByLabelText("Password"), { target: { value: "s3cret" } });
+  expect(within(card).getByLabelText("Password")).toHaveAttribute("type", "password");
+  fireEvent.click(within(card).getByRole("button", { name: "Add camera" }));
+  expect(await within(card).findByText("Waiting for the box…")).toBeInTheDocument();
+  expect(body).toEqual({ camera: "urn:uuid:cam-1", username: "admin", password: "s3cret" });
+  expect(within(card).getByLabelText("Password")).toHaveValue(""); // not kept on the page
+  status = "done";
+  found = [{ ...FOUND[0]!, source_id: "src_front" }, FOUND[1]!, FOUND[2]!];
+  expect(await within(card).findByText("Added. It shows under Cameras within a minute.", {}, { timeout: 4000 })).toBeInTheDocument();
+  await waitFor(() => expect(within(card).getAllByRole("link", { name: "Added" })).toHaveLength(2));
+});
+
+it("says why a camera couldn't be added, and looks again when asked", async () => {
+  let searched = false;
+  const f = fakeFetch({
+    "GET /bridges": { data: [{ ...BOX, cameras_found: 1 }] },
+    "GET /bridges/brg_1/entities": { data: [] },
+    "GET /bridges/brg_1/cameras-found": { data: [FOUND[0]] },
+    "POST /bridges/brg_1/onvif": () => Response.json({ id: "bcm_8", kind: "onvif_add_camera", status: "failed", result: null, error: "the camera refused the username or password", created_at: "2026-11-02T08:00:00Z", finished_at: null }, { status: 202 }),
+    "POST /bridges/brg_1/cameras-found/search": () => { searched = true; return Response.json({ id: "bcm_9", kind: "onvif_search", status: "pending", result: null, error: null, created_at: "2026-11-02T08:00:00Z", finished_at: null }, { status: 202 }); },
+  });
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  const card = (await screen.findByRole("heading", { name: "Found on your network" })).closest("section")!;
+  fireEvent.click(await within(card).findByRole("button", { name: "Add" }));
+  fireEvent.change(within(card).getByLabelText("Username"), { target: { value: "admin" } });
+  fireEvent.click(within(card).getByRole("button", { name: "Add camera" }));
+  expect(await within(card).findByText("Couldn't add it: the camera refused the username or password")).toBeInTheDocument();
+  fireEvent.click(within(card).getByRole("button", { name: "Look again" }));
+  expect(await within(card).findByRole("button", { name: "Looking…" })).toBeDisabled();
+  expect(searched).toBe(true);
+});
+
+it("doesn't show cameras found on a box that doesn't look for them", async () => {
+  const f = fakeFetch({ "GET /bridges": { data: [{ ...BOX, cameras_found: null }] }, "GET /bridges/brg_1/entities": { data: [] } });
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  expect(await screen.findByRole("heading", { name: "Mum's box" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Found on your network" })).toBeNull();
 });

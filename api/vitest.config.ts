@@ -37,5 +37,6 @@ export default defineConfig(async () => {
     const why = [!pg && `Postgres isn't reachable at ${new URL(PG).host} (TEST_ADMIN_DATABASE_URL)`, !s3 && `object storage isn't reachable at ${new URL(S3).host} (TEST_S3_ENDPOINT)`].filter(Boolean);
     console.warn(`\n[api] skipping ${skipped.length} test files: ${why.join("; ")}. Start the compose infrastructure (docker compose up) or point the variables at one.\n`);
   }
-  return { test: { exclude: [...configDefaults.exclude, ...skipped], passWithNoTests: true } };
+  // Each file migrates a fresh database; with every file running at once that can take longer than vitest's defaults.
+  return { test: { exclude: [...configDefaults.exclude, ...skipped], passWithNoTests: true, hookTimeout: 30_000, testTimeout: 15_000 } };
 });

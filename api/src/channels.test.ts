@@ -207,6 +207,9 @@ describe("telegram channels", () => {
   });
 
   it("answers a question asked in the chat, as the chat's agent, with the moment as a button", async () => {
+    // A recent event for the answer to cite (questions look back a week, so a fixed date would age out).
+    await api.data.withAccount(acc, (s) => createEvent(s, { event_key: "door-recent", source_id: kitchen, type: "detection.person", sense: "video",
+      occurred_at: new Date(Date.now() - 3600_000), summary: "A person was seen.", labels: ["person"], confidence: 0.9 }));
     await message(PRIVATE, "How many times did someone come to the door today?");
     await flush();
     const reply = sentTo(PRIVATE.id).at(-1)!;

@@ -61,8 +61,12 @@ export async function sweepReadings(data: DataAccess, now = new Date()): Promise
   let deleted = 0;
   for (const t of await data.readingsRetentionTargets()) {
     const cutoff = new Date(now.getTime() - t.retention_days * 86400_000);
-    const r = await data.withAccount(t.account_id, (s) =>
-      s.db.deleteFrom("sensor_readings").where("source_id", "=", t.source_id).where("measured_at", "<", cutoff).executeTakeFirst());
+    const r = await data.withAccount(t.account_id, async (s) => {
+      // A box's link spans go with its sensors' readings: they only say which stretches those readings cover.
+      const src = await s.db.selectFrom("sources").select("bridge_id").where("id", "=", t.source_id).executeTakeFirst();
+      if (src?.bridge_id) await s.db.deleteFrom("bridge_links").where("bridge_id", "=", src.bridge_id).where("ended_at", "<", cutoff).execute();
+      return s.db.deleteFrom("sensor_readings").where("source_id", "=", t.source_id).where("measured_at", "<", cutoff).executeTakeFirst();
+    });
     deleted += Number(r.numDeletedRows);
   }
   return deleted;

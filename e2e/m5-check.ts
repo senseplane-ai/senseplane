@@ -147,7 +147,7 @@ async function remoteToken(): Promise<string> {
   const grants = (await call("GET", "/v1/grants")).data.filter((g: any) => g.agent_id === apps[0]?.id);
   check("app_agent_created_with_picked_access", apps.length === 1 && grants.length === 1
     && [...grants[0].source_ids].sort().join() === [cam.id, sensor.id].sort().join()
-    && ["video", "audio", "temperature", "humidity"].every((s) => grants[0].senses.includes(s)) && grants[0].abilities.includes("watch"), { apps: apps.length, grant: grants[0] });
+    && ["video", "audio", "sensors"].every((s) => grants[0].senses.includes(s)) && grants[0].abilities.includes("watch"), { apps: apps.length, grant: grants[0] });
 
   // The first tab goes back to the console, still signed in (its session survives the round trip).
   await page.goto(CONSOLE);

@@ -4,7 +4,9 @@
 // Ingest check (ADR 0045), against a running stack (API, media, brain):
 //  1. sensors: an integration token pushes temperatures; a watch "temperature
 //     above 27 for 5 min" fires reading.threshold once; read_environment (MCP)
-//     returns the latest reading;
+//     returns the latest reading; home sensors (ADR 0060): a door's state per
+//     device, a "left open" watch, a doorbell, "how many times was the fridge
+//     opened", and read_environment with states;
 //  2. bridge: go2rtc serves an RTSP camera (a looped H.264 fixture, copied),
 //     the bridge container claims it with --rtsp and relays it over WHIP;
 //     segments are recorded and the source is online; stopping the RTSP feed
@@ -82,6 +84,41 @@ const until = async <T>(what: string, ms: number, fn: () => Promise<T | undefine
   const envJson = JSON.parse(env.content.find((c: any) => c.type === "text").text);
   const r = envJson.sources?.[0]?.readings?.[0];
   check("read_environment_latest", r?.sense === "temperature" && r?.value === 26, envJson.sources?.[0]);
+}
+
+// --- 1b. Home sensors: states, events and devices (ADR 0060) --------------------
+{
+  const home = await call(owner, "POST", "/v1/sources", { name: "Flat", location: "Kitchen", type: "sensor", senses: ["temperature"] });
+  const token = home.ingest.integration_token as string;
+  // Compiled with the request, so the check doesn't depend on a recorded model answer.
+  const watch = await call(owner, "POST", "/v1/watches", { instruction: "Tell me if the fridge door is left open for 5 minutes", sources: [home.id],
+    compiled: { trigger: { type: "sensor", sense: "contact", state: true, device: "Fridge door", min_duration_s: 300 }, cooldown_s: 0, active_hours: null } });
+  const fridge = { id: "binary_sensor.fridge", name: "Fridge door" };
+  const t0 = Date.now() - 60 * 60_000;
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
+  const pushed = await call(token, "POST", `/v1/sources/${home.id}/readings`, { readings: [
+    { sense: "contact", value: true, device: fridge, at: at(0) }, { sense: "contact", value: false, device: fridge, at: at(1) },
+    { sense: "contact", value: true, device: fridge, at: at(10) }, { sense: "contact", value: true, device: fridge, at: at(16) },
+    { sense: "contact", value: false, device: fridge, at: at(17) },
+    { sense: "doorbell", at: at(20) },
+    { sense: "power", value: 1900, unit: "watt", device: { id: "sensor.kettle_power", name: "Kettle" }, at: at(30) },
+  ] });
+  check("home_readings_accepted", pushed.accepted === 7 && pushed.events.length === 1, pushed);
+  const ev = (await call(owner, "GET", `/v1/events?source=${home.id}&type=reading.threshold`)).data[0];
+  check("door_left_open_fired", ev?.watch_id === watch.id && ev?.value?.state === "open" && ev?.value?.device?.name === "Fridge door", ev && { summary: ev.summary, value: ev.value });
+  const src = await call(owner, "GET", `/v1/sources/${home.id}`);
+  check("sensor_gained_senses", ["contact", "doorbell", "power"].every((x) => src.senses.includes(x)), src.senses);
+  const count = await call(owner, "POST", "/v1/activity/query", { measure: "count", what: { sensor: { sense: "contact", state: true, device: "Fridge door" } }, period: "last_24_hours", sources: [home.id] });
+  check("fridge_opened_count", count.value === 2, count);
+
+  const mcp = new Client({ name: "ingest-e2e-home", version: "1" });
+  await mcp.connect(new StdioClientTransport({ command: "node", args: [`${MCP_DIST}stdio.js`], env: { ...process.env, SENSEPLANE_API_KEY: owner, SENSEPLANE_API_URL: `${API}/v1` } as Record<string, string> }));
+  const env: any = await mcp.callTool({ name: "read_environment", arguments: { source: home.id } });
+  await mcp.close();
+  const readings = JSON.parse(env.content.find((c: any) => c.type === "text").text).sources?.[0]?.readings ?? [];
+  const door = readings.find((x: any) => x.sense === "contact");
+  check("read_environment_states", door?.state === "closed" && door?.device === "Fridge door" && door?.since === at(17)
+    && readings.some((x: any) => x.sense === "doorbell" && x.last === "rang") && readings.some((x: any) => x.sense === "power" && x.value === 1900), readings);
 }
 
 // --- 2. Bridge: RTSP → WHIP → recording, then reconnecting ----------------------

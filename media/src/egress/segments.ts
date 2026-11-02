@@ -15,7 +15,7 @@ import type { Log } from "../callbacks.js";
 import { parsePlaylist } from "../playlist.js";
 import { ffmpegProcesses, metrics } from "../telemetry.js";
 import { type RtpLeg, ffprobePath, sdpFor, wakeDemuxer } from "./ffmpeg.js";
-import type { Uploader } from "./uploader.js";
+import type { Stored, Uploader } from "./uploader.js";
 import type { MaxResolution } from "./validate.js";
 
 const exec = promisify(execFile);
@@ -219,11 +219,12 @@ export class SegmentsRun {
     const key = segmentKey(this.o.keyPrefix, startMs);
     const t0 = performance.now();
     let traceparent: string | undefined;
+    let stored: Stored = { bytes: body.length };
     try {
       traceparent = await withSpan("media.segment.upload", {
         kind: SpanKind.PRODUCER, root: true, attributes: { "senseplane.session_id": this.o.sessionId, "senseplane.segment_ms": durationMs },
       }, async () => {
-        await this.o.uploader.put(key, body, "video/iso.segment");
+        stored = await this.o.uploader.put(key, body, "video/iso.segment");
         return currentTraceparent();
       });
       metrics.segmentUpload.observe((performance.now() - t0) / 1000);
@@ -248,8 +249,10 @@ export class SegmentsRun {
     this.lastEnd = startMs + durationMs;
     await rm(path, { force: true });
     this.o.emit("segment.written", {
-      key, init_key: this.initKey, start: new Date(startMs).toISOString(), duration_ms: durationMs, bytes: body.length,
+      key, init_key: this.initKey, start: new Date(startMs).toISOString(), duration_ms: durationMs, bytes: stored.bytes,
       codec: "h264", has_audio: this.hasAudio, ...(this.size ?? {}),
+      // Encrypted with the caller's key for it (ADR 0066): the caller records which key and IV.
+      ...(stored.encryption ? { encryption: stored.encryption } : {}),
     }, `segment.written:${key}`, traceparent);
     return true;
   }

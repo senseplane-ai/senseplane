@@ -142,9 +142,16 @@ describe("events, webhooks, readings, source config", () => {
     process.env.PLAYBACK_SIGNING_SECRET = "p".repeat(40);
     process.env.INGEST_SIGNING_KEY = await exportPKCS8((await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true })).privateKey);
     delete process.env.SECRETS_ENCRYPTION_KEY;
+    const prevMedia = process.env.MEDIA_ENCRYPTION_KEY;
+    delete process.env.MEDIA_ENCRYPTION_KEY;
     try {
+      // Footage keys first (ADR 0066), then the secrets key (ADR 0027).
+      await expect(createApi({ database: t.appUrl, logger: false, workers: false, captureUrl: "https://c/capture.html" })).rejects.toThrow(/MEDIA_ENCRYPTION_KEY/);
+      process.env.MEDIA_ENCRYPTION_KEY = "m".repeat(40);
       await expect(createApi({ database: t.appUrl, logger: false, workers: false, captureUrl: "https://c/capture.html" })).rejects.toThrow(/SECRETS_ENCRYPTION_KEY/);
     } finally {
+      if (prevMedia === undefined) delete process.env.MEDIA_ENCRYPTION_KEY;
+      else process.env.MEDIA_ENCRYPTION_KEY = prevMedia;
       for (const [k, v] of [["SENSEPLANE_MODE", prev.mode], ["PLAYBACK_SIGNING_SECRET", prev.play], ["SECRETS_ENCRYPTION_KEY", prev.key], ["INGEST_SIGNING_KEY", prev.ingest]] as const) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;

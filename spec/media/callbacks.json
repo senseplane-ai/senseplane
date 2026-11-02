@@ -132,11 +132,16 @@
         "init_key": {"type": "string", "description": "{keyPrefix}init/{sessionId}.mp4, {sessionId}-{run}.mp4 after the first run; always uploaded before the run's first segment"},
         "start": {"type": "string", "format": "date-time"},
         "duration_ms": {"type": "integer", "minimum": 0},
-        "bytes": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0, "description": "Bytes stored (after encryption, when encrypted)"},
         "codec": {"type": "string", "description": "h264"},
         "has_audio": {"type": "boolean"},
         "width": {"type": "integer"},
-        "height": {"type": "integer"}
+        "height": {"type": "integer"},
+        "encryption": {
+          "type": "object", "required": ["method", "key_id", "iv"],
+          "description": "Present when the object was encrypted with the key from its upload_url answer (ADR 0066)",
+          "properties": {"method": {"const": "aes-128"}, "key_id": {"type": "string"}, "iv": {"type": "string", "pattern": "^[0-9a-f]{32}$"}}
+        }
       }
     },
     "recordingGap": {
@@ -172,7 +177,8 @@
         "room": {"type": "string"},
         "key": {"type": "string"},
         "content_type": {"type": "string", "description": "video/mp4 (init) or video/iso.segment"},
-        "bytes": {"type": "integer", "minimum": 0}
+        "bytes": {"type": "integer", "minimum": 0},
+        "encryption": {"type": "array", "items": {"enum": ["aes-128"]}, "description": "Encryptions this media plane can apply before the PUT (ADR 0066); a caller holding keys may answer with one. A media plane that offers none stores objects as they are"}
       }
     },
     "uploadUrlAnswer": {
@@ -180,7 +186,17 @@
       "required": ["url"],
       "properties": {
         "url": {"type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "description": "A presigned PUT, valid for about a minute. A credential: never logged"},
-        "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra headers to send with the PUT"}
+        "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra headers to send with the PUT"},
+        "encryption": {
+          "type": "object", "required": ["method", "key", "iv", "key_id"],
+          "description": "Only when offered, and only for media segments (the init segment stays in clear): encrypt the object as HLS AES-128 (AES-128-CBC with PKCS#7 padding, RFC 8216 5.2) with this key and IV before the PUT, and report it in segment.written. The key is for this upload only: never kept or logged",
+          "properties": {
+            "method": {"const": "aes-128"},
+            "key": {"type": "string", "description": "16 bytes, base64"},
+            "iv": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+            "key_id": {"type": "string", "description": "Opaque; echoed in segment.written"}
+          }
+        }
       }
     },
     "credentialsRequest": {

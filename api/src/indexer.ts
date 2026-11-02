@@ -17,8 +17,17 @@ interface SegmentWritten {
   bytes: number;
   codec: string;
   has_audio?: boolean;
+  /** How the media plane encrypted it (ADR 0066): the account key version and IV the API gave it. */
+  encryption?: { method?: string; key_id?: string; iv?: string };
   width?: number;
   height?: number;
+}
+
+/** A segment's encryption as reported by the media plane; anything else is stored as in clear. */
+function encryptionOf(e: SegmentWritten): { enc_version: number; enc_iv: Buffer } | Record<string, never> {
+  const x = e.encryption;
+  if (x?.method !== "aes-128" || !/^\d+$/.test(x.key_id ?? "") || !/^[0-9a-f]{32}$/i.test(x.iv ?? "")) return {};
+  return { enc_version: Number(x.key_id), enc_iv: Buffer.from(x.iv!, "hex") };
 }
 
 export async function handleMediaEvent(data: DataAccess, subject: string, payload: Record<string, unknown>, log: FastifyBaseLogger) {
@@ -31,6 +40,7 @@ export async function handleMediaEvent(data: DataAccess, subject: string, payloa
       s.segments.insert({
         source_id: sourceId, key: e.key, init_key: e.init_key, start_at: e.start, duration_ms: e.duration_ms,
         bytes: e.bytes, codec: e.codec, has_audio: e.has_audio ?? false,
+        ...encryptionOf(e),
       }),
     );
     if (!ok) log.warn({ sourceId, accountId }, "segment for unknown source ignored");

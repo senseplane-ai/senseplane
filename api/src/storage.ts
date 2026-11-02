@@ -3,6 +3,8 @@
 
 import { CopyObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Readable } from "node:stream";
+import { type KeyRing, openObject, sealObject } from "./keys.js";
 
 export interface StorageConfig {
   endpoint?: string;
@@ -98,6 +100,45 @@ export function createObjectStorage(cfg: StorageConfig): ObjectStorage {
 /** Reads a whole object into memory (snapshots and other small files). */
 export async function readObject(storage: ObjectStorage, key: string): Promise<Buffer> {
   const { body } = await storage.get(key);
+  const chunks: Buffer[] = [];
+  for await (const c of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(c));
+  return Buffer.concat(chunks);
+}
+
+/** Objects sealed with the account's key (ADR 0066); recording segments are encrypted by the media plane instead. */
+const SEALED_PREFIXES = ["snapshots/", "exports/"];
+const sealedKey = (key: string) => SEALED_PREFIXES.some((p) => key.startsWith(p));
+const accountOfKey = (key: string) => {
+  const id = key.split("/")[1];
+  if (!id) throw new Error(`no account in object key ${key}`);
+  return id;
+};
+
+/**
+ * Storage that seals snapshots and exports with the account's key on put
+ * and opens them on get (objects stored before come back as they are).
+ * Sealed objects are never presigned: the API streams them, decrypted.
+ */
+export function encryptingStorage(inner: ObjectStorage, ring: KeyRing): ObjectStorage {
+  return {
+    ...inner,
+    deletePrefix: (prefix) => inner.deletePrefix(prefix),
+    async put(key, body, contentType) {
+      return inner.put(key, sealedKey(key) ? await sealObject(ring, accountOfKey(key), body) : body, contentType);
+    },
+    async presign(key, expires) {
+      return sealedKey(key) ? undefined : inner.presign(key, expires);
+    },
+    async get(key) {
+      const obj = await inner.get(key);
+      if (!sealedKey(key)) return obj;
+      const plain = await openObject(ring, accountOfKey(key), await readAll(obj.body));
+      return { body: Readable.from([plain]), length: plain.length, contentType: obj.contentType };
+    },
+  };
+}
+
+async function readAll(body: ReadableStream | NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const c of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(c));
   return Buffer.concat(chunks);

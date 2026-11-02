@@ -14,6 +14,7 @@ import { type FramesMeta, type MaskCache, forwardFrames } from "../frames.js";
 import { handleMediaEvent } from "../indexer.js";
 import { type CallbackClaims, type IngestSigner, roomFor } from "../ingest.js";
 import { CAMERA_IDENTITIES, type MediaControl, isViewer, viewerSession } from "../media-driver.js";
+import { type KeyRing, segmentIV, segmentKey } from "../keys.js";
 import type { ObjectStorage } from "../storage.js";
 import { handleViewerEvent } from "./live.js";
 
@@ -30,6 +31,8 @@ export interface CallbackDeps {
   /** A feed ended on the media plane (restart it if the camera is still on). */
   onFeedEnded?(accountId: string, sourceId: string, sessionId: string): Promise<void>;
   log: FastifyBaseLogger;
+  /** Account keys: a media plane that offers to encrypt segments gets each one's key (ADR 0066). */
+  keys?: KeyRing;
 }
 
 const FEED_EVENTS = new Set(["source.online", "source.offline", "segment.written", "recording.gap", "resolution_rejected"]);
@@ -80,7 +83,15 @@ export function registerMediaCallbacks(app: FastifyInstance, deps: CallbackDeps)
         const type = String(body.content_type ?? "");
         if (!UPLOAD_TYPES.has(type)) throw new ApiError(400, "validation_failed", "content_type must be video/mp4 or video/iso.segment");
         if (!deps.storage) throw new ApiError(503, "service_unavailable", "object storage is not configured");
-        return { url: await deps.storage.presignPut(key, type, 120) };
+        const url = await deps.storage.presignPut(key, type, 120);
+        // Recording segments are encrypted by the media plane when it offers to (HLS AES-128, ADR 0066);
+        // the init segment (codec settings, no pictures) stays in clear so players can read it.
+        const offered = Array.isArray(body.encryption) && body.encryption.includes("aes-128");
+        if (offered && deps.keys && type === "video/iso.segment") {
+          const dk = await deps.keys.current(accountId);
+          return { url, encryption: { method: "aes-128", key_id: String(dk.version), key: segmentKey(dk.key, sourceId).toString("base64"), iv: segmentIV(dk.key, key).toString("hex") } };
+        }
+        return { url };
       }
 
       const event = String(body.event ?? "");

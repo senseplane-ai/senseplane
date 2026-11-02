@@ -8,6 +8,7 @@ import type { AccountScope, DataAccess } from "../data/access.js";
 import { newId } from "../data/ids.js";
 import type { ClipsTable } from "../data/schema.js";
 import { ApiError } from "../errors.js";
+import { type KeyRing, decryptSegment, segmentKey } from "../keys.js";
 import { type KeyRefSealer, type MediaClaims, type PlaybackScope, type PlaybackSigner, PlaybackTokenError, buildPlaylist } from "../playback.js";
 import type { ObjectStorage } from "../storage.js";
 import { audioTrackIds, stripAudioInit, stripTracksFromSegment } from "../fmp4.js";
@@ -33,6 +34,8 @@ export interface PlaybackDeps {
   /** Seals the caller's key into media links, and re-checks it on every media request (ADR 0036). */
   keyRefs?: KeyRefSealer;
   guard?: MediaGuard;
+  /** Account keys: encrypted segments' keys for players, and to decrypt where the API reads them (ADR 0066). */
+  keys?: KeyRing;
 }
 
 const MAX_PLAYLIST_MS = 24 * 3600_000;
@@ -49,7 +52,7 @@ const parseTime = (v: unknown, name: string): number => {
 function segmentsIn(s: AccountScope, sourceId: string, from: number, to: number) {
   return s.db
     .selectFrom("segments")
-    .select(["id", "key", "init_key", "start_at", "duration_ms", "bytes"])
+    .select(["id", "key", "init_key", "start_at", "duration_ms", "bytes", "enc_version", "enc_iv"])
     .where("source_id", "=", sourceId)
     .where("start_at", "<", new Date(to))
     .where(sql<boolean>`start_at + duration_ms * interval '1 millisecond' > ${new Date(from)}`)
@@ -130,6 +133,8 @@ export async function createClip(
       .values(copies.map((c) => ({
         clip_id: clipId, seq: c.seq, account_id: accountId, key: c.key, init_key: c.init_key,
         start_at: new Date(c.r.start_at), duration_ms: c.r.duration_ms,
+        // A copy is the same ciphertext: same key and IV.
+        enc_version: c.r.enc_version, enc_iv: c.r.enc_iv,
       })))
       .execute();
     return row;
@@ -202,8 +207,12 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     return { scope, ...decision };
   };
 
+  const encOf = (r: { enc_version: number | null; enc_iv: Buffer | null }) =>
+    r.enc_version !== null && r.enc_iv ? { enc: { version: r.enc_version, iv: r.enc_iv } } : {};
   app.get<{ Params: { token: string } }>("/playback/:token/index.m3u8", async (req, reply) => {
-    const { scope } = await authorize(req.params.token);
+    const { scope, stripAudio } = await authorize(req.params.token);
+    // Without audio the API serves the segments itself, decrypted: no keys in that playlist.
+    const enc = (r: { enc_version: number | null; enc_iv: Buffer | null }) => (stripAudio ? {} : encOf(r));
     const segments = await deps.data.withAccount(scope.accountId, async (s) => {
       if (scope.kind === "range") {
         const rows = await segmentsIn(s, scope.sourceId, scope.from, scope.to);
@@ -211,7 +220,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
         const initRef = new Map<string, string>();
         return rows.map((r) => {
           if (!initRef.has(r.init_key)) initRef.set(r.init_key, String(r.id));
-          return { ref: String(r.id), initRef: initRef.get(r.init_key)!, start: new Date(r.start_at), durationMs: r.duration_ms };
+          return { ref: String(r.id), initRef: initRef.get(r.init_key)!, start: new Date(r.start_at), durationMs: r.duration_ms, ...enc(r) };
         });
       }
       if (scope.kind !== "clip") return [];
@@ -219,7 +228,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
       const initRef = new Map<string, string>();
       return rows.map((r) => {
         if (!initRef.has(r.init_key)) initRef.set(r.init_key, String(r.seq));
-        return { ref: String(r.seq), initRef: initRef.get(r.init_key)!, start: new Date(r.start_at), durationMs: r.duration_ms };
+        return { ref: String(r.seq), initRef: initRef.get(r.init_key)!, start: new Date(r.start_at), durationMs: r.duration_ms, ...enc(r) };
       });
     });
     if (!segments.length) throw new ApiError(404, "not_found", "no recording in this range any more");
@@ -247,8 +256,9 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     }
     return ids;
   };
-  const deliverWithoutAudio = async (reply: FastifyReply, key: string, initKey: string, isInit: boolean) => {
-    const raw = await readAll((await deps.storage.get(key)).body);
+  const deliverWithoutAudio = async (reply: FastifyReply, key: string, initKey: string, isInit: boolean, plain?: (b: Buffer) => Promise<Buffer>) => {
+    const stored = await readAll((await deps.storage.get(key)).body);
+    const raw = plain ? await plain(stored) : stored;
     const body = isInit ? stripAudioInit(raw) : stripTracksFromSegment(raw, await audioTracksOf(initKey));
     return reply
       .header("content-type", isInit ? "video/mp4" : "video/iso.segment")
@@ -261,21 +271,26 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     deps.data.withAccount(scope.accountId, async (s) => {
       if (scope.kind === "range") {
         if (!/^\d+$/.test(ref)) return undefined;
-        const r = await s.db.selectFrom("segments").select(["key", "init_key", "source_id", "start_at", "duration_ms"]).where("id", "=", ref).executeTakeFirst();
+        const r = await s.db.selectFrom("segments").select(["key", "init_key", "source_id", "start_at", "duration_ms", "enc_version", "enc_iv"]).where("id", "=", ref).executeTakeFirst();
         if (!r || r.source_id !== scope.sourceId) return undefined;
         const start = new Date(r.start_at).getTime();
         if (start >= scope.to || start + r.duration_ms <= scope.from) return undefined;
         return r;
       }
       if (scope.kind !== "clip") return undefined;
-      return s.db.selectFrom("clip_segments").select(["key", "init_key"]).where("clip_id", "=", scope.clipId).where("seq", "=", Number(ref)).executeTakeFirst();
+      return s.db.selectFrom("clip_segments").innerJoin("clips", "clips.id", "clip_segments.clip_id")
+        .select(["clip_segments.key", "clip_segments.init_key", "clips.source_id", "clip_segments.enc_version", "clip_segments.enc_iv"])
+        .where("clip_segments.clip_id", "=", scope.clipId).where("clip_segments.seq", "=", Number(ref)).executeTakeFirst();
     });
 
   app.get<{ Params: { token: string; ref: string } }>("/playback/:token/s/:ref", async (req, reply) => {
     const { scope, stripAudio } = await authorize(req.params.token);
     const row = await lookup(scope, req.params.ref.replace(/\.m4s$/, ""));
     if (!row) throw new ApiError(404, "not_found", "segment not found");
-    if (stripAudio) return deliverWithoutAudio(reply, row.key, row.init_key, false);
+    if (stripAudio) {
+      const decrypt = row.enc_version !== null && row.enc_iv ? async (b: Buffer) => decryptSegment(await sourceKey(scope.accountId, row.source_id, row.enc_version!), row.enc_iv!, b) : undefined;
+      return deliverWithoutAudio(reply, row.key, row.init_key, false, decrypt);
+    }
     return deliver(reply, row.key, "video/iso.segment");
   });
   app.get<{ Params: { token: string; ref: string } }>("/playback/:token/i/:ref", async (req, reply) => {
@@ -284,6 +299,29 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     if (!row) throw new ApiError(404, "not_found", "init segment not found");
     if (stripAudio) return deliverWithoutAudio(reply, row.init_key, row.init_key, true);
     return deliver(reply, row.init_key, "video/mp4");
+  });
+
+  /** A camera's segment key, for one account key version. */
+  const sourceKey = async (accountId: string, sourceId: string, version: number) => {
+    const dk = await deps.keys?.get(accountId, version);
+    if (!dk) throw new ApiError(404, "not_found", "this recording's key no longer exists");
+    return segmentKey(dk, sourceId);
+  };
+  // The key players fetch for encrypted segments (#EXT-X-KEY); the playlist's token is the credential.
+  app.get<{ Params: { token: string; version: string } }>("/playback/:token/k/:version", async (req, reply) => {
+    const { scope, stripAudio } = await authorize(req.params.token);
+    // A video-only link is served decrypted segments without audio; the key would open the audio too.
+    if (stripAudio) throw new ApiError(403, "forbidden_sense", "this link has no key");
+    const version = Number(req.params.version.replace(/\.key$/, ""));
+    if (!Number.isInteger(version) || version < 1) throw new ApiError(404, "not_found", "no such key");
+    let sourceId: string | undefined;
+    if (scope.kind === "range") sourceId = scope.sourceId;
+    else if (scope.kind === "clip") {
+      sourceId = (await deps.data.withAccount(scope.accountId, (s) => s.db.selectFrom("clips").select("source_id").where("id", "=", scope.clipId).executeTakeFirst()))?.source_id;
+    }
+    if (!sourceId) throw new ApiError(404, "not_found", "no such key");
+    const key = await sourceKey(scope.accountId, sourceId, version);
+    return reply.header("content-type", "application/octet-stream").header("cache-control", "private, no-store").send(key);
   });
 
   // Signed media objects (event snapshots) and a source's latest snapshot.

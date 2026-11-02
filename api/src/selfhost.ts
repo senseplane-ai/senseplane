@@ -36,6 +36,8 @@ export interface Secrets {
   mcp_token_secret: string;
   playback_signing_secret: string;
   secrets_encryption_key: string;
+  /** Wraps every account's footage keys (ADR 0066): lose it and the recordings can't be read. */
+  media_encryption_key: string;
   /** kid:base64(PKCS#8 PEM) and kid:base64(SPKI PEM), as MEDIA_SIGNING_KEY and MEDIA_TOKEN_PUBLIC_KEYS expect. */
   media_signing_key: string;
   media_public_keys: string;
@@ -62,6 +64,7 @@ const GENERATORS: { [K in keyof Secrets]: () => string } = {
   mcp_token_secret: () => hex(32),
   playback_signing_secret: () => hex(32),
   secrets_encryption_key: () => hex(32),
+  media_encryption_key: () => hex(32),
   media_signing_key: () => "",
   media_public_keys: () => "",
 };
@@ -255,6 +258,7 @@ export function serviceFiles(s: Settings, x: Secrets, address: string): ServiceF
         TRUST_PROXY: 1,
         PLAYBACK_SIGNING_SECRET: x.playback_signing_secret,
         SECRETS_ENCRYPTION_KEY: x.secrets_encryption_key,
+        MEDIA_ENCRYPTION_KEY: x.media_encryption_key,
         S3_ENDPOINT: "http://s3:9000",
         S3_BUCKET: "senseplane",
         S3_ACCESS_KEY_ID: x.s3_access_key,

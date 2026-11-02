@@ -53,7 +53,8 @@ import { createMediaGuard, mediaClaims } from "./media-access.js";
 import { metricsAllowed, registerRateLimits, trustProxyFromEnv } from "./rate-limit.js";
 import { hashApiKey } from "./data/access.js";
 import type { FastifyRequest } from "fastify";
-import { type ObjectStorage, type StorageConfig, createObjectStorage } from "./storage.js";
+import { type KeyWrapper, createKeyRing, envKeyWrapper, newMediaKey } from "./keys.js";
+import { type ObjectStorage, type StorageConfig, createObjectStorage, encryptingStorage } from "./storage.js";
 import { sweepOnce } from "./sweeper.js";
 import { isProduction } from "./ingest.js";
 import { createSecretBox, newSecretsKey } from "./secret-box.js";
@@ -111,6 +112,10 @@ export interface CreateApiOptions {
   oauthClient?: OAuthClient;
   /** Key for secrets encrypted at rest (SECRETS_ENCRYPTION_KEY); generated and stored outside production if unset. */
   secretsEncryptionKey?: string;
+  /** Master key for footage encrypted at rest (MEDIA_ENCRYPTION_KEY, ADR 0066); generated and stored outside production if unset. */
+  mediaEncryptionKey?: string;
+  /** Wraps account data keys instead of MEDIA_ENCRYPTION_KEY (a KMS, for hosted). */
+  keyWrapper?: KeyWrapper;
   /** HMAC secret for playback URLs; generated and stored outside production if unset. */
   playbackSecret?: string;
   /** Playback URL lifetime (default 900 s). */
@@ -346,7 +351,16 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   });
 
   const maxRetentionDays = async (accountId: string) => (await quotaFor(accountId)).maxRetentionDays;
-  const storage = options.storage ? ("deleteMany" in options.storage ? options.storage : createObjectStorage(options.storage)) : undefined;
+  // Footage encrypted at rest with keys the server holds (ADR 0066): snapshots and exports sealed by the
+  // storage layer, recording segments by the media plane with keys handed out per upload.
+  let mediaKey = options.mediaEncryptionKey ?? process.env.MEDIA_ENCRYPTION_KEY;
+  if (!mediaKey && !options.keyWrapper) {
+    if (isProduction()) throw new Error("MEDIA_ENCRYPTION_KEY is required in production");
+    mediaKey = (await data.secrets.get("media_encryption_key")) ?? (await data.secrets.putIfAbsent("media_encryption_key", newMediaKey()));
+  }
+  const keyRing = createKeyRing(data, options.keyWrapper ?? envKeyWrapper(mediaKey!));
+  const plainStorage = options.storage ? ("deleteMany" in options.storage ? options.storage : createObjectStorage(options.storage)) : undefined;
+  const storage = plainStorage ? encryptingStorage(plainStorage, keyRing) : undefined;
   let bus: ApiBus | undefined = options.bus;
   if (!bus && options.valkeyUrl) bus = await startBus(options.valkeyUrl, data, storage, app.log);
   const valkeyBus = bus && "publishMedia" in bus ? (bus as ValkeyBus) : undefined;
@@ -396,7 +410,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   const mediaControl: MediaControl | undefined = mediaDriver;
   const maxResolutionFor = async (id: string) => (await quotaFor(id)).maxResolution ?? "720p";
   registerMediaCallbacks(app, {
-    data, signer, storage, media: mediaControl, masks, log: app.log,
+    data, signer, storage, media: mediaControl, masks, log: app.log, keys: keyRing,
     ...(valkeyBus ? {
       publishMedia: (a: string, s: string, kind: "frame" | "audio", meta: Record<string, unknown>, buf: Buffer) => valkeyBus.publishMedia(a, s, kind, meta, buf),
       releaseCamera: (a: string, s: string) => valkeyBus.balancer.release(`${a}.${s}`),
@@ -410,7 +424,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     },
   });
   const ipSalt = (await data.secrets.get("demo_ip_salt")) ?? (await data.secrets.putIfAbsent("demo_ip_salt", newPlaybackSecret()));
-  registerTrustRoutes(app, { data, storage, urls: eventUrls });
+  registerTrustRoutes(app, { data, storage, urls: eventUrls, keys: keyRing });
   // Telegram chats: alerts and questions (ADR 0059).
   const telegramConfig = options.telegram === false ? undefined : options.telegram ?? telegramConfigFromEnv();
   const channels: ChannelDeps = {
@@ -469,7 +483,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   if (storage) {
     registerPlaybackRoutes(app, {
       data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900,
-      keyRefs, guard: mediaGuard,
+      keyRefs, guard: mediaGuard, keys: keyRing,
       latestSnapshot: bus ? (a, s) => bus!.latestSnapshot(a, s) : undefined,
     });
     if (options.workers !== false) stoppers.push(startClipWorker(data, storage, app.log));

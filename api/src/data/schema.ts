@@ -364,6 +364,9 @@ export interface SegmentsTable {
   codec: string;
   has_audio: Generated<boolean>;
   indexed_at: Timestamp;
+  /** The account key version and IV it is encrypted with (ADR 0066); null: in clear. */
+  enc_version: number | null;
+  enc_iv: Buffer | null;
 }
 
 export interface InstanceSecretsTable {
@@ -392,6 +395,16 @@ export interface ClipSegmentsTable {
   init_key: string;
   start_at: ColumnType<Date, Date | string, Date | string>;
   duration_ms: number;
+  enc_version: number | null;
+  enc_iv: Buffer | null;
+}
+
+export interface AccountKeysTable {
+  account_id: string;
+  version: number;
+  /** The data key wrapped by MEDIA_ENCRYPTION_KEY. */
+  wrapped: string;
+  created_at: Generated<Date>;
 }
 
 export interface WatchesTable {
@@ -587,6 +600,7 @@ export interface Database {
   bridge_links: BridgeLinksTable;
   bridge_commands: BridgeCommandsTable;
   bridge_cameras_found: BridgeCamerasFoundTable;
+  account_keys: AccountKeysTable;
   users: UsersTable;
   user_identities: UserIdentitiesTable;
   memberships: MembershipsTable;

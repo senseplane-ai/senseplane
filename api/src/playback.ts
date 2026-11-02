@@ -93,6 +93,8 @@ export interface PlaylistSegment {
   initRef: string;
   start: Date;
   durationMs: number;
+  /** Encrypted with HLS AES-128 (ADR 0066): the account key version and the segment's IV. */
+  enc?: { version: number; iv: Buffer };
 }
 
 /**
@@ -105,13 +107,24 @@ export function buildPlaylist(segments: PlaylistSegment[]): string {
   const lines = ["#EXTM3U", "#EXT-X-VERSION:7", `#EXT-X-TARGETDURATION:${target}`, "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-INDEPENDENT-SEGMENTS"];
   let init: string | undefined;
   let prevEnd: number | undefined;
+  let keyed = false;
   for (const s of segments) {
     const start = s.start.getTime();
     const discontinuity = prevEnd !== undefined && (s.initRef !== init || start - prevEnd > 1500);
     if (discontinuity) lines.push("#EXT-X-DISCONTINUITY");
     if (s.initRef !== init) {
+      // A key applies to the init sections after it too; they are stored in clear.
+      if (keyed) lines.push("#EXT-X-KEY:METHOD=NONE");
+      keyed = false;
       lines.push(`#EXT-X-MAP:URI="i/${s.initRef}.mp4"`);
       init = s.initRef;
+    }
+    if (s.enc) {
+      lines.push(`#EXT-X-KEY:METHOD=AES-128,URI="k/${s.enc.version}.key",IV=0x${s.enc.iv.toString("hex")}`);
+      keyed = true;
+    } else if (keyed) {
+      lines.push("#EXT-X-KEY:METHOD=NONE");
+      keyed = false;
     }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${s.start.toISOString()}`, `#EXTINF:${(s.durationMs / 1000).toFixed(3)},`, `s/${s.ref}.m4s`);
     prevEnd = start + s.durationMs;

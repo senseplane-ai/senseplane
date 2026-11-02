@@ -166,6 +166,7 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `MEDIA_PUBLIC_URL` | `http://localhost:58090` | The media plane's public URL; WHIP sources and bridges push to `<this>/whip/<source>` |
 | `BRIDGE_IMAGE` | `ghcr.io/senseplane-ai/bridge:0.2` | Image name in the `docker run` command shown for IP cameras |
 | `SECRETS_ENCRYPTION_KEY` | generated outside production | Encrypts webhook secrets and camera RTSP URLs at rest (keep it with your backups) |
+| `MEDIA_ENCRYPTION_KEY` | generated outside production | Wraps each account's keys for its recordings, clips, snapshots and exports, which are encrypted at rest (ADR 0066). **Back it up somewhere other than the database:** without it, nothing recorded can be played again |
 
 ### Media plane (`media`)
 

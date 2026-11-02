@@ -91,6 +91,20 @@ describe("media callbacks", () => {
     expect((await cb(c.feedToken, { op: "credentials" })).statusCode).toBe(400);
   });
 
+  it("gives a media plane that offers to encrypt a key and IV per segment, never for the init (ADR 0066)", async () => {
+    const c = await camera("Encrypt");
+    const segKey = `raw/${accountId}/${c.id}/2026/10/17/2.m4s`;
+    const seg = (await cb(c.feedToken, { op: "upload_url", key: segKey, content_type: "video/iso.segment", bytes: 10, encryption: ["aes-128"] })).json();
+    expect(seg.encryption).toMatchObject({ method: "aes-128", key_id: "1" });
+    expect(Buffer.from(seg.encryption.key, "base64")).toHaveLength(16);
+    expect(seg.encryption.iv).toMatch(/^[0-9a-f]{32}$/);
+    // The same object gets the same IV; the init and planes that don't offer get none.
+    const again = (await cb(c.feedToken, { op: "upload_url", key: segKey, content_type: "video/iso.segment", bytes: 10, encryption: ["aes-128"] })).json();
+    expect(again.encryption.iv).toBe(seg.encryption.iv);
+    expect((await cb(c.feedToken, { op: "upload_url", key: `raw/${accountId}/${c.id}/init/x.mp4`, content_type: "video/mp4", bytes: 10, encryption: ["aes-128"] })).json().encryption).toBeUndefined();
+    expect((await cb(c.feedToken, { op: "upload_url", key: segKey, content_type: "video/iso.segment", bytes: 10 })).json().encryption).toBeUndefined();
+  });
+
   it("indexes feed events with the token's account and source, idempotently", async () => {
     const c = await camera("Index");
     const at = new Date().toISOString();

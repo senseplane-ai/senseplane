@@ -13,6 +13,7 @@ import { newId } from "../data/ids.js";
 import type { AgentKind, Database } from "../data/schema.js";
 import { ApiError } from "../errors.js";
 import { type EventUrls, toEvent } from "../events.js";
+import type { KeyRing } from "../keys.js";
 import type { ObjectStorage } from "../storage.js";
 import { toSource } from "./sources.js";
 import { toWatch } from "./watches.js";
@@ -74,6 +75,8 @@ export function listAgents(db: Kysely<Database>, accountId: string, id?: string)
 
 export function registerTrustRoutes(app: FastifyInstance, deps: {
   data: DataAccess; storage?: ObjectStorage; urls: (req: { protocol: string; host: string }) => EventUrls;
+  /** The account's footage keys (ADR 0066): deleting the account deletes them, so what is stored can't be read. */
+  keys?: KeyRing;
 }) {
   // --- agents ------------------------------------------------------------------
   app.post<{ Body: { name: string } }>(
@@ -224,7 +227,10 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
     await deps.data.withAccount(accountId, async (s) => {
       await s.db.updateTable("accounts").set({ deleted_at: new Date() }).where("id", "=", accountId).execute();
       await s.db.updateTable("api_keys").set({ revoked_at: new Date() }).where("revoked_at", "is", null).execute();
+      // Its footage is unreadable from now, before the purge deletes it (backups included).
+      await s.db.deleteFrom("account_keys").where("account_id", "=", accountId).execute();
     });
+    deps.keys?.forget(accountId);
     return reply.code(202).send();
   });
 }

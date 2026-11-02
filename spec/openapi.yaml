@@ -50,7 +50,9 @@ tags:
   - name: inbox
     description: Events routed to an agent by watches (ADR 0043).
   - name: bridge
-    description: The bridge's own API, authenticated with a bridge token (ADR 0045).
+    description: The bridge's own API, authenticated with a bridge token (ADR 0045), and pairing a box with a code (ADR 0061).
+  - name: bridges
+    description: Bridges and Home Assistant boxes, and which of their sensors Senseplane gets (ADR 0061).
 paths:
   /sources:
     post:
@@ -552,6 +554,255 @@ paths:
             schema: {$ref: '#/components/schemas/BridgeHealth'}
       responses:
         '204': {description: Recorded}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/entities:
+    put:
+      operationId: putBridgeEntities
+      summary: The Home Assistant entities this bridge can send
+      description: >-
+        Replaces the list (ADR 0061). Entities it no longer lists stay, marked
+        `listed: false`, and stop being sent.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [entities]
+              properties:
+                entities: {type: array, maxItems: 5000, items: {$ref: '#/components/schemas/BridgeEntityListed'}}
+      responses:
+        '204': {description: Recorded}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/readings:
+    post:
+      operationId: postBridgeReadings
+      summary: Readings of the chosen Home Assistant entities
+      description: >-
+        Each reading names its entity as `device.id`; it is filed under the
+        sensor source of the entity's room. Readings of entities nobody chose,
+        unknown ones, or of another sense than the entity's are ignored.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReadingsRequest'}
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, ignored, events]
+                properties:
+                  accepted: {type: integer}
+                  ignored: {type: integer}
+                  events: {type: array, items: {type: string}}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/pair:
+    post:
+      operationId: startBridgePairing
+      summary: Ask for a pairing code (a box without a token)
+      description: >-
+        No authentication (ADR 0061); limited per address. The box shows
+        `user_code` and `verification_url_complete`, then polls POST
+        /bridge/pair/token every `interval` seconds with `device_code`.
+      tags: [bridge]
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 120, description: What the person sees when approving}
+      responses:
+        '201':
+          description: A code waiting for a person
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device_code, user_code, verification_url, verification_url_complete, expires_in, interval]
+                properties:
+                  device_code: {type: string, description: Secret; only the box has it}
+                  user_code: {type: string, example: BCDF-GHJK}
+                  verification_url: {type: string, format: uri}
+                  verification_url_complete: {type: string, format: uri}
+                  expires_in: {type: integer, description: Seconds}
+                  interval: {type: integer, description: Seconds between polls}
+        default: {$ref: '#/components/responses/Error'}
+  /bridge/pair/token:
+    post:
+      operationId: pollBridgePairing
+      summary: Whether the code was approved; the bridge token, once
+      tags: [bridge]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [device_code]
+              properties:
+                device_code: {type: string}
+      responses:
+        '200':
+          description: '`waiting`, `expired`, or `approved` with the token (given once; asking again is a 409)'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [waiting, expired, approved]}
+                  bridge_id: {type: string}
+                  token: {type: string}
+                  interval: {type: integer}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges:
+    get:
+      operationId: listBridges
+      summary: Bridges and Home Assistant boxes
+      tags: [bridges]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Bridge'}}
+                  next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createBridge
+      summary: Add a bridge without a camera (for example a Home Assistant box run with a token)
+      tags: [bridges]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 120}
+      responses:
+        '201':
+          description: Created; `token` is shown once
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Bridge'}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/{id}/entities:
+    get:
+      operationId: listBridgeEntities
+      summary: A bridge's Home Assistant entities, chosen or not
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/BridgeEntity'}}
+                  next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: chooseBridgeEntities
+      summary: Choose which entities Senseplane gets
+      description: >-
+        A chosen entity's readings go to the sensor source of its room (one per
+        bridge and room, made on first use: "Kitchen sensors"; no room: "Home
+        sensors"). Dropping one stops its readings; what was stored stays.
+        Audited.
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                choose: {type: array, maxItems: 1000, items: {type: string}}
+                drop: {type: array, maxItems: 1000, items: {type: string}}
+      responses:
+        '200':
+          description: The entities after the change
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/BridgeEntity'}}
+                  next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+  /bridges/pair:
+    get:
+      operationId: findBridgePairing
+      summary: The box waiting with a code
+      tags: [bridges]
+      parameters:
+        - {name: code, in: query, required: true, description: 'The code the box shows (any case, with or without the dash)', schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, name, expires_at]
+                properties:
+                  code: {type: string}
+                  name: {type: string}
+                  expires_at: {type: string, format: date-time}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: approveBridgePairing
+      summary: Connect the box with this code to this workspace
+      description: Makes a bridge for the box; the box collects its token itself (ADR 0061). Admins only. Audited.
+      tags: [bridges]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: {type: string, maxLength: 20}
+                name: {type: string, minLength: 1, maxLength: 120}
+      responses:
+        '201':
+          description: Paired
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Bridge'}
         default: {$ref: '#/components/responses/Error'}
   /integration:
     get:
@@ -2253,7 +2504,8 @@ components:
         name: {type: string}
         heartbeat_seconds: {type: integer}
         poll_seconds: {type: integer}
-        cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}}
+        cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}, description: 'Empty when this deployment has no WHIP ingest'}
+        sensors: {type: array, items: {type: string}, description: 'The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only'}
     BridgeHealth:
       type: object
       additionalProperties: false
@@ -2271,6 +2523,56 @@ components:
               source_id: {type: string}
               state: {type: string, enum: [connecting, online, reconnecting, offline]}
               detail: {type: string, maxLength: 500, description: Why, for reconnecting or offline}
+        home_assistant:
+          type: object
+          additionalProperties: false
+          required: [connected]
+          description: Set by a bridge that reads Home Assistant (ADR 0061)
+          properties:
+            connected: {type: boolean}
+            entities: {type: integer, minimum: 0, description: How many entities it can send}
+            sending: {type: integer, minimum: 0, description: How many a person chose}
+    BridgeEntityListed:
+      type: object
+      additionalProperties: false
+      required: [entity_id, name, sense, kind]
+      properties:
+        entity_id: {type: string, pattern: '^[a-z0-9_]+\.[a-z0-9_]+$', maxLength: 200}
+        name: {type: string, maxLength: 200}
+        area: {type: string, maxLength: 120, description: The room in Home Assistant}
+        device_class: {type: string, maxLength: 64}
+        sense: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
+        kind: {type: string, enum: [number, state, event]}
+    BridgeEntity:
+      type: object
+      required: [entity_id, name, sense, kind, chosen, listed]
+      properties:
+        entity_id: {type: string}
+        name: {type: string}
+        area: {type: [string, 'null']}
+        device_class: {type: [string, 'null']}
+        sense: {type: string}
+        kind: {type: string, enum: [number, state, event]}
+        chosen: {type: boolean, description: A person chose it; its readings are sent}
+        source_id: {type: [string, 'null'], description: 'The sensor source of its room, once chosen'}
+        listed: {type: boolean, description: False when Home Assistant no longer has it}
+    Bridge:
+      type: object
+      required: [id, name, online, created_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        version: {type: [string, 'null']}
+        created_at: {type: string, format: date-time}
+        last_seen_at: {type: [string, 'null'], format: date-time}
+        online: {type: boolean, description: Reported within the last three heartbeats}
+        home_assistant:
+          type: [object, 'null']
+          properties:
+            connected: {type: boolean}
+            entities: {type: integer}
+            sending: {type: integer}
+        token: {type: string, description: 'Only when created with POST /bridges: the bridge token, shown once'}
     ClipCreate:
       type: object
       required: [source, from, to]

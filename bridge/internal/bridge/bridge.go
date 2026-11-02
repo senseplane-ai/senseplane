@@ -3,7 +3,8 @@
 
 // Package bridge runs the bridge: it polls the API for the cameras assigned
 // to this bridge, keeps one relay per camera, and reports every camera's
-// state as a heartbeat and whenever a state changes. Outbound only.
+// state as a heartbeat and whenever a state changes. With a Home Assistant
+// it also lists its sensors and sends the ones a person chose. Outbound only.
 package bridge
 
 import (
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/api"
+	"github.com/senseplane-ai/senseplane/bridge/internal/homeassistant"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 )
 
@@ -33,6 +35,12 @@ type Options struct {
 	Relay relay.Options
 	// Poll and Heartbeat override the API's intervals (tests).
 	Poll, Heartbeat time.Duration
+	// HomeAssistant, when set, reads sensors from it and sends the chosen ones (ADR 0061).
+	HomeAssistant *HomeAssistant
+	// SendEvery overrides how often readings are sent (default 10 s; tests).
+	SendEvery time.Duration
+	// OnRefused is called when the API refuses the bridge token (a paired box pairs again).
+	OnRefused func()
 }
 
 type worker struct {
@@ -48,6 +56,7 @@ type Bridge struct {
 	workers map[string]*worker
 	states  map[string]api.CameraHealth
 	changed chan struct{}
+	home    *home
 }
 
 // New returns a bridge; call Run.
@@ -55,7 +64,26 @@ func New(o Options) *Bridge {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	return &Bridge{o: o, workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1)}
+	b := &Bridge{o: o, workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1)}
+	if o.HomeAssistant != nil {
+		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
+	}
+	return b
+}
+
+func (b *Bridge) poke() {
+	select {
+	case b.changed <- struct{}{}:
+	default:
+	}
+}
+
+// Home is the link to Home Assistant (nil without one), for the status page.
+func (b *Bridge) Home() *api.HomeHealth {
+	if b.home == nil {
+		return nil
+	}
+	return b.home.health()
 }
 
 // Cameras returns every camera's current state, sorted by source id (for /healthz).
@@ -72,6 +100,11 @@ func (b *Bridge) Cameras() []api.CameraHealth {
 
 // Run polls, relays and reports until ctx ends, then stops every camera and sends a last report.
 func (b *Bridge) Run(ctx context.Context) {
+	if b.home != nil {
+		ha := b.o.HomeAssistant
+		go homeassistant.Run(ctx, homeassistant.Options{URL: homeassistant.WebsocketURL(ha.URL), Token: ha.Token, Log: b.o.Log}, b.home)
+		go b.home.fwd.Run(ctx)
+	}
 	poll, beat := b.o.Poll, b.o.Heartbeat
 	if cfg := b.sync(ctx); cfg != nil {
 		if poll == 0 && cfg.PollSeconds > 0 {
@@ -109,6 +142,9 @@ func (b *Bridge) Run(ctx context.Context) {
 			case <-ctx.Done():
 			case <-time.After(200 * time.Millisecond):
 			}
+			if b.home != nil {
+				b.home.publish(ctx)
+			}
 			b.report(ctx)
 		}
 	}
@@ -121,10 +157,17 @@ func (b *Bridge) sync(ctx context.Context) *api.Config {
 		if api.IsUnauthorized(err) {
 			b.o.Log.Error("the API refused the bridge token (rotated or revoked); stopping cameras. Restart the bridge with the new token.")
 			b.stopAll()
+			if b.o.OnRefused != nil {
+				b.o.OnRefused()
+			}
 		} else if ctx.Err() == nil {
 			b.o.Log.Warn("config fetch failed; keeping current cameras", "err", err)
 		}
 		return nil
+	}
+	if b.home != nil {
+		b.home.publish(ctx)
+		b.home.choose(cfg.Sensors)
 	}
 	want := map[string]relay.Camera{}
 	for _, c := range cfg.Cameras {
@@ -208,6 +251,9 @@ func (b *Bridge) stopAll() {
 
 func (b *Bridge) report(ctx context.Context) {
 	h := api.Health{Version: b.o.Version, Cameras: b.Cameras()}
+	if b.home != nil {
+		h.HomeAssistant = b.home.health()
+	}
 	if err := b.o.Client.Report(ctx, h); err != nil && ctx.Err() == nil {
 		b.o.Log.Warn("health report failed", "err", err)
 	}

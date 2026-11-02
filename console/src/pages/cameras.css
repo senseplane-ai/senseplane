@@ -34,6 +34,17 @@
 .cam-row-senses { font-size: 12px; color: var(--soft); }
 .cam-row-soft { color: var(--soft); }
 
+/* Home Assistant boxes (ADR 0060, 0061) */
+.boxes-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.box-card { display: flex; flex-direction: column; gap: 4px; padding: 14px; font-size: 13px; }
+.box-card:hover { border-color: var(--line-3); color: var(--text); }
+.box-card-name { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.box-card-action { color: var(--live); font-size: 12px; margin-top: 4px; }
+.box-status { display: flex; align-items: center; gap: 8px; color: var(--soft); margin: 4px 0 0; }
+.link-form { display: flex; flex-direction: column; gap: 14px; max-width: 420px; }
+.link-form p { margin: 0; }
+.link-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 @media (max-width: 600px) {
   .cams-tools { width: 100%; }
   .search-box { flex: 1; }

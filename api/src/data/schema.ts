@@ -103,6 +103,25 @@ export interface BridgesTable {
   last_seen_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   revoked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   created_at: Timestamp;
+  /** Home Assistant, as the bridge last reported it (ADR 0061); null when it reads none. */
+  home_connected: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
+  home_entities: ColumnType<number | null, number | null | undefined, number | null>;
+  home_sending: ColumnType<number | null, number | null | undefined, number | null>;
+}
+
+/** A Home Assistant entity a bridge can send (ADR 0061); `source_id` once a person chose it. */
+export interface BridgeEntitiesTable {
+  account_id: string;
+  bridge_id: string;
+  entity_id: string;
+  name: string;
+  area: string | null;
+  device_class: string | null;
+  sense: string;
+  kind: string;
+  source_id: string | null;
+  listed: ColumnType<boolean, boolean | undefined, boolean>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 export type Zone = { name: string; polygon: number[][] };
@@ -517,6 +536,7 @@ export interface Database {
   agent_inbox: AgentInboxTable;
   ingest_tokens: IngestTokensTable;
   bridges: BridgesTable;
+  bridge_entities: BridgeEntitiesTable;
   users: UsersTable;
   user_identities: UserIdentitiesTable;
   memberships: MembershipsTable;

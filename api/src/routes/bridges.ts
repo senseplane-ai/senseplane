@@ -7,13 +7,20 @@
 //                            RTSP URLs (decrypted) and WHIP push targets
 // - POST /v1/bridge/cameras  claim or add a camera by RTSP URL (`--rtsp`)
 // - POST /v1/bridge/health   heartbeat and per-camera state
-// Plus GET /v1/integration for a sensor integration token (`sit_…`).
+// - PUT  /v1/bridge/entities the Home Assistant entities it can send (ADR 0061)
+// - POST /v1/bridge/readings readings of the entities a person chose
+// Plus GET /v1/integration for a sensor integration token (`sit_…`), and the
+// console's side: POST/GET /v1/bridges and choosing a bridge's entities.
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from "fastify";
+import { randomBytes } from "node:crypto";
 import type { DataAccess, Source } from "../data/access.js";
+import { hashApiKey } from "../data/access.js";
 import { ApiError } from "../errors.js";
 import type { IngestSigner } from "../ingest.js";
 import type { AuditLog } from "../module.js";
-import { redactUrls, toSource } from "./sources.js";
+import { type ReadingInput, cleanReading, readingInputSchema } from "../readings.js";
+import { ingestReadings } from "./source-config.js";
+import { newBridgeToken, redactUrls, toSource } from "./sources.js";
 
 export const BRIDGE_HEARTBEAT_SECONDS = 30;
 export const BRIDGE_POLL_SECONDS = 60;
@@ -38,6 +45,10 @@ const healthBody = {
   type: "object", additionalProperties: false, required: ["cameras"],
   properties: {
     version: { type: "string", maxLength: 64 },
+    home_assistant: {
+      type: "object", additionalProperties: false, required: ["connected"],
+      properties: { connected: { type: "boolean" }, entities: { type: "integer", minimum: 0 }, sending: { type: "integer", minimum: 0 } },
+    },
     cameras: {
       type: "array", maxItems: 256,
       items: {
@@ -72,9 +83,12 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
       const bridge = token.startsWith("brg_") ? await deps.data.authenticateBridgeToken(token) : undefined;
       if (!bridge) throw new ApiError(401, "unauthorized", "a valid bridge token is required");
-      if (!deps.whip) throw new ApiError(503, "service_unavailable", "WHIP ingest is not configured on this deployment");
       req.bridge = bridge;
     });
+    /** Cameras need WHIP; sensors don't. */
+    const needWhip = () => {
+      if (!deps.whip) throw new ApiError(503, "service_unavailable", "WHIP ingest is not configured on this deployment");
+    };
 
     const cameras = (req: FastifyRequest) =>
       deps.data.withAccount(req.bridge!.accountId, (s) =>
@@ -98,7 +112,10 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         poll_seconds: BRIDGE_POLL_SECONDS,
         // Cameras without an RTSP URL wait for `--rtsp` (or a PATCH) before the bridge can pull them.
         // Paused cameras are left out, so the bridge stops pulling them until they are resumed.
-        cameras: await Promise.all((await cameras(req)).filter((c) => c.rtsp_url && c.status !== "paused").map((c) => toCamera(req, c))),
+        cameras: deps.whip ? await Promise.all((await cameras(req)).filter((c) => c.rtsp_url && c.status !== "paused").map((c) => toCamera(req, c))) : [],
+        // The Home Assistant entities a person chose; the bridge sends nothing else (ADR 0061).
+        sensors: (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridgeId)
+          .where("source_id", "is not", null).where("listed", "=", true).orderBy("entity_id").execute())).map((e) => e.entity_id),
       };
     });
 
@@ -108,6 +125,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       "/v1/bridge/cameras",
       { schema: { body: { type: "object", additionalProperties: false, required: ["rtsp_url"], properties: { rtsp_url: { type: "string", maxLength: 2048, pattern: "^rtsps?://" }, name: { type: "string", minLength: 1, maxLength: 120 } } } } },
       async (req, reply) => {
+        needWhip();
         const { bridgeId, accountId } = req.bridge!;
         const all = await cameras(req);
         const same = all.find((c) => c.rtsp_url && box().decrypt(c.rtsp_url) === req.body.rtsp_url);
@@ -145,13 +163,17 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
-    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[] } }>(
+    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number } } }>(
       "/v1/bridge/health",
       { schema: { body: healthBody } },
       async (req, reply) => {
         const { bridgeId, accountId } = req.bridge!;
+        const ha = req.body.home_assistant;
         await deps.data.withAccount(accountId, async (s) => {
-          await s.db.updateTable("bridges").set({ last_seen_at: new Date(), version: req.body.version ?? null }).where("id", "=", bridgeId).execute();
+          await s.db.updateTable("bridges").set({
+            last_seen_at: new Date(), version: req.body.version ?? null,
+            home_connected: ha ? ha.connected : null, home_entities: ha?.entities ?? null, home_sending: ha?.sending ?? null,
+          }).where("id", "=", bridgeId).execute();
           for (const c of req.body.cameras) {
             const status = statusFor(c.state);
             // Only this bridge's cameras; the row filter makes a foreign id a no-op.
@@ -164,6 +186,77 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
           }
         });
         return reply.code(204).send();
+      },
+    );
+
+    // The entities the bridge's Home Assistant has that Senseplane can take; ones it no longer lists stay, marked unlisted.
+    scope.put<{ Body: { entities: { entity_id: string; name: string; area?: string; device_class?: string; sense: string; kind: string }[] } }>(
+      "/v1/bridge/entities",
+      { schema: { body: { type: "object", additionalProperties: false, required: ["entities"], properties: { entities: { type: "array", maxItems: 5000, items: {
+        type: "object", additionalProperties: false, required: ["entity_id", "name", "sense", "kind"],
+        properties: {
+          entity_id: { type: "string", minLength: 3, maxLength: 200, pattern: "^[a-z0-9_]+\\.[a-z0-9_]+$" }, name: { type: "string", maxLength: 200 },
+          area: { type: "string", maxLength: 120 }, device_class: { type: "string", maxLength: 64 },
+          sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40 }, kind: { enum: ["number", "state", "event"] },
+        },
+      } } } } } },
+      async (req, reply) => {
+        const { bridgeId, accountId } = req.bridge!;
+        const ids = req.body.entities.map((e) => e.entity_id);
+        await deps.data.withAccount(accountId, async (s) => {
+          for (const e of req.body.entities) {
+            await s.db.insertInto("bridge_entities").values({
+              account_id: accountId, bridge_id: bridgeId, entity_id: e.entity_id, name: e.name || e.entity_id, area: e.area || null,
+              device_class: e.device_class || null, sense: e.sense, kind: e.kind, listed: true, updated_at: new Date(),
+            }).onConflict((oc) => oc.columns(["bridge_id", "entity_id"]).doUpdateSet({
+              name: e.name || e.entity_id, area: e.area || null, device_class: e.device_class || null, sense: e.sense, kind: e.kind, listed: true, updated_at: new Date(),
+            })).execute();
+          }
+          let gone = s.db.updateTable("bridge_entities").set({ listed: false, updated_at: new Date() }).where("bridge_id", "=", bridgeId).where("listed", "=", true);
+          if (ids.length) gone = gone.where("entity_id", "not in", ids);
+          await gone.execute();
+        });
+        return reply.code(204).send();
+      },
+    );
+
+    // Readings of chosen entities, each filed under its room's sensor source; anything else is ignored.
+    scope.post<{ Body: { readings: ReadingInput[] } }>(
+      "/v1/bridge/readings",
+      { schema: { body: { type: "object", additionalProperties: false, required: ["readings"], properties: { readings: { type: "array", minItems: 1, maxItems: 1000, items: readingInputSchema } } } } },
+      async (req, reply) => {
+        const { bridgeId, accountId } = req.bridge!;
+        const now = new Date();
+        const readings = req.body.readings.map((r) => ({ input: r, clean: cleanReading(r, now) })).sort((a, b) => a.clean.at.getTime() - b.clean.at.getTime());
+        const out = await deps.data.withAccount(accountId, async (s) => {
+          const ids = [...new Set(readings.map((r) => r.input.device?.id).filter((x): x is string => !!x))];
+          const chosen = ids.length ? await s.db.selectFrom("bridge_entities").select(["entity_id", "sense", "source_id", "name"]).where("bridge_id", "=", bridgeId)
+            .where("entity_id", "in", ids).where("source_id", "is not", null).execute() : [];
+          const byEntity = new Map(chosen.map((e) => [e.entity_id, e]));
+          const bySource = new Map<string, typeof readings[number]["clean"][]>();
+          let ignored = 0;
+          for (const r of readings) {
+            const e = r.input.device ? byEntity.get(r.input.device.id) : undefined;
+            if (!e || e.sense !== r.clean.sense) {
+              ignored++;
+              continue;
+            }
+            // The name a person sees is the one listed (and Home Assistant's own when it sends one).
+            const clean = { ...r.clean, device_name: r.clean.device_name ?? e.name };
+            bySource.set(e.source_id!, [...(bySource.get(e.source_id!) ?? []), clean]);
+          }
+          const events: string[] = [];
+          for (const [sourceId, list] of bySource) {
+            const src = await s.sources.get(sourceId);
+            if (!src || src.type !== "sensor") {
+              ignored += list.length;
+              continue;
+            }
+            events.push(...await ingestReadings(s, accountId, src, list));
+          }
+          return { accepted: readings.length - ignored, ignored, events };
+        });
+        return reply.code(202).send(out);
       },
     );
   });
@@ -189,4 +282,112 @@ export async function markSilentBridges(data: DataAccess, log?: FastifyBaseLogge
     log?.info({ bridge: b.bridge_id }, "bridge stopped reporting; cameras marked offline");
   }
   return silent.length;
+}
+
+export interface BridgeAdminDeps {
+  data: DataAccess;
+  maxSources(accountId: string): Promise<number | null>;
+  audit?: AuditLog;
+}
+
+const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
+
+/**
+ * The console's side of bridges (ADR 0061): add a bridge (for a Home
+ * Assistant box, with or without cameras), list them, and choose which of a
+ * bridge's Home Assistant entities Senseplane gets. A chosen entity goes to
+ * the sensor source of its room, made on first use.
+ */
+export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdminDeps) {
+  const toBridge = (b: { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null }) => ({
+    id: b.id, name: b.name, version: b.version, created_at: iso(b.created_at), last_seen_at: iso(b.last_seen_at),
+    online: !!b.last_seen_at && Date.now() - new Date(b.last_seen_at).getTime() < BRIDGE_SILENT_SECONDS * 1000,
+    home_assistant: b.home_connected === null ? null : { connected: b.home_connected, entities: b.home_entities ?? 0, sending: b.home_sending ?? 0 },
+  });
+
+  app.post<{ Body: { name: string } }>(
+    "/v1/bridges",
+    { schema: { body: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 120 } } } } },
+    async (req, reply) => {
+      const accountId = req.accountId!;
+      const token = newBridgeToken();
+      const row = await deps.data.withAccount(accountId, (s) => s.db.insertInto("bridges").values({
+        id: `brg_${randomBytes(9).toString("base64url")}`, account_id: accountId, name: req.body.name, token_hash: hashApiKey(token), prefix: token.slice(0, 8),
+      }).returningAll().executeTakeFirstOrThrow());
+      await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.created", target: row.id, status: 201 });
+      // The token is shown once.
+      return reply.code(201).send({ ...toBridge(row), token });
+    },
+  );
+
+  app.get("/v1/bridges", async (req) => {
+    const rows = await deps.data.withAccount(req.accountId!, (s) => s.db.selectFrom("bridges").selectAll().where("revoked_at", "is", null).orderBy("created_at").execute());
+    return { data: rows.map(toBridge), next_cursor: null };
+  });
+
+  const bridgeOf = async (accountId: string, id: string) => {
+    const b = await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridges").selectAll().where("id", "=", id).where("revoked_at", "is", null).executeTakeFirst());
+    if (!b) throw new ApiError(404, "not_found", "bridge not found");
+    return b;
+  };
+  const listEntities = (accountId: string, bridgeId: string) => deps.data.withAccount(accountId, (s) =>
+    s.db.selectFrom("bridge_entities").selectAll().where("bridge_id", "=", bridgeId).orderBy("area").orderBy("name").execute());
+  const toEntity = (e: { entity_id: string; name: string; area: string | null; device_class: string | null; sense: string; kind: string; source_id: string | null; listed: boolean }) => ({
+    entity_id: e.entity_id, name: e.name, area: e.area, device_class: e.device_class, sense: e.sense, kind: e.kind,
+    chosen: e.source_id !== null, source_id: e.source_id, listed: e.listed,
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/bridges/:id/entities", async (req) => {
+    await bridgeOf(req.accountId!, req.params.id);
+    return { data: (await listEntities(req.accountId!, req.params.id)).map(toEntity), next_cursor: null };
+  });
+
+  app.patch<{ Params: { id: string }; Body: { choose?: string[]; drop?: string[] } }>(
+    "/v1/bridges/:id/entities",
+    { schema: { body: { type: "object", additionalProperties: false, properties: {
+      choose: { type: "array", maxItems: 1000, items: { type: "string", maxLength: 200 } },
+      drop: { type: "array", maxItems: 1000, items: { type: "string", maxLength: 200 } },
+    } } } },
+    async (req) => {
+      const accountId = req.accountId!;
+      const bridge = await bridgeOf(accountId, req.params.id);
+      const max = await deps.maxSources(accountId);
+      await deps.data.withAccount(accountId, async (s) => {
+        if (req.body.drop?.length) {
+          await s.db.updateTable("bridge_entities").set({ source_id: null, updated_at: new Date() }).where("bridge_id", "=", bridge.id).where("entity_id", "in", req.body.drop).execute();
+        }
+        const choose = req.body.choose?.length
+          ? await s.db.selectFrom("bridge_entities").selectAll().where("bridge_id", "=", bridge.id).where("entity_id", "in", req.body.choose).where("source_id", "is", null).execute()
+          : [];
+        const unknown = (req.body.choose ?? []).filter((id) => !choose.some((e) => e.entity_id === id));
+        const already = unknown.length ? await s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridge.id).where("entity_id", "in", unknown).execute() : [];
+        const missing = unknown.filter((id) => !already.some((e) => e.entity_id === id));
+        if (missing.length) throw new ApiError(404, "not_found", `not listed by this bridge: ${missing.join(", ")}`);
+        // One sensor source per bridge and room ("Kitchen"); entities without a room go to "Home".
+        const rooms = new Map<string, string>();
+        for (const e of choose) {
+          const room = e.area ?? "";
+          let sourceId = rooms.get(room);
+          if (!sourceId) {
+            let q = s.db.selectFrom("sources").select("id").where("bridge_id", "=", bridge.id).where("type", "=", "sensor");
+            q = room ? q.where("location", "=", room) : q.where("location", "is", null);
+            sourceId = (await q.orderBy("created_at").executeTakeFirst())?.id;
+            if (!sourceId) {
+              if (max !== null && (await s.sources.list()).length >= max) {
+                throw new ApiError(409, "source_limit_reached", `this account can have at most ${max} sources`, { max_registered_sources: max });
+              }
+              const src = await s.sources.create({ name: room ? `${room} sensors` : "Home sensors", type: "sensor", senses: [e.sense], record_audio: false, ...(room ? { location: room } : {}) });
+              await s.db.updateTable("sources").set({ bridge_id: bridge.id }).where("id", "=", src.id).execute();
+              sourceId = src.id;
+            }
+            rooms.set(room, sourceId);
+          }
+          await s.db.updateTable("bridge_entities").set({ source_id: sourceId, updated_at: new Date() }).where("bridge_id", "=", bridge.id).where("entity_id", "=", e.entity_id).execute();
+        }
+      });
+      await deps.audit?.write({ accountId, actor: req.access?.actor ?? "account", action: "bridge.entities_chosen", target: bridge.id, status: 200,
+        details: { chose: req.body.choose?.length ?? 0, dropped: req.body.drop?.length ?? 0 } });
+      return { data: (await listEntities(accountId, bridge.id)).map(toEntity), next_cursor: null };
+    },
+  );
 }

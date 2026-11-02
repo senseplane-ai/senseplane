@@ -1,7 +1,8 @@
 # bridge
 
-Relays RTSP cameras on a local network to Senseplane, outbound only: no
-inbound ports, no port forwarding (ADR 0045).
+Relays RTSP cameras on a local network to Senseplane, and sends the Home
+Assistant sensors a person chose, outbound only: no inbound ports, no port
+forwarding (ADR 0045, 0061).
 
 - Fetches the cameras assigned to its token from the API (`GET /v1/bridge/config`, every 60 s).
 - Pulls each camera with go2rtc's RTSP client (MIT, used as a library) and
@@ -31,9 +32,37 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--rtsp` (repeatable) | `SENSEPLANE_RTSP` (comma-separated) | Camera URLs to claim or add |
 | `--name` | | Name for a camera added with `--rtsp` |
 | `--whip-base` | `SENSEPLANE_WHIP_BASE` | Push to the media plane at this base URL instead of the public one |
-| `--listen` | `BRIDGE_LISTEN` | `/healthz` and `/metrics` (default `127.0.0.1:8099`) |
+| `--listen` | `BRIDGE_LISTEN` | The status page, `/healthz` and `/metrics` (default `127.0.0.1:8099`) |
+| `--ha-url` | `HA_URL` | Read sensors from this Home Assistant (`http://homeassistant.local:8123`); as an add-on the Supervisor's is used |
+| `--ha-token` | `HA_TOKEN` | A Home Assistant long-lived access token |
+| `--state-dir` | `SENSEPLANE_STATE_DIR` | Without `--token`: pair with a code and keep the token here |
+| `--box-name` | `SENSEPLANE_BOX_NAME` | The name a person sees when pairing (default `Home Assistant`) |
 
 Passwords in RTSP URLs never appear in logs or in what the bridge reports.
+
+## Home Assistant
+
+With `--ha-url` and `--ha-token` (or as the Home Assistant add-on), the bridge
+reads Home Assistant's websocket API: it lists the entities Senseplane can
+take (numbers such as temperature and power, door, motion and leak sensors,
+switches, lights and locks, doorbells and buttons; `spec/home-assistant/readings.json`)
+with their room, and sends readings only of the ones a person chose in the
+console. It never calls a Home Assistant service.
+
+## Pairing with a code
+
+Without `--token`, give it `--state-dir`: the bridge asks Senseplane for a
+code, shows it on its status page (`--listen`) and in its log, and waits
+while someone enters it in the console (`/link`). It keeps the token it gets
+in the state directory (mode 0600) and pairs again only if that token is
+refused.
+
+```sh
+docker run -d --restart unless-stopped --name senseplane-bridge -v senseplane-bridge:/data -p 127.0.0.1:8099:8099 \
+  ghcr.io/senseplane-ai/bridge:0.3 --api https://senseplane.example.com --state-dir /data --listen :8099 \
+  --ha-url http://homeassistant.local:8123 --ha-token "$HA_TOKEN"
+# open http://localhost:8099 for the code
+```
 
 ## Build and test
 
@@ -43,9 +72,12 @@ docker build -t ghcr.io/senseplane-ai/bridge:dev .   # static binary on distrole
 ```
 
 Layout: `internal/api` (the bridge's API client), `internal/bridge` (config
-polling, one relay per camera, health reports), `internal/relay` (pull → push
-with reconnects), `internal/camera` (go2rtc RTSP → Annex B access units with
-exact durations), `internal/whip` (WHIP client), `internal/health`.
+polling, one relay per camera, health reports, the Home Assistant link),
+`internal/relay` (pull → push with reconnects), `internal/camera` (go2rtc
+RTSP → Annex B access units with exact durations), `internal/whip` (WHIP
+client), `internal/homeassistant` (websocket client and state → reading
+mapping), `internal/sensors` (batched sending with backoff),
+`internal/pairing` (codes and the state file), `internal/health`.
 
 ## WHIP client
 

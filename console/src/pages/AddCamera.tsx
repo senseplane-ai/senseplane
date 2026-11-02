@@ -13,20 +13,30 @@ import { useApp } from "../shell/AppData";
 import { Button, CopyField, Field, Icon, Input, StatusDot, Toggle, useToast } from "../ui";
 import "./add-camera.css";
 
-type Kind = "phone" | "ip" | "whip" | "ha";
+type Kind = "phone" | "box" | "ip" | "whip" | "ha";
 
 const KINDS: Record<Kind, { tag: string; title: string; desc: string; connectTitle: string; codeIntro?: string; waiting: string }> = {
   phone: { tag: "QR", title: "Phone or laptop", desc: "Use the camera of a phone or computer. Nothing to install.", connectTitle: "Scan to connect", waiting: "Waiting for the phone to connect…" },
+  box: { tag: "HA", title: "Home Assistant", desc: "Sensors and cameras through your Home Assistant box (Green, Yellow or any Home Assistant OS), with the Senseplane add-on.", connectTitle: "Add Senseplane to Home Assistant", waiting: "" },
   ip: { tag: "RTSP", title: "IP camera", desc: "Connect cameras on your network with the small Senseplane bridge.", connectTitle: "Run the bridge on your network", codeIntro: "On a computer that can reach the camera, run:", waiting: "Waiting for the bridge to start sending video…" },
   whip: { tag: "WHIP", title: "OBS or streaming software", desc: "Send video from OBS, a hardware encoder or any WHIP client.", connectTitle: "Paste these into your software", codeIntro: "In OBS: Settings → Stream → Service: WHIP.", waiting: "Waiting for your stream to start…" },
-  ha: { tag: "HA", title: "Home Assistant sensors", desc: "Temperature, humidity and other readings from Home Assistant.", connectTitle: "Add Senseplane to Home Assistant", codeIntro: "In Home Assistant, add the Senseplane integration and paste:", waiting: "Waiting for the first reading…" },
+  ha: { tag: "INT", title: "Home Assistant sensors (integration)", desc: "Temperature, humidity and other readings from Home Assistant.", connectTitle: "Add Senseplane to Home Assistant", codeIntro: "In Home Assistant, add the Senseplane integration and paste:", waiting: "Waiting for the first reading…" },
 };
-const ORDER: Kind[] = ["phone", "ip", "whip", "ha"];
+const ORDER: Kind[] = ["phone", "box", "ip", "whip", "ha"];
 /** Shown but not selectable yet. */
 const SOON = new Set<Kind>(["ip", "ha"]);
 const READY = ORDER.filter((k) => !SOON.has(k));
 
 type Ingest = { capture_url?: string; whip_url?: string; token?: string; bridge_token?: string; docker_command?: string; integration_token?: string };
+
+/** The Home Assistant add-on repository (ADR 0061). */
+export const ADDON_REPOSITORY = "https://github.com/senseplane-ai/home-assistant-addons";
+
+/** This server's API base as a full URL, for a box to call: "https://senseplane.example.com". */
+export function serverUrl(apiUrl: string): string {
+  const base = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+  return new URL(apiUrl.replace(/\/v1\/?$/, "") || "/", base).href.replace(/\/$/, "");
+}
 
 /** The copy blocks for step 3, from whatever the API returned in `ingest`. */
 export function connectLines(kind: Kind, source: Source, apiUrl: string): { label: string; value: string }[] {
@@ -209,7 +219,25 @@ export function AddCameraPage() {
             </section>
           )}
 
-          {step === 2 && (
+          {step === 2 && kind === "box" && (
+            <section className="add-section" aria-labelledby="add-h">
+              <h1 id="add-h" ref={heading} tabIndex={-1}>{k.connectTitle}</h1>
+              <ol className="box-steps">
+                <li>In Home Assistant, open <strong>Settings → Add-ons → Add-on store</strong>, then <strong>⋮ → Repositories</strong>, and add:
+                  <CopyField label="Repository" value={ADDON_REPOSITORY} onCopied={() => toast("Copied.")} /></li>
+                <li>Install <strong>Senseplane</strong>, set its server to:
+                  <CopyField label="Server" value={serverUrl(apiUrl)} onCopied={() => toast("Copied.")} />
+                  then start it and open its panel. It shows a code.</li>
+                <li>Enter that code here. Its sensors are listed for you to choose; nothing is sent until you do.</li>
+              </ol>
+              <div className="add-nav">
+                <Button variant="ghost" size="lg" onClick={() => setStep(1)}>Back</Button>
+                <Button variant="primary" size="lg" onClick={() => navigate("/link")}>Enter the code</Button>
+              </div>
+            </section>
+          )}
+
+          {step === 2 && kind !== "box" && (
             <section className="add-section" aria-labelledby="add-h">
               <h1 id="add-h" ref={heading} tabIndex={-1}>Name it</h1>
               <form className="add-form" onSubmit={(e) => { e.preventDefault(); void create(); }}>

@@ -11,7 +11,7 @@ import { ApiError } from "../errors.js";
 import { createEvent } from "../events.js";
 import { mediaClaims } from "../media-access.js";
 import type { KeyRefSealer, PlaybackSigner } from "../playback.js";
-import { cleanReading, deviceMatches, holds, isSensorSense, type ReadingInput, readingInputSchema, readingText, type SensorMatch, senseName, toReading } from "../readings.js";
+import { type CleanReading, cleanReading, deviceMatches, holds, isSensorSense, type ReadingInput, readingInputSchema, readingText, type SensorMatch, senseName, toReading } from "../readings.js";
 import { activeAt } from "../schedule.js";
 import { toSource } from "./sources.js";
 
@@ -45,6 +45,81 @@ export async function latestReadings(s: AccountScope, sourceId: string) {
     out.push({ row: r, since });
   }
   return out;
+}
+
+/**
+ * Stores checked readings on a sensor source and fires what they trigger: the
+ * source's sensor watches (reading.threshold, once per run that holds) and its
+ * sensor_thresholds (sensor.threshold, on the crossing). Returns the new event ids.
+ */
+export async function ingestReadings(s: AccountScope, accountId: string, src: Source, readings: CleanReading[]): Promise<string[]> {
+  // A sensor gains each new sense its readings bring (ADR 0060); grants still decide who sees it.
+  const added = [...new Set(readings.map((r) => r.sense))].filter((x) => !src.senses.includes(x));
+  if (added.length) await s.db.updateTable("sources").set({ senses: [...src.senses, ...added] }).where("id", "=", src.id).execute();
+  for (const month of new Set(readings.map((r) => r.at.toISOString().slice(0, 7)))) {
+    await sql`select ensure_readings_partition(${new Date(`${month}-01T00:00:00Z`)})`.execute(s.db);
+  }
+  const thresholds: Thresholds = src.sensor_thresholds ?? {};
+  const created: string[] = [];
+  // Watches with sensor triggers on this source (evaluated here, where readings arrive).
+  const sensorWatches = (await s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute())
+    .filter((w) => w.sources.includes(src.id) && (w.compiled as { trigger: { type: string } }).trigger.type === "sensor");
+  const where = src.location ?? src.name;
+  for (const r of readings) {
+    const same = (eb: ExpressionBuilder<Database, "sensor_readings">) => eb.and([eb("source_id", "=", src.id), eb("sense", "=", r.sense), sql<boolean>`device_id is not distinct from ${r.device_id}`]);
+    const prev = await s.db.selectFrom("sensor_readings").select(["value", "kind"]).where(same)
+      .where("measured_at", "<", r.at).orderBy("measured_at", "desc").limit(1).executeTakeFirst();
+    await s.db.insertInto("sensor_readings").values({
+      account_id: accountId, source_id: src.id, sense: r.sense, kind: r.kind, value: r.value, unit: r.unit,
+      detail: r.detail, device_id: r.device_id, device_name: r.device_name, measured_at: r.at,
+    }).execute();
+    const value = toReading({ ...r, measured_at: r.at });
+    const said = `${r.device_name ?? senseName(r.sense)}${r.kind === "event" ? " " : " is "}${readingText(r)}`;
+    for (const w of sensorWatches) {
+      const trig = (w.compiled as { trigger: SensorMatch & { min_duration_s?: number } }).trigger;
+      if (trig.sense !== r.sense || !deviceMatches(trig, r)) continue;
+      if (!activeAt(r.at, w.active_hours, (w.compiled as { active_hours?: { days: string[]; from: string; to: string }[] | null }).active_hours)) continue;
+      if (!holds(trig, r)) continue;
+      // Start of the current run of readings that hold; an event is its own run.
+      let started = r.at;
+      if (r.kind !== "event") {
+        const lastOut = await s.db.selectFrom("sensor_readings").select("measured_at").where(same).where("measured_at", "<", r.at)
+          .where((eb) => (r.kind === "state"
+            ? eb("value", "<>", (trig.state ?? true) ? 1 : 0)
+            : eb.and([
+              ...(trig.above !== undefined ? [eb("value", "<=", trig.above)] : []),
+              ...(trig.below !== undefined ? [eb("value", ">=", trig.below)] : []),
+              ...(trig.above === undefined && trig.below === undefined ? [sql<boolean>`false`] : []),
+            ])))
+          .orderBy("measured_at", "desc").limit(1).executeTakeFirst();
+        const runStart = await s.db.selectFrom("sensor_readings").select("measured_at").where(same)
+          .where("measured_at", ">", lastOut ? new Date(lastOut.measured_at) : new Date(0)).orderBy("measured_at").limit(1).executeTakeFirst();
+        started = runStart ? new Date(runStart.measured_at) : r.at;
+        if ((r.at.getTime() - started.getTime()) / 1000 < (trig.min_duration_s ?? 0)) continue;
+      }
+      const ev = await createEvent(s, {
+        // One event per run that holds, per watch and device; sensor watches fire `reading.threshold` (ADR 0045).
+        event_key: `watch:${w.id}:${src.id}:${started.toISOString()}${r.device_id ? `:${r.device_id}` : ""}`, source_id: src.id, type: "reading.threshold", sense: r.sense,
+        occurred_at: r.at, summary: `${w.instruction} — ${said}.`, labels: [r.sense], confidence: null, value, watch_id: w.id,
+      });
+      if (ev) created.push(ev.id);
+    }
+    const t = r.kind === "number" ? thresholds[r.sense] : undefined;
+    if (!t) continue;
+    const before = prev && prev.kind === "number" ? prev : undefined;
+    // Fires on the crossing, not on every reading past the line.
+    const crossed =
+      (t.above !== undefined && r.value > t.above && (before === undefined || before.value <= t.above)) ||
+      (t.below !== undefined && r.value < t.below && (before === undefined || before.value >= t.below));
+    if (!crossed) continue;
+    const dir = t.above !== undefined && r.value > t.above ? `above ${t.above}` : `below ${t.below}`;
+    const ev = await createEvent(s, {
+      event_key: `threshold:${src.id}:${r.sense}:${r.at.toISOString()}${r.device_id ? `:${r.device_id}` : ""}`, source_id: src.id, type: "sensor.threshold", sense: r.sense,
+      occurred_at: r.at, summary: `${where}: ${said}, ${dir}.`, labels: [r.sense], confidence: null, value,
+    });
+    if (ev) created.push(ev.id);
+  }
+  return created;
 }
 
 export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
@@ -152,73 +227,7 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
         const src = await s.sources.get(req.params.id);
         if (!src) throw new ApiError(404, "not_found", "source not found");
         if (src.type !== "sensor") throw new ApiError(400, "validation_failed", "this source does not take sensor readings");
-        // A sensor gains each new sense its readings bring (ADR 0060); grants still decide who sees it.
-        const added = [...new Set(readings.map((r) => r.sense))].filter((x) => !src.senses.includes(x));
-        if (added.length) await s.db.updateTable("sources").set({ senses: [...src.senses, ...added] }).where("id", "=", src.id).execute();
-        for (const month of new Set(readings.map((r) => r.at.toISOString().slice(0, 7)))) {
-          await sql`select ensure_readings_partition(${new Date(`${month}-01T00:00:00Z`)})`.execute(s.db);
-        }
-        const thresholds: Thresholds = src.sensor_thresholds ?? {};
-        const created: string[] = [];
-        // Watches with sensor triggers on this source (evaluated here, where readings arrive).
-        const sensorWatches = (await s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute())
-          .filter((w) => w.sources.includes(src.id) && (w.compiled as { trigger: { type: string } }).trigger.type === "sensor");
-        const where = src.location ?? src.name;
-        for (const r of readings) {
-          const same = (eb: ExpressionBuilder<Database, "sensor_readings">) => eb.and([eb("source_id", "=", src.id), eb("sense", "=", r.sense), sql<boolean>`device_id is not distinct from ${r.device_id}`]);
-          const prev = await s.db.selectFrom("sensor_readings").select(["value", "kind"]).where(same)
-            .where("measured_at", "<", r.at).orderBy("measured_at", "desc").limit(1).executeTakeFirst();
-          await s.db.insertInto("sensor_readings").values({
-            account_id: accountId, source_id: src.id, sense: r.sense, kind: r.kind, value: r.value, unit: r.unit,
-            detail: r.detail, device_id: r.device_id, device_name: r.device_name, measured_at: r.at,
-          }).execute();
-          const value = toReading({ ...r, measured_at: r.at });
-          const said = `${r.device_name ?? senseName(r.sense)}${r.kind === "event" ? " " : " is "}${readingText(r)}`;
-          for (const w of sensorWatches) {
-            const trig = (w.compiled as { trigger: SensorMatch & { min_duration_s?: number } }).trigger;
-            if (trig.sense !== r.sense || !deviceMatches(trig, r)) continue;
-            if (!activeAt(r.at, w.active_hours, (w.compiled as { active_hours?: { days: string[]; from: string; to: string }[] | null }).active_hours)) continue;
-            if (!holds(trig, r)) continue;
-            // Start of the current run of readings that hold; an event is its own run.
-            let started = r.at;
-            if (r.kind !== "event") {
-              const lastOut = await s.db.selectFrom("sensor_readings").select("measured_at").where(same).where("measured_at", "<", r.at)
-                .where((eb) => (r.kind === "state"
-                  ? eb("value", "<>", (trig.state ?? true) ? 1 : 0)
-                  : eb.and([
-                    ...(trig.above !== undefined ? [eb("value", "<=", trig.above)] : []),
-                    ...(trig.below !== undefined ? [eb("value", ">=", trig.below)] : []),
-                    ...(trig.above === undefined && trig.below === undefined ? [sql<boolean>`false`] : []),
-                  ])))
-                .orderBy("measured_at", "desc").limit(1).executeTakeFirst();
-              const runStart = await s.db.selectFrom("sensor_readings").select("measured_at").where(same)
-                .where("measured_at", ">", lastOut ? new Date(lastOut.measured_at) : new Date(0)).orderBy("measured_at").limit(1).executeTakeFirst();
-              started = runStart ? new Date(runStart.measured_at) : r.at;
-              if ((r.at.getTime() - started.getTime()) / 1000 < (trig.min_duration_s ?? 0)) continue;
-            }
-            const ev = await createEvent(s, {
-              // One event per run that holds, per watch and device; sensor watches fire `reading.threshold` (ADR 0045).
-              event_key: `watch:${w.id}:${src.id}:${started.toISOString()}${r.device_id ? `:${r.device_id}` : ""}`, source_id: src.id, type: "reading.threshold", sense: r.sense,
-              occurred_at: r.at, summary: `${w.instruction} — ${said}.`, labels: [r.sense], confidence: null, value, watch_id: w.id,
-            });
-            if (ev) created.push(ev.id);
-          }
-          const t = r.kind === "number" ? thresholds[r.sense] : undefined;
-          if (!t) continue;
-          const before = prev && prev.kind === "number" ? prev : undefined;
-          // Fires on the crossing, not on every reading past the line.
-          const crossed =
-            (t.above !== undefined && r.value > t.above && (before === undefined || before.value <= t.above)) ||
-            (t.below !== undefined && r.value < t.below && (before === undefined || before.value >= t.below));
-          if (!crossed) continue;
-          const dir = t.above !== undefined && r.value > t.above ? `above ${t.above}` : `below ${t.below}`;
-          const ev = await createEvent(s, {
-            event_key: `threshold:${src.id}:${r.sense}:${r.at.toISOString()}${r.device_id ? `:${r.device_id}` : ""}`, source_id: src.id, type: "sensor.threshold", sense: r.sense,
-            occurred_at: r.at, summary: `${where}: ${said}, ${dir}.`, labels: [r.sense], confidence: null, value,
-          });
-          if (ev) created.push(ev.id);
-        }
-        return created;
+        return ingestReadings(s, accountId, src, readings);
       });
       return reply.code(202).send({ accepted: readings.length, events: events });
     },

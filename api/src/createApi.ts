@@ -37,7 +37,8 @@ import type { ApiModule, AuditLog, ModuleContext, Quota, UsageRecord } from "./m
 import { registerAccountRoutes } from "./routes/account.js";
 import { registerSourceRoutes } from "./routes/sources.js";
 import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
-import { markSilentBridges, registerBridgeRoutes } from "./routes/bridges.js";
+import { markSilentBridges, registerBridgeAdminRoutes, registerBridgeRoutes } from "./routes/bridges.js";
+import { registerPairingRoutes } from "./routes/pairing.js";
 import { closeStaleActivities } from "./activity.js";
 import { startScheduledWatches } from "./scheduled-watches.js";
 import { type Job, startJobs } from "./jobs.js";
@@ -461,6 +462,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     data, maxSources: async (id) => (await quotaFor(id)).maxSources, audit,
     ...(mediaDriver?.publicUrl ? { whip: { publicUrl: mediaDriver.publicUrl, authorizeUrl: whipAuthorizeUrl, signer } } : {}),
   });
+  registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, audit });
+  registerPairingRoutes(app, { data, audit, ...(auth.consoleUrls[0] ? { consoleUrl: auth.consoleUrls[0] } : {}) });
   const stoppers: (() => void | Promise<void>)[] = [];
   if (storage) {
     registerPlaybackRoutes(app, {

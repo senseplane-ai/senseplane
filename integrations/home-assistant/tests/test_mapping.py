@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Entity states → readings (ADR 0060), without Home Assistant."""
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -15,46 +17,19 @@ def attrs(device_class=None, unit=None, name=None, **extra):
     return {k: v for k, v in {"device_class": device_class, "unit_of_measurement": unit, "friendly_name": name, **extra}.items() if v is not None}
 
 
-@pytest.mark.parametrize(
-    ("entity_id", "state", "attributes", "want"),
-    [
-        ("sensor.kitchen_temp", "21.46", attrs("temperature", "°C"), {"sense": "temperature", "value": 21.46, "unit": "celsius"}),
-        ("sensor.kitchen_temp", "71.6", attrs("temperature", "°F"), {"sense": "temperature", "value": 22.0, "unit": "celsius"}),
-        ("sensor.kitchen_temp", "300.15", attrs("temperature", "K"), {"sense": "temperature", "value": 27.0, "unit": "celsius"}),
-        ("sensor.kitchen_hum", "48", attrs("humidity", "%"), {"sense": "humidity", "value": 48.0, "unit": "percent"}),
-        ("sensor.kettle_power", "1.9", attrs("power", "kW"), {"sense": "power", "value": 1900.0, "unit": "watt"}),
-        ("sensor.kettle_energy", "350", attrs("energy", "Wh"), {"sense": "energy", "value": 0.35, "unit": "kilowatt_hour"}),
-        ("sensor.air", "1013", attrs("pressure", "hPa"), {"sense": "pressure", "value": 1013.0, "unit": "hectopascal"}),
-        ("sensor.co2", "640", attrs("carbon_dioxide", "ppm"), {"sense": "co2", "value": 640.0, "unit": "ppm"}),
-        ("binary_sensor.fridge", "on", attrs("door"), {"sense": "contact", "value": True}),
-        ("binary_sensor.bathroom_window", "off", attrs("window"), {"sense": "contact", "value": False}),
-        ("binary_sensor.hall_motion", "on", attrs("motion"), {"sense": "motion", "value": True}),
-        ("binary_sensor.sink", "on", attrs("moisture"), {"sense": "leak", "value": True}),
-        ("binary_sensor.smoke", "off", attrs("smoke"), {"sense": "smoke", "value": False}),
-        ("switch.kettle", "on", attrs(), {"sense": "switch", "value": True}),
-        ("light.hall", "off", attrs(), {"sense": "switch", "value": False}),
-        ("lock.front", "unlocked", attrs(), {"sense": "lock", "value": True}),
-        ("lock.front", "locked", attrs(), {"sense": "lock", "value": False}),
-        ("event.doorbell", "2026-10-16T12:00:00+00:00", attrs("doorbell", event_type="ring"), {"sense": "doorbell"}),
-        ("event.hall_button", "2026-10-16T12:00:00+00:00", attrs("button", event_type="double_press"), {"sense": "button", "detail": "double"}),
-        # Not readings.
-        ("sensor.kitchen_temp", "unavailable", attrs("temperature", "°C"), None),
-        ("sensor.kitchen_temp", "unknown", attrs("temperature", "°C"), None),
-        ("sensor.kitchen_temp", "nan", attrs("temperature", "°C"), None),
-        ("sensor.kitchen_hum", "48", attrs("humidity", "g/m³"), None),
-        ("sensor.data", "12", attrs("data_size", "GB"), None),
-        ("sensor.thing", "1", attrs(), None),
-        ("binary_sensor.update", "on", attrs("update"), None),
-        ("lock.front", "jammed", attrs(), None),
-        ("media_player.tv", "playing", attrs(), None),
-    ],
-)
-def test_to_reading(entity_id, state, attributes, want):
-    got = to_reading(entity_id, state, attributes, AT)
-    if want is None:
+
+CASES = json.loads((Path(__file__).resolve().parents[3] / "spec" / "home-assistant" / "readings.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("case", CASES, ids=[f"{c['entity_id']}={c['state']}" for c in CASES])
+def test_to_reading(case):
+    """The shared vectors (spec/home-assistant/readings.json), which the bridge tests too."""
+    got = to_reading(case["entity_id"], case["state"], case["attributes"], AT, initial=case.get("initial", False))
+    if case["want"] is None:
         assert got is None
     else:
-        assert got == {**want, "device": {"id": entity_id}, "at": "2026-10-16T12:00:00+00:00"}
+        name = case["attributes"].get("friendly_name")
+        assert got == {**case["want"], "device": {"id": case["entity_id"], **({"name": name} if name else {})}, "at": "2026-10-16T12:00:00+00:00"}
 
 
 def test_names_the_entity_as_the_device():

@@ -109,6 +109,30 @@ async function toError(res: Response): Promise<SenseplaneError> {
   return new SenseplaneError(res.status, (e?.code ?? "unknown") as never, e?.message ?? res.statusText, e?.request_id, e?.details);
 }
 
+/** A bridge: an always-on box (a Home Assistant add-on) or the bridge container (ADR 0061). */
+export interface Bridge {
+  id: string;
+  name: string;
+  version: string | null;
+  created_at: string;
+  last_seen_at: string | null;
+  online: boolean;
+  home_assistant: { connected: boolean; entities: number; sending: number } | null;
+}
+
+/** A Home Assistant entity a bridge can send; chosen ones go to their room's sensor source. */
+export interface BridgeEntity {
+  entity_id: string;
+  name: string;
+  area: string | null;
+  device_class: string | null;
+  sense: string;
+  kind: "number" | "state" | "event";
+  chosen: boolean;
+  source_id: string | null;
+  listed: boolean;
+}
+
 export class ApiExtra {
   constructor(
     private readonly apiUrl: string,
@@ -182,6 +206,14 @@ export class ApiExtra {
   usage = () => this.request<UsageWithLive>("GET", "/usage");
   /** Pause or resume a camera (ADR 0045); a server without it answers 404. */
   pauseSource = (id: string, paused: boolean) => this.request<unknown>("POST", `/sources/${encodeURIComponent(id)}/${paused ? "pause" : "resume"}`);
+  readonly bridges = {
+    list: () => this.request<{ data: Bridge[] }>("GET", "/bridges"),
+    entities: (id: string) => this.request<{ data: BridgeEntity[] }>("GET", `/bridges/${encodeURIComponent(id)}/entities`),
+    choose: (id: string, change: { choose?: string[]; drop?: string[] }) => this.request<{ data: BridgeEntity[] }>("PATCH", `/bridges/${encodeURIComponent(id)}/entities`, change),
+    /** A box waiting with a pairing code (ADR 0061). */
+    findPairing: (code: string) => this.request<{ code: string; name: string; expires_at: string }>("GET", `/bridges/pair?${new URLSearchParams({ code })}`),
+    pair: (code: string, name?: string) => this.request<{ id: string; name: string }>("POST", "/bridges/pair", { code, ...(name ? { name } : {}) }),
+  };
   /** Raw events page for counts (the SDK paginates through everything). */
   eventsPage = (q: Record<string, string>) => this.request<{ data: import("senseplane").Event[]; next_cursor: string | null }>("GET", `/events?${new URLSearchParams(q)}`);
 }

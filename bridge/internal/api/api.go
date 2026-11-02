@@ -35,6 +35,54 @@ type Config struct {
 	HeartbeatSeconds int      `json:"heartbeat_seconds"`
 	PollSeconds      int      `json:"poll_seconds"`
 	Cameras          []Camera `json:"cameras"`
+	// Sensors are the Home Assistant entities a person chose to send (ADR 0061); nothing else is sent.
+	Sensors []string `json:"sensors"`
+}
+
+// Device is what measured a reading: here, a Home Assistant entity.
+type Device struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// Reading is one sensor reading (spec/openapi.yaml ReadingInput): a number
+// with a unit, a state (true or false) or an event (neither).
+type Reading struct {
+	Sense  string
+	Number *float64
+	Unit   string
+	State  *bool
+	Detail string
+	Device *Device
+	At     string
+}
+
+// MarshalJSON writes the reading as the API takes it: `value` is the number or the state.
+func (r Reading) MarshalJSON() ([]byte, error) {
+	out := map[string]any{"sense": r.Sense, "at": r.At}
+	switch {
+	case r.Number != nil:
+		out["value"], out["unit"] = *r.Number, r.Unit
+	case r.State != nil:
+		out["value"] = *r.State
+	}
+	if r.Detail != "" {
+		out["detail"] = r.Detail
+	}
+	if r.Device != nil {
+		out["device"] = r.Device
+	}
+	return json.Marshal(out)
+}
+
+// Entity is one Home Assistant entity the bridge can send, as listed for a person to choose from.
+type Entity struct {
+	EntityID    string `json:"entity_id"`
+	Name        string `json:"name"`
+	Area        string `json:"area,omitempty"`
+	DeviceClass string `json:"device_class,omitempty"`
+	Sense       string `json:"sense"`
+	Kind        string `json:"kind"`
 }
 
 // CameraHealth is one camera's state in a health report.
@@ -48,6 +96,16 @@ type CameraHealth struct {
 type Health struct {
 	Version string         `json:"version,omitempty"`
 	Cameras []CameraHealth `json:"cameras"`
+	// HomeAssistant is set when the bridge reads a Home Assistant (ADR 0061).
+	HomeAssistant *HomeHealth `json:"home_assistant,omitempty"`
+}
+
+// HomeHealth is the bridge's link to Home Assistant.
+type HomeHealth struct {
+	Connected bool `json:"connected"`
+	// Entities is how many it can send; Sending how many a person chose.
+	Entities int `json:"entities"`
+	Sending  int `json:"sending"`
 }
 
 // Error is an error answer from the API.
@@ -91,7 +149,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -145,4 +205,53 @@ func (c *Client) Report(ctx context.Context, h Health) error {
 		h.Cameras = []CameraHealth{}
 	}
 	return c.do(ctx, http.MethodPost, "/v1/bridge/health", h, nil)
+}
+
+// PutEntities replaces the list of Home Assistant entities this bridge can send.
+func (c *Client) PutEntities(ctx context.Context, entities []Entity) error {
+	if entities == nil {
+		entities = []Entity{}
+	}
+	return c.do(ctx, http.MethodPut, "/v1/bridge/entities", map[string]any{"entities": entities}, nil)
+}
+
+// PostReadings sends readings of the chosen entities; the API files each under its entity's sensor source.
+func (c *Client) PostReadings(ctx context.Context, readings []Reading) error {
+	return c.do(ctx, http.MethodPost, "/v1/bridge/readings", map[string]any{"readings": readings}, nil)
+}
+
+// Pairing is a code the box shows while it waits for a person (ADR 0061).
+type Pairing struct {
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURL         string `json:"verification_url"`
+	VerificationURLComplete string `json:"verification_url_complete"`
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+}
+
+// PairResult is the answer to a poll: waiting, expired, or approved with the bridge token.
+type PairResult struct {
+	Status   string `json:"status"`
+	BridgeID string `json:"bridge_id"`
+	Token    string `json:"token"`
+	Interval int    `json:"interval"`
+}
+
+// Pair asks for a pairing code (no token needed).
+func (c *Client) Pair(ctx context.Context, name string) (*Pairing, error) {
+	var p Pairing
+	if err := c.do(ctx, http.MethodPost, "/v1/bridge/pair", map[string]string{"name": name}, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// PairToken asks whether a person approved the code yet.
+func (c *Client) PairToken(ctx context.Context, deviceCode string) (*PairResult, error) {
+	var r PairResult
+	if err := c.do(ctx, http.MethodPost, "/v1/bridge/pair/token", map[string]string{"device_code": deviceCode}, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }

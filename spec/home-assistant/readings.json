@@ -1,0 +1,439 @@
+{
+  "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0. How Home Assistant entity states become Senseplane readings (ADR 0060): the Home Assistant integration (Python) and the bridge (Go) both test against these. `want` without device and at: those are always {id: entity_id} (plus name from friendly_name) and the state's time; null: not a reading. `initial`: the state found at start-up.",
+  "cases": [
+    {
+      "entity_id": "sensor.kitchen_temp",
+      "state": "21.46",
+      "attributes": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°C"
+      },
+      "want": {
+        "sense": "temperature",
+        "value": 21.46,
+        "unit": "celsius"
+      }
+    },
+    {
+      "entity_id": "sensor.kitchen_temp",
+      "state": "71.6",
+      "attributes": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°F"
+      },
+      "want": {
+        "sense": "temperature",
+        "value": 22.0,
+        "unit": "celsius"
+      }
+    },
+    {
+      "entity_id": "sensor.kitchen_temp",
+      "state": "300.15",
+      "attributes": {
+        "device_class": "temperature",
+        "unit_of_measurement": "K"
+      },
+      "want": {
+        "sense": "temperature",
+        "value": 27.0,
+        "unit": "celsius"
+      }
+    },
+    {
+      "entity_id": "sensor.kitchen_hum",
+      "state": "48",
+      "attributes": {
+        "device_class": "humidity",
+        "unit_of_measurement": "%"
+      },
+      "want": {
+        "sense": "humidity",
+        "value": 48.0,
+        "unit": "percent"
+      }
+    },
+    {
+      "entity_id": "sensor.kettle_power",
+      "state": "1.9",
+      "attributes": {
+        "device_class": "power",
+        "unit_of_measurement": "kW"
+      },
+      "want": {
+        "sense": "power",
+        "value": 1900.0,
+        "unit": "watt"
+      }
+    },
+    {
+      "entity_id": "sensor.kettle_energy",
+      "state": "350",
+      "attributes": {
+        "device_class": "energy",
+        "unit_of_measurement": "Wh"
+      },
+      "want": {
+        "sense": "energy",
+        "value": 0.35,
+        "unit": "kilowatt_hour"
+      }
+    },
+    {
+      "entity_id": "sensor.mains",
+      "state": "231.4",
+      "attributes": {
+        "device_class": "voltage",
+        "unit_of_measurement": "V"
+      },
+      "want": {
+        "sense": "voltage",
+        "value": 231.4,
+        "unit": "volt"
+      }
+    },
+    {
+      "entity_id": "sensor.plug_current",
+      "state": "450",
+      "attributes": {
+        "device_class": "current",
+        "unit_of_measurement": "mA"
+      },
+      "want": {
+        "sense": "current",
+        "value": 0.45,
+        "unit": "ampere"
+      }
+    },
+    {
+      "entity_id": "sensor.hall_light",
+      "state": "120",
+      "attributes": {
+        "device_class": "illuminance",
+        "unit_of_measurement": "lx"
+      },
+      "want": {
+        "sense": "illuminance",
+        "value": 120.0,
+        "unit": "lux"
+      }
+    },
+    {
+      "entity_id": "sensor.air",
+      "state": "1013",
+      "attributes": {
+        "device_class": "pressure",
+        "unit_of_measurement": "hPa"
+      },
+      "want": {
+        "sense": "pressure",
+        "value": 1013.0,
+        "unit": "hectopascal"
+      }
+    },
+    {
+      "entity_id": "sensor.air",
+      "state": "29.92",
+      "attributes": {
+        "device_class": "pressure",
+        "unit_of_measurement": "inHg"
+      },
+      "want": {
+        "sense": "pressure",
+        "value": 1013.21,
+        "unit": "hectopascal"
+      }
+    },
+    {
+      "entity_id": "sensor.co2",
+      "state": "640",
+      "attributes": {
+        "device_class": "carbon_dioxide",
+        "unit_of_measurement": "ppm"
+      },
+      "want": {
+        "sense": "co2",
+        "value": 640.0,
+        "unit": "ppm"
+      }
+    },
+    {
+      "entity_id": "sensor.pm",
+      "state": "12.5",
+      "attributes": {
+        "device_class": "pm25",
+        "unit_of_measurement": "µg/m³"
+      },
+      "want": {
+        "sense": "pm25",
+        "value": 12.5,
+        "unit": "ugm3"
+      }
+    },
+    {
+      "entity_id": "sensor.door_battery",
+      "state": "87",
+      "attributes": {
+        "device_class": "battery",
+        "unit_of_measurement": "%"
+      },
+      "want": {
+        "sense": "battery",
+        "value": 87.0,
+        "unit": "percent"
+      }
+    },
+    {
+      "entity_id": "binary_sensor.fridge",
+      "state": "on",
+      "attributes": {
+        "device_class": "door"
+      },
+      "want": {
+        "sense": "contact",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "binary_sensor.bathroom_window",
+      "state": "off",
+      "attributes": {
+        "device_class": "window"
+      },
+      "want": {
+        "sense": "contact",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "binary_sensor.garage",
+      "state": "on",
+      "attributes": {
+        "device_class": "garage_door"
+      },
+      "want": {
+        "sense": "contact",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "binary_sensor.hall_motion",
+      "state": "on",
+      "attributes": {
+        "device_class": "motion"
+      },
+      "want": {
+        "sense": "motion",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "binary_sensor.office",
+      "state": "off",
+      "attributes": {
+        "device_class": "occupancy"
+      },
+      "want": {
+        "sense": "occupancy",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "binary_sensor.sink",
+      "state": "on",
+      "attributes": {
+        "device_class": "moisture"
+      },
+      "want": {
+        "sense": "leak",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "binary_sensor.smoke",
+      "state": "off",
+      "attributes": {
+        "device_class": "smoke"
+      },
+      "want": {
+        "sense": "smoke",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "binary_sensor.co",
+      "state": "on",
+      "attributes": {
+        "device_class": "carbon_monoxide"
+      },
+      "want": {
+        "sense": "carbon_monoxide",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "switch.kettle",
+      "state": "on",
+      "attributes": {},
+      "want": {
+        "sense": "switch",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "light.hall",
+      "state": "off",
+      "attributes": {},
+      "want": {
+        "sense": "switch",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "lock.front",
+      "state": "unlocked",
+      "attributes": {},
+      "want": {
+        "sense": "lock",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "lock.front",
+      "state": "locked",
+      "attributes": {},
+      "want": {
+        "sense": "lock",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "event.doorbell",
+      "state": "2026-10-16T12:00:00+00:00",
+      "attributes": {
+        "device_class": "doorbell",
+        "event_type": "ring"
+      },
+      "want": {
+        "sense": "doorbell"
+      }
+    },
+    {
+      "entity_id": "event.hall_button",
+      "state": "2026-10-16T12:00:00+00:00",
+      "attributes": {
+        "device_class": "button",
+        "event_type": "double_press"
+      },
+      "want": {
+        "sense": "button",
+        "detail": "double"
+      }
+    },
+    {
+      "entity_id": "event.hall_button",
+      "state": "2026-10-16T12:00:00+00:00",
+      "attributes": {
+        "device_class": "button",
+        "event_type": "long_press"
+      },
+      "want": {
+        "sense": "button",
+        "detail": "long"
+      }
+    },
+    {
+      "entity_id": "sensor.kitchen_temp",
+      "state": "unavailable",
+      "attributes": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°C"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "sensor.kitchen_temp",
+      "state": "unknown",
+      "attributes": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°C"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "sensor.kitchen_temp",
+      "state": "nan",
+      "attributes": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°C"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "sensor.kitchen_hum",
+      "state": "48",
+      "attributes": {
+        "device_class": "humidity",
+        "unit_of_measurement": "g/m³"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "sensor.data",
+      "state": "12",
+      "attributes": {
+        "device_class": "data_size",
+        "unit_of_measurement": "GB"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "sensor.thing",
+      "state": "1",
+      "attributes": {},
+      "want": null
+    },
+    {
+      "entity_id": "binary_sensor.update",
+      "state": "on",
+      "attributes": {
+        "device_class": "update"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "lock.front",
+      "state": "jammed",
+      "attributes": {},
+      "want": null
+    },
+    {
+      "entity_id": "media_player.tv",
+      "state": "playing",
+      "attributes": {},
+      "want": null
+    },
+    {
+      "entity_id": "event.doorbell",
+      "state": "2026-10-16T09:00:00+00:00",
+      "attributes": {
+        "device_class": "doorbell"
+      },
+      "initial": true,
+      "want": null
+    },
+    {
+      "entity_id": "binary_sensor.fridge",
+      "state": "on",
+      "attributes": {
+        "device_class": "door",
+        "friendly_name": "Fridge door"
+      },
+      "initial": true,
+      "want": {
+        "sense": "contact",
+        "value": true
+      }
+    }
+  ]
+}

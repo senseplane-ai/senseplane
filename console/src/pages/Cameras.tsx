@@ -14,6 +14,7 @@ import {
 } from "../shell/sources";
 import { EmptyState, Frame, Icon, LinkButton, PageHeader, Pill, StatusDot, Table, Tag } from "../ui";
 import "./cameras.css";
+import { BoxesStrip } from "./Boxes";
 
 type Filter = "all" | StatusKind;
 type Now = { snapshot_url?: string; captured_at: string; readings?: Reading[] };
@@ -125,6 +126,8 @@ export function CamerasPage() {
   return (
     <div className="page page-narrow">
       <PageHeader eyebrow="Cameras and sensors" title={sources ? title : "Cameras"} actions={<LinkButton to="/cameras/new" variant="primary" icon="plus">Add camera</LinkButton>} />
+
+      <BoxesStrip />
 
       {sources && all.length === 0 ? (
         <EmptyState icon="camera" title="No cameras yet" actions={<LinkButton to="/cameras/new" variant="primary" icon="plus">Add camera</LinkButton>}>

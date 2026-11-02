@@ -28,7 +28,7 @@ describe("AddCameraPage", () => {
     });
     renderWithApp(<AddCameraPage />, appData({ fetch }));
     expect(screen.getByRole("heading", { name: "What are you connecting?" })).toBeInTheDocument();
-    expect(screen.getAllByRole("radio")).toHaveLength(4);
+    expect(screen.getAllByRole("radio")).toHaveLength(5);
     expect(screen.getByRole("radio", { name: /Phone or laptop/ })).toHaveAttribute("aria-checked", "true");
     await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -49,6 +49,8 @@ describe("AddCameraPage", () => {
   it("moves between the selectable kinds with the arrow keys", async () => {
     renderWithApp(<AddCameraPage />, appData());
     screen.getByRole("radio", { name: /Phone or laptop/ }).focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: /^Home Assistant ?Sensors and cameras/ })).toHaveAttribute("aria-checked", "true");
     await userEvent.keyboard("{ArrowDown}");
     expect(screen.getByRole("radio", { name: /OBS or streaming software/ })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /OBS/ })).toHaveFocus();
@@ -71,11 +73,24 @@ describe("AddCameraPage", () => {
 
   it("shows IP cameras and Home Assistant sensors as coming soon, not selectable", async () => {
     renderWithApp(<AddCameraPage />, appData({ fetch: withBodies({}).fetch }));
-    for (const name of [/IP camera/, /Home Assistant/]) {
+    for (const name of [/IP camera/, /Home Assistant sensors \(integration\)/]) {
       const r = screen.getByRole("radio", { name });
       expect(r).toBeDisabled();
       expect(r).toHaveTextContent("Coming soon");
     }
+  });
+});
+
+describe("a Home Assistant box", () => {
+  it("shows how to add the add-on, then sends you to enter its code", async () => {
+    renderWithApp(<AddCameraPage />, appData({ apiUrl: "https://senseplane.example.com/v1" }));
+    await userEvent.click(screen.getByRole("radio", { name: /^Home Assistant ?Sensors and cameras/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByRole("heading", { name: "Add Senseplane to Home Assistant" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Repository")).toHaveTextContent("https://github.com/senseplane-ai/home-assistant-addons");
+    expect(screen.getByLabelText("Server")).toHaveTextContent("https://senseplane.example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Enter the code" }));
+    expect(location.pathname).toBe("/link");
   });
 });
 

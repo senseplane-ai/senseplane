@@ -80,6 +80,8 @@ export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
     sensor_thresholds: thresholds,
     status_since: row.status_since ? new Date(row.status_since).toISOString() : null,
     ...(row.type === "rtsp" ? { bridge_id: row.bridge_id ?? null, status_detail: row.bridge_detail ? redactUrls(row.bridge_detail) : null } : {}),
+    // A Home Assistant room's sensors, fed by a bridge (ADR 0061).
+    ...(row.type === "sensor" && row.bridge_id ? { bridge_id: row.bridge_id } : {}),
     ...(row.type !== "sensor" ? { view_changed_at: row.view_changed_at ? new Date(row.view_changed_at).toISOString() : null } : {}),
     ...(maxResolution && row.type !== "sensor" ? { max_resolution: maxResolution } : {}),
     created_at: new Date(row.created_at).toISOString(),

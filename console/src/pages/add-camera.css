@@ -63,3 +63,5 @@
   .add-section h1 { font-size: 22px; }
   .connect-phone { justify-content: center; }
 }
+.box-steps { display: flex; flex-direction: column; gap: 14px; padding-left: 20px; margin: 0; }
+.box-steps li { display: flex; flex-direction: column; gap: 8px; }

@@ -340,6 +340,143 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bridge/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * The Home Assistant entities this bridge can send
+         * @description Replaces the list (ADR 0061). Entities it no longer lists stay, marked `listed: false`, and stop being sent.
+         */
+        put: operations["putBridgeEntities"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/readings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Readings of the chosen Home Assistant entities
+         * @description Each reading names its entity as `device.id`; it is filed under the sensor source of the entity's room. Readings of entities nobody chose, unknown ones, or of another sense than the entity's are ignored.
+         */
+        post: operations["postBridgeReadings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a pairing code (a box without a token)
+         * @description No authentication (ADR 0061); limited per address. The box shows `user_code` and `verification_url_complete`, then polls POST /bridge/pair/token every `interval` seconds with `device_code`.
+         */
+        post: operations["startBridgePairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/pair/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Whether the code was approved; the bridge token, once */
+        post: operations["pollBridgePairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bridges and Home Assistant boxes */
+        get: operations["listBridges"];
+        put?: never;
+        /** Add a bridge without a camera (for example a Home Assistant box run with a token) */
+        post: operations["createBridge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridges/{id}/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A bridge's Home Assistant entities, chosen or not */
+        get: operations["listBridgeEntities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Choose which entities Senseplane gets
+         * @description A chosen entity's readings go to the sensor source of its room (one per bridge and room, made on first use: "Kitchen sensors"; no room: "Home sensors"). Dropping one stops its readings; what was stored stays. Audited.
+         */
+        patch: operations["chooseBridgeEntities"];
+        trace?: never;
+    };
+    "/bridges/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The box waiting with a code */
+        get: operations["findBridgePairing"];
+        put?: never;
+        /**
+         * Connect the box with this code to this workspace
+         * @description Makes a bridge for the box; the box collects its token itself (ADR 0061). Admins only. Audited.
+         */
+        post: operations["approveBridgePairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/integration": {
         parameters: {
             query?: never;
@@ -1494,7 +1631,10 @@ export interface components {
             name: string;
             heartbeat_seconds: number;
             poll_seconds: number;
+            /** @description Empty when this deployment has no WHIP ingest */
             cameras: components["schemas"]["BridgeCamera"][];
+            /** @description The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only */
+            sensors?: string[];
         };
         BridgeHealth: {
             version?: string;
@@ -1505,6 +1645,57 @@ export interface components {
                 /** @description Why */
                 detail?: string;
             }[];
+            /** @description Set by a bridge that reads Home Assistant (ADR 0061) */
+            home_assistant?: {
+                connected: boolean;
+                /** @description How many entities it can send */
+                entities?: number;
+                /** @description How many a person chose */
+                sending?: number;
+            };
+        };
+        BridgeEntityListed: {
+            entity_id: string;
+            name: string;
+            /** @description The room in Home Assistant */
+            area?: string;
+            device_class?: string;
+            sense: string;
+            /** @enum {string} */
+            kind: "number" | "state" | "event";
+        };
+        BridgeEntity: {
+            entity_id: string;
+            name: string;
+            area?: string | null;
+            device_class?: string | null;
+            sense: string;
+            /** @enum {string} */
+            kind: "number" | "state" | "event";
+            /** @description A person chose it; its readings are sent */
+            chosen: boolean;
+            /** @description The sensor source of its room, once chosen */
+            source_id?: string | null;
+            /** @description False when Home Assistant no longer has it */
+            listed: boolean;
+        };
+        Bridge: {
+            id: string;
+            name: string;
+            version?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+            /** @description Reported within the last three heartbeats */
+            online: boolean;
+            home_assistant?: {
+                connected?: boolean;
+                entities?: number;
+                sending?: number;
+            } | null;
+            /** @description Only when created with POST /bridges: the bridge token, shown once */
+            token?: string;
         };
         ClipCreate: {
             source: string;
@@ -3543,6 +3734,303 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putBridgeEntities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    entities: components["schemas"]["BridgeEntityListed"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    postBridgeReadings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        accepted: number;
+                        ignored: number;
+                        events: string[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startBridgePairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description What the person sees when approving */
+                    name?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description A code waiting for a person */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Secret; only the box has it */
+                        device_code: string;
+                        /** @example BCDF-GHJK */
+                        user_code: string;
+                        /** Format: uri */
+                        verification_url: string;
+                        /** Format: uri */
+                        verification_url_complete: string;
+                        /** @description Seconds */
+                        expires_in: number;
+                        /** @description Seconds between polls */
+                        interval: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pollBridgePairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    device_code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description `waiting`, `expired`, or `approved` with the token (given once; asking again is a 409) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "waiting" | "expired" | "approved";
+                        bridge_id?: string;
+                        token?: string;
+                        interval?: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBridges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Bridge"][];
+                        next_cursor?: null | string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createBridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created; `token` is shown once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bridge"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBridgeEntities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BridgeEntity"][];
+                        next_cursor?: null | string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    chooseBridgeEntities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    choose?: string[];
+                    drop?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description The entities after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BridgeEntity"][];
+                        next_cursor?: null | string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    findBridgePairing: {
+        parameters: {
+            query: {
+                /** @description The code the box shows (any case, with or without the dash) */
+                code: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code: string;
+                        name: string;
+                        /** Format: date-time */
+                        expires_at: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    approveBridgePairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                    name?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Paired */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bridge"];
+                };
             };
             default: components["responses"]["Error"];
         };

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AddCameraPage } from "./pages/AddCamera";
 import { AskPage } from "./pages/Ask";
+import { BoxPage, LinkPage } from "./pages/Boxes";
 import { CameraPage } from "./pages/Camera";
 import { CamerasPage } from "./pages/Cameras";
 import { ConnectPage } from "./pages/Connect";
@@ -45,6 +46,9 @@ export function resolveRoute(pathname: string): { page: string; params: Record<s
   m = matchPath("/cameras/:id", pathname);
   if (m) return { page: "camera", params: m };
   if (matchPath("/live", pathname)) return { page: "live", params: {} };
+  if (matchPath("/link", pathname)) return { page: "link", params: {} };
+  m = matchPath("/boxes/:id", pathname);
+  if (m) return { page: "box", params: m };
   for (const path of Object.keys(ADMIN_ROUTES)) if (matchPath(`${path}/*`, pathname)) return { page: path, params: {} };
   return { page: "not-found", params: {} };
 }
@@ -64,6 +68,8 @@ function Routes() {
     case "cameras": page = <CamerasPage />; break;
     case "camera": page = <CameraPage key={route.params.id} id={route.params.id!} />; break;
     case "live": page = <LiveViewPage />; break;
+    case "link": page = <LinkPage />; break;
+    case "box": page = <BoxPage key={route.params.id} id={route.params.id!} />; break;
     case "not-found": page = <NotFoundPage />; break;
     default: {
       const Page = ADMIN_ROUTES[route.page as keyof typeof ADMIN_ROUTES];

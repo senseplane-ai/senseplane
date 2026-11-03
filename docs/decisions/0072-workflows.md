@@ -24,23 +24,42 @@ Runs are rows claimed by one API process with `claim_workflow_runs`
 function with EXECUTE revoked from PUBLIC), and schedules with
 `claim_workflow_schedules`. Only the holder of the current token writes a
 run's steps; a process that lost its lease (it hung past it and another took
-the run over) stops at its next write and writes nothing.
+the run over) stops at its next write and writes nothing. `claims` counts
+only takeovers of an expired lease, never resumes after a wait or a retry; a
+run taken over more than 5 times fails.
+
+**The database is the clock** (ADR 0058). Leases, wait and retry times,
+"recorded yet?" for clips and stories, run times and schedules' next times are
+all worked out from `now()` in Postgres, so a process whose clock is off
+can't park a run too long, make it due early, or schedule wrongly.
 
 **Triggers.**
 - `event`: any event the account stores (a detection, a sound, a watch
   firing, a sensor reading over a threshold), filtered by event type
   patterns (`detection.*`, `watch.triggered`, `sensor.*`) and by source. The
-  run is queued in the event's own transaction.
+  run is queued in the event's own transaction, inside a savepoint: if
+  queueing fails, the event is kept and the failure logged. Workflow rows are
+  locked in id order after a per-account advisory lock, as every start is.
+  While a workflow speaks through a camera (and 5 s after), that camera's
+  events don't start that workflow: the camera hears its own speaker. Saving
+  a workflow whose speak step's camera can start it with sound events says so
+  in `warnings`.
 - `schedule`: `every_min` or a daily `at`, on chosen days, in a time zone,
-  with the same rules as condition and digest watches.
+  with the same rules as condition and digest watches: in a skipped hour a
+  time moves on by the gap, in a repeated hour it is the earlier one.
+  Schedules without their own zone follow the workspace's, and are worked out
+  again when it changes.
 - `webhook`: `POST /v1/workflow-hooks/{id}`, so n8n, Zapier or Home
   Assistant can start one. It takes no API key: it must be signed with the
   workflow's own secret (`whsec_…`, shown once, sealed at rest) exactly as
   Senseplane signs its webhooks, `Senseplane-Signature: t=<unix
   seconds>,v1=<hex HMAC-SHA256 of "t.body">`, within 5 minutes, and each
   signature is taken once (`workflow_hook_signatures`, pruned after 15
-  minutes). Unsigned, stale, wrong or replayed requests are 401 and start
-  nothing. The JSON body (at most 64 KiB, an object) is the run's `input`.
+  minutes). Unknown ids, and unsigned, stale, wrong or replayed requests, all
+  get the same 401 (the MAC is worked out against a throwaway secret for
+  unknown ids) and start nothing; on a known workflow each failure is counted
+  (`hook_failures`) and audited at most once a minute, with no body kept. The
+  JSON body (at most 64 KiB, an object) is the run's `input`.
 
 **Steps** (a small set, each tested):
 
@@ -48,14 +67,17 @@ the run over) stops at its next write and writes nothing.
 |---|---|---|
 | `condition` | rules on the event, the input or the local time; branches `yes`/`no` | no need |
 | `ask` | a yes/no question to the vision model about the event's snapshot (the backtest check, `rpc.brain.check`) or, without one, the camera's live frame (`rpc.brain.ask`); counts as an AI check; branches `yes`/`no` | on a brain timeout |
-| `notify` | a linked chat (through the channel outbox, ADR 0059) or one of the account's webhooks, signed as every Senseplane webhook, with `Senseplane-Delivery` stable across retries so receivers can drop repeats | webhook: network, 429, 5xx |
+| `notify` | a linked chat (queued in the channel outbox, ADR 0059, in the same transaction that records the step, so a crash can't queue it twice) or one of the account's webhooks, signed as every Senseplane webhook, with `Senseplane-Delivery` stable across retries and re-runs so receivers drop repeats | webhook: network, 429, 5xx |
 | `speak` | says text through a camera's speaker, through the talk-back path (ADR 0069) with its limits | never: a message plays once or not at all |
-| `clip` | saves a clip of the event's moment, once it is recorded | yes |
-| `story` | makes a story of the moment on one or more cameras (ADR 0070) | yes |
+| `clip` | saves a clip of the event's moment, once it is recorded; its id is made from the run and step, so a re-run finds it | yes |
+| `story` | makes a story of the moment on one or more cameras (ADR 0070); its id likewise | yes |
 | `wait` | pauses the run, 1 s to 24 h, holding no claim | yes |
 
 Text in `notify` and `speak` may use `{{event.summary}}`, `{{input.x}}`,
-`{{steps.<id>.answer}}` and the like; nothing else is evaluated.
+`{{steps.<id>.answer}}` and the like; nothing else is evaluated. A speak
+step says a webhook's `{{input.…}}` aloud only with `allow_input: true`
+(off by default, refused at save time otherwise): text from outside isn't
+spoken into a home unless someone chose that.
 
 **No step can switch a device, anywhere.** The schema's step kinds are a
 closed list without `control`; the API validates every definition against
@@ -78,7 +100,10 @@ see them and their runs; agents can't reach the routes. A workflow keeps
 running after the person who made it leaves: the account owns it, and the
 audit log says who made and changed it. Each run acts as `workflow:<id>`,
 an agent-like principal whose grants are rebuilt before every step from the
-sources the workflow names (at most 20), as they are then:
+workflow as it is then. Before each step the engine reads the workflow
+again: deleted or turned off, the run stops as `cancelled` with the reason;
+it keeps only the sources both the run and the workflow still name, and
+speech only on cameras both still have a speak step for. On those sources:
 
 - `video` and `sensors` on each named source; `audio` only on cameras that
   record sound (the audio opt-in); `speak` only on cameras a speak step
@@ -94,7 +119,8 @@ sources the workflow names (at most 20), as they are then:
 
 **Limits.** 100 workflows per account, 20 steps and 40 edges each. A
 workflow starts at most 10 runs a minute and 120 an hour, and an account 600
-an hour; triggers over that are dropped and counted on the workflow
+an hour, counted under the account's advisory lock so concurrent starts
+can't slip past the cap; triggers over that are dropped and counted on the workflow
 (`runs_dropped`), and the webhook trigger answers 429. 3 attempts for a step
 that may be retried (5 s, then 30 s), then the run fails.
 
@@ -104,11 +130,18 @@ started it, and per step its status (`running`, `waiting`, `succeeded`,
 step fails the run with the step and the reason; the steps after it are
 skipped. A step found `running` when a run is taken over (its process died)
 is run again if it may be retried, and otherwise failed with "it may or may
-not have happened". Runs are kept 30 days.
+not have happened". An admin can cancel a run
+(`POST /v1/workflow-runs/{id}/cancel`); a deleted workflow's runs stay,
+cancelled, with no workflow. Runs are kept 30 days, or less: never longer
+than the shortest retention of their sources (or the account's), since a
+step's output and a webhook's input describe what was seen. When the event
+that started a run, or one of its sources, is deleted, the run's outputs and
+input go with it; its statuses and errors stay.
 
 **Surfaces.** REST (`/v1/workflows`, `/v1/workflows/{id}/runs`,
-`/v1/workflow-runs/{id}`, `POST /v1/workflows/{id}/run` to start one by
-hand, `POST /v1/workflows/{id}/hook-secret`, `POST /v1/workflow-hooks/{id}`),
+`/v1/workflow-runs/{id}`, `POST /v1/workflow-runs/{id}/cancel`,
+`POST /v1/workflows/{id}/run` to start an enabled one by hand,
+`POST /v1/workflows/{id}/hook-secret`, `POST /v1/workflow-hooks/{id}`),
 both SDKs, and a canvas editor in the console (React Flow, `@xyflow/react`,
 MIT) with the runs and each step's outcome. No MCP tools: workflows are
 workspace settings, made by admins, and agents have their own watches.

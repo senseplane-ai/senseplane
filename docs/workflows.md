@@ -23,14 +23,22 @@ device only happens when a person asks (ADR 0067).
 | `condition` | Checks rules on the event (`event.labels`, `event.confidence`, `event.reading`…), the webhook's input (`input.door`), the local time (`time.hour`, `time.weekday`) or an ask's answer; goes on along its `yes` or `no` edge |
 | `ask` | Asks the vision model a yes/no question about the event's snapshot (or the camera's live frame); one AI check; `yes` or `no` edge |
 | `notify` | Sends text to a linked chat (Telegram) or one of your webhooks |
-| `speak` | Says text through a camera's speaker, with talk-back's limits |
+| `speak` | Says text through a camera's speaker, with talk-back's limits; a webhook's `{{input.…}}` only with `allow_input` |
 | `clip` | Saves a clip of the event's moment, once it is recorded |
 | `story` | Makes a story of the moment on one or more cameras |
 | `wait` | Pauses the run, 1 second to 24 hours |
 
 Text can carry `{{event.summary}}`, `{{event.source_name}}`,
 `{{input.name}}` or `{{steps.<ask id>.answer}}`. Nothing else in it is
-evaluated.
+evaluated. A speak step won't say what a webhook sent (`{{input.…}}`)
+unless you set `allow_input: true` on it ("Say what the webhook sent aloud"
+in the console): otherwise anyone holding the hook secret could make a
+camera say anything.
+
+While a workflow speaks through a camera, and for 5 seconds after, that
+camera's events don't start that workflow, so it doesn't answer its own
+voice. The console warns when a speak step's camera can start the workflow
+with sound events.
 
 The graph has no loops: each step runs at most once per run. A step runs
 when one of the edges into it was taken, and is skipped otherwise.
@@ -58,7 +66,13 @@ output and error (`GET /v1/workflows/{id}/runs`, `GET /v1/workflow-runs/{id}`).
 A failing step fails the run and says why. Steps that are safe to repeat
 (asks, webhooks, chats, clips, stories, waits) are tried up to three times;
 speech is never repeated. A workflow starts at most 10 runs a minute and 120
-an hour; the rest are dropped and counted on the workflow.
+an hour (600 an hour per workspace); the rest are dropped and counted on the
+workflow. Cancel a run from the console or with
+`POST /v1/workflow-runs/{id}/cancel`. Turning a workflow off or deleting it
+stops its runs under way, and changes to its sources or speak steps apply to
+them from their next step. Runs are kept 30 days, or as long as the shortest
+retention of their cameras and sensors if that is less, and forget their
+outputs when the event or camera they came from is deleted.
 
 ## n8n, Zapier and Home Assistant
 
@@ -84,8 +98,9 @@ In n8n, a Crypto node (HMAC, SHA256, hex) over `{{$now.toSeconds()}}.` and
 the body, then an HTTP Request node. From code, the SDKs sign for you:
 `sp.workflows.trigger(id, secret, input)` (TypeScript) and
 `sp.workflows.trigger(id, secret, input)` (Python). A request more than 5
-minutes old, signed with the wrong secret, or sent twice is refused (401) and
-starts nothing. Tools that can't compute an HMAC go through one that can.
+minutes old, signed with the wrong secret, sent twice, or sent to an id that
+doesn't exist gets the same 401 and starts nothing; failures are counted on
+the workflow (`hook_failures`). Tools that can't compute an HMAC go through one that can.
 
 **Receiving from a workflow.** A notify step to one of your webhooks posts
 `{"type": "workflow.notify", "workflow": {...}, "run_id", "step_id", "text",

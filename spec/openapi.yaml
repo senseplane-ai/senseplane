@@ -1968,9 +1968,9 @@ paths:
       operationId: runWorkflow
       summary: Start a run by hand (admins and up)
       description: >-
-        For a schedule or webhook trigger (a workflow started by events needs an event),
-        also while it is turned off, to try it. `input` is what a webhook would have sent.
-        Within the run rate (429 `rate_limited`).
+        For a schedule or webhook trigger (a workflow started by events needs an event), to
+        try it; a workflow that is turned off answers 409. `input` is what a webhook would
+        have sent. Within the run rate (429 `rate_limited`).
       tags: [workflows]
       parameters:
         - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
@@ -2043,6 +2043,25 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/WorkflowRun'}
         default: {$ref: '#/components/responses/Error'}
+  /workflow-runs/{id}/cancel:
+    post:
+      operationId: cancelWorkflowRun
+      summary: Stop a run (admins and up)
+      description: >-
+        The run is cancelled at once, its steps not yet done are skipped, and a process in the
+        middle of a step stops at its next write (a message already handed to a speaker still
+        plays). A run that has finished answers 409. Runs also stop, cancelled with the reason,
+        when their workflow is turned off or deleted.
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowRun'}
+        default: {$ref: '#/components/responses/Error'}
   /workflow-hooks/{id}:
     post:
       operationId: triggerWorkflowHook
@@ -2050,10 +2069,12 @@ paths:
       description: >-
         No API key: the request must carry `Senseplane-Signature: t=<unix seconds>,v1=<hex
         HMAC-SHA256 of "<t>.<body>">` made with the workflow's hook secret, exactly as
-        Senseplane signs its own webhooks (the SDKs' helpers sign and verify both ways). A
-        time more than 5 minutes off, a mismatch or a signature already used answer 401 and
-        start nothing. The body (at most 64 KiB) is a JSON object, the run's `input`.
-        A turned-off workflow answers 409; over the run rate, 429.
+        Senseplane signs its own webhooks (the SDKs' helpers sign and verify both ways). An
+        unknown id, a missing signature, a time more than 5 minutes off, a mismatch or a
+        signature already used all get the same 401 and start nothing; on a known workflow the
+        failure is counted (`hook_failures`) and audited at most once a minute, without the
+        body. The body (at most 64 KiB) is a JSON object, the run's `input`; a speak step says
+        it aloud only with `allow_input`. A turned-off workflow answers 409; over the run rate, 429.
       tags: [workflows]
       security: []
       parameters:
@@ -3653,18 +3674,18 @@ components:
         edges: {$ref: './schemas/workflow.json#/$defs/workflowEdges'}
     WorkflowRunStatus:
       type: string
-      enum: [queued, running, waiting, succeeded, failed]
-      description: '`waiting`: a wait step, a clip waiting for its recording, or a step to be tried again'
+      enum: [queued, running, waiting, succeeded, failed, cancelled]
+      description: '`waiting`: a wait step, a clip waiting for its recording, or a step to be tried again; `cancelled`: stopped by a person, or because its workflow was turned off or deleted'
     WorkflowStepStatus:
       type: string
       enum: [running, waiting, succeeded, failed, skipped]
       description: '`skipped`: no edge into it was taken (or the run ended before it)'
     WorkflowRun:
       type: object
-      required: [id, workflow_id, workflow_name, status, trigger, created_at]
+      required: [id, workflow_name, status, trigger, created_at]
       properties:
         id: {type: string, description: 'wfr_...'}
-        workflow_id: {type: string}
+        workflow_id: {type: ['string', 'null'], description: Null once the workflow is deleted}
         workflow_name: {type: string}
         status: {$ref: '#/components/schemas/WorkflowRunStatus'}
         trigger: {$ref: '#/components/schemas/WorkflowRunTrigger'}

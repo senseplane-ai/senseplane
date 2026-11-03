@@ -1237,7 +1237,7 @@ export interface paths {
         put?: never;
         /**
          * Start a run by hand (admins and up)
-         * @description For a schedule or webhook trigger (a workflow started by events needs an event), also while it is turned off, to try it. `input` is what a webhook would have sent. Within the run rate (429 `rate_limited`).
+         * @description For a schedule or webhook trigger (a workflow started by events needs an event), to try it; a workflow that is turned off answers 409. `input` is what a webhook would have sent. Within the run rate (429 `rate_limited`).
          */
         post: operations["runWorkflow"];
         delete?: never;
@@ -1303,6 +1303,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workflow-runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a run (admins and up)
+         * @description The run is cancelled at once, its steps not yet done are skipped, and a process in the middle of a step stops at its next write (a message already handed to a speaker still plays). A run that has finished answers 409. Runs also stop, cancelled with the reason, when their workflow is turned off or deleted.
+         */
+        post: operations["cancelWorkflowRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workflow-hooks/{id}": {
         parameters: {
             query?: never;
@@ -1314,7 +1334,7 @@ export interface paths {
         put?: never;
         /**
          * Start a workflow with a webhook trigger (n8n, Zapier, Home Assistant)
-         * @description No API key: the request must carry `Senseplane-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">` made with the workflow's hook secret, exactly as Senseplane signs its own webhooks (the SDKs' helpers sign and verify both ways). A time more than 5 minutes off, a mismatch or a signature already used answer 401 and start nothing. The body (at most 64 KiB) is a JSON object, the run's `input`. A turned-off workflow answers 409; over the run rate, 429.
+         * @description No API key: the request must carry `Senseplane-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">` made with the workflow's hook secret, exactly as Senseplane signs its own webhooks (the SDKs' helpers sign and verify both ways). An unknown id, a missing signature, a time more than 5 minutes off, a mismatch or a signature already used all get the same 401 and start nothing; on a known workflow the failure is counted (`hook_failures`) and audited at most once a minute, without the body. The body (at most 64 KiB) is a JSON object, the run's `input`; a speak step says it aloud only with `allow_input`. A turned-off workflow answers 409; over the run rate, 429.
          */
         post: operations["triggerWorkflowHook"];
         delete?: never;
@@ -2436,10 +2456,10 @@ export interface components {
             edges?: components["schemas"]["workflowEdges"];
         };
         /**
-         * @description `waiting`: a wait step, a clip waiting for its recording, or a step to be tried again
+         * @description `waiting`: a wait step, a clip waiting for its recording, or a step to be tried again; `cancelled`: stopped by a person, or because its workflow was turned off or deleted
          * @enum {string}
          */
-        WorkflowRunStatus: "queued" | "running" | "waiting" | "succeeded" | "failed";
+        WorkflowRunStatus: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
         /**
          * @description `skipped`: no edge into it was taken (or the run ended before it)
          * @enum {string}
@@ -2448,7 +2468,8 @@ export interface components {
         WorkflowRun: {
             /** @description wfr_... */
             id: string;
-            workflow_id: string;
+            /** @description Null once the workflow is deleted */
+            workflow_id?: string | null;
             workflow_name: string;
             status: components["schemas"]["WorkflowRunStatus"];
             trigger: components["schemas"]["WorkflowRunTrigger"];
@@ -3844,8 +3865,10 @@ export interface components {
             /** @constant */
             kind: "speak";
             source: components["schemas"]["workflowSourceId"];
-            /** @description What to say; {{…}} filled in as for notify. */
+            /** @description What to say; {{…}} filled in as for notify, except a webhook's {{input.…}}, which needs allow_input. */
             text: string;
+            /** @description Say what a webhook sent ({{input.…}}) aloud. Off by default: text from outside is never spoken unless this is set. */
+            allow_input?: boolean;
         };
         /**
          * WorkflowClipStep
@@ -3937,6 +3960,10 @@ export interface components {
             hook_secret_set?: boolean;
             /** @description Triggers dropped because the workflow or the account was over its run rate. */
             runs_dropped: number;
+            /** @description webhook trigger: requests whose signature didn't verify. */
+            hook_failures?: number;
+            /** @description Things that may not work as meant, such as a camera that may hear its own speech and start the workflow again. */
+            warnings?: string[];
             /** Format: date-time */
             last_run_at?: string | null;
             /**
@@ -4104,8 +4131,10 @@ export interface components {
                     /** @constant */
                     kind: "speak";
                     source: components["schemas"]["workflowSourceId"];
-                    /** @description What to say; {{…}} filled in as for notify. */
+                    /** @description What to say; {{…}} filled in as for notify, except a webhook's {{input.…}}, which needs allow_input. */
                     text: string;
+                    /** @description Say what a webhook sent ({{input.…}}) aloud. Off by default: text from outside is never spoken unless this is set. */
+                    allow_input?: boolean;
                 };
                 /**
                  * WorkflowClipStep
@@ -7344,6 +7373,30 @@ export interface operations {
         };
     };
     getWorkflowRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelWorkflowRun: {
         parameters: {
             query?: never;
             header?: never;

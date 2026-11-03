@@ -1130,11 +1130,13 @@ class WorkflowRule(BaseModel):
 
 
 class WorkflowRunStatus(
-    RootModel[Literal['queued', 'running', 'waiting', 'succeeded', 'failed']]
+    RootModel[
+        Literal['queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled']
+    ]
 ):
-    root: Literal['queued', 'running', 'waiting', 'succeeded', 'failed']
+    root: Literal['queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled']
     """
-    `waiting`: a wait step, a clip waiting for its recording, or a step to be tried again
+    `waiting`: a wait step, a clip waiting for its recording, or a step to be tried again; `cancelled`: stopped by a person, or because its workflow was turned off or deleted
     """
 
 
@@ -4209,7 +4211,11 @@ class SpeakStep(BaseModel):
     source: WorkflowSourceId
     text: Annotated[str, Field(max_length=500, min_length=1)]
     """
-    What to say; {{…}} filled in as for notify.
+    What to say; {{…}} filled in as for notify, except a webhook's {{input.…}}, which needs allow_input.
+    """
+    allow_input: bool | None = None
+    """
+    Say what a webhook sent ({{input.…}}) aloud. Off by default: text from outside is never spoken unless this is set.
     """
 
 
@@ -4948,6 +4954,14 @@ class Workflow(BaseModel):
     """
     Triggers dropped because the workflow or the account was over its run rate.
     """
+    hook_failures: Annotated[int | None, Field(ge=0)] = None
+    """
+    webhook trigger: requests whose signature didn't verify.
+    """
+    warnings: list[str] | None = None
+    """
+    Things that may not work as meant, such as a camera that may hear its own speech and start the workflow again.
+    """
     last_run_at: AwareDatetime | None = None
     next_run_at: AwareDatetime | None = None
     """
@@ -4970,7 +4984,10 @@ class WorkflowRun(BaseModel):
     """
     wfr_...
     """
-    workflow_id: str
+    workflow_id: str | None = None
+    """
+    Null once the workflow is deleted
+    """
     workflow_name: str
     status: WorkflowRunStatus
     trigger: WorkflowRunTrigger

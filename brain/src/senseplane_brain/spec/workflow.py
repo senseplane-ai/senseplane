@@ -230,11 +230,17 @@ class SpeakStep(BaseModel):
     text: Annotated[
         str,
         Field(
-            description='What to say; {{…}} filled in as for notify.',
+            description="What to say; {{…}} filled in as for notify, except a webhook's {{input.…}}, which needs allow_input.",
             max_length=500,
             min_length=1,
         ),
     ]
+    allow_input: Annotated[
+        bool | None,
+        Field(
+            description='Say what a webhook sent ({{input.…}}) aloud. Off by default: text from outside is never spoken unless this is set.'
+        ),
+    ] = None
 
 
 class ClipStep(BaseModel):
@@ -419,6 +425,18 @@ class Workflow(BaseModel):
             ge=0,
         ),
     ]
+    hook_failures: Annotated[
+        int | None,
+        Field(
+            description="webhook trigger: requests whose signature didn't verify.", ge=0
+        ),
+    ] = None
+    warnings: Annotated[
+        list[str] | None,
+        Field(
+            description='Things that may not work as meant, such as a camera that may hear its own speech and start the workflow again.'
+        ),
+    ] = None
     last_run_at: AwareDatetime | None = None
     next_run_at: Annotated[
         AwareDatetime | None,

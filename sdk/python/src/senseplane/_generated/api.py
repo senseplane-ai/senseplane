@@ -99,6 +99,7 @@ OPERATIONS: dict[str, Operation] = {
     "rotateWorkflowHookSecret": Operation("POST", "/workflows/{id}/hook-secret", False),
     "listWorkflowRuns": Operation("GET", "/workflows/{id}/runs", False),
     "getWorkflowRun": Operation("GET", "/workflow-runs/{id}", False),
+    "cancelWorkflowRun": Operation("POST", "/workflow-runs/{id}/cancel", False),
     "triggerWorkflowHook": Operation("POST", "/workflow-hooks/{id}", False),
     "createWatch": Operation("POST", "/watches", True),
     "listWatches": Operation("GET", "/watches", False),

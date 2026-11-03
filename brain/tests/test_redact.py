@@ -4,6 +4,7 @@
 and untouched when nobody does; privacy masks stay black."""
 import asyncio
 import base64
+import threading
 import time
 
 import cv2
@@ -31,8 +32,17 @@ class _Faces:
 
 
 class _Plates:
-    def detect(self, _rgb, _vehicles=None):
+    """Records which vehicles it was given: None means "no tracks known", so the whole frame is looked at."""
+
+    def __init__(self):
+        self.vehicles: list = []
+
+    def detect(self, _rgb, vehicles=None):
+        self.vehicles.append(vehicles)
         return [(PLATE, 0.8)]
+
+
+MASK = [[[0.0, 0.0], [40 / 640, 0.0], [40 / 640, 1.0], [0.0, 1.0]]]  # the left 40 px, as the API draws it
 
 
 def _scene() -> np.ndarray:
@@ -113,8 +123,34 @@ def test_masks_stay_black():
         def detect(self, _rgb):
             return [((20.0, 100.0, 80.0, 160.0), 0.9)]  # across the mask's edge
 
-    out = Redactor(EdgeFace(), _Plates()).apply(_scene(), Blur(faces=True))
+    out = Redactor(EdgeFace(), _Plates()).apply(_scene(), Blur(faces=True), masks=MASK)
     assert not out[:, :40].any()
+    assert out[100:160, 41:80].any()  # outside the mask, blurred
+
+
+def test_a_dark_face_is_blurred_not_restored():
+    # At night (IR, a dark room) a face can have pure black pixels; only the privacy masks are put back black.
+    rgb = _scene()
+    x1, y1, x2, y2 = (int(v) for v in FACE)
+    rgb[y1:y2, x1:x2] = 0
+    rgb[y1 + 10:y1 + 20, x1 + 5:x1 + 15] = 200  # an eye catching the light
+    rgb[y1 + 10:y1 + 20, x2 - 15:x2 - 5] = 200
+    out = Redactor(_Faces(), _Plates()).apply(rgb, Blur(faces=True), masks=MASK)
+    face, was_black = _region(out, FACE), (_region(rgb, FACE) == 0).all(axis=2)
+    # The old rule (every pure-black pixel put back) left the black silhouette with the eyes blurred inside.
+    assert (face[was_black] > 0).any(axis=1).mean() > 0.3
+    assert _region(out, (x1 + 5, y1 + 10, x1 + 15, y1 + 20)).max() < 200
+    assert not out[:, :40].any()
+
+
+def test_lpd_priors_match_small_and_thin_crops():
+    from senseplane_brain.redact import PlateDetector
+
+    pd = PlateDetector(score_threshold=0.0)  # every row kept: a prior missing for any row would fail
+    rng = np.random.default_rng(3)
+    for h, w in [(32, 480), (60, 480), (480, 32), (17, 33), (360, 640)]:
+        for (x1, y1, x2, y2), _ in pd._run(rng.integers(0, 255, size=(h, w, 3), dtype=np.uint8)):
+            assert x1 < x2 and y1 < y2
 
 
 def test_pixelate_handles_tiny_and_edge_boxes():
@@ -232,6 +268,124 @@ def test_a_failing_detector_sends_nothing_unblurred():
     with pytest.raises(RuntimeError):
         w.do_ask({"account_id": "acc", "source_id": "src", "question": "Who?"})
     assert w.model.frames == []
+
+
+def _plates_seen(w) -> list:
+    return w.redactor._plates.vehicles
+
+
+def test_stored_snapshots_and_other_moments_get_the_whole_frame_plate_pass():
+    w = _worker({"plates": True})
+    jpeg = base64.b64encode(encode_jpeg(_scene())).decode()
+    w.do_redact({"account_id": "acc", "source_id": "src", "jpeg_b64": jpeg})
+    w.do_check({"account_id": "acc", "source_id": "src", "prompt": "Is there a car?", "jpeg_b64": jpeg})
+    w.chat_view_event({"source_id": "src", "jpeg_b64": jpeg}, "What is it?", {}, "acc")
+    assert _plates_seen(w) == [None, None, None]
+
+
+def test_a_watch_frame_uses_its_tracks_and_the_before_frame_the_whole_frame():
+    w = _worker({"plates": True})
+    car = (80.0, 200.0, 200.0, 300.0)
+    f = Fire(watch_id="wat_1", account_id="acc", source_id="src", t=time.time(), description="a car came and went", verify={"prompt": "Did a car leave?"})
+    f.frame, f.before, f.boxes = _scene(), _scene(), ([], [car])
+    asyncio.run(w.verify_and_publish(None, f))
+    assert _plates_seen(w) == [[car], None]
+    # A fire with no tracks (a sound, a schedule): the whole frame.
+    g = Fire(watch_id="wat_1", account_id="acc", source_id="src", t=time.time(), description="a bark", verify={"prompt": "Is a dog there?"})
+    g.frame = _scene()
+    asyncio.run(w.verify_and_publish(None, g))
+    assert _plates_seen(w)[-1] is None
+
+
+def test_the_latest_frame_uses_its_tracks_and_none_tracked_means_the_whole_frame():
+    w = _worker({"plates": True})
+    w.pipelines["acc.src"].latest_jpeg()
+    assert _plates_seen(w) == [[]]  # no vehicle tracked: an empty list, and PlateDetector scans the whole frame
+
+
+def test_a_camera_with_no_config_is_blurred():
+    w = _worker(None)
+    w.configs = {}  # its config hasn't reached this brain (or was lost)
+    w.do_ask({"account_id": "acc", "source_id": "src", "question": "Who?"})
+    assert _changed(_scene(), w.model.frames[0], FACE) and _changed(_scene(), w.model.frames[0], PLATE)
+
+
+def test_a_watch_whose_creator_only_sees_blurred_media_is_checked_blurred():
+    w = _worker({"faces": False, "plates": False})
+    w.engine.set_watch("acc.wat_1", {"id": "wat_1", "sources": ["src"], "status": "active", "blur": {"faces": True, "plates": True},
+                                      "compiled": {"trigger": {"type": "motion"}, "verify": {"prompt": "Is someone there?"}}})
+    f = Fire(watch_id="wat_1", account_id="acc", source_id="src", t=time.time(), description="someone", verify={"prompt": "Is someone there?"})
+    f.frame = _scene()
+    asyncio.run(w.verify_and_publish(None, f))
+    assert _changed(_scene(), w.model.frames[0], FACE) and _changed(_scene(), w.model.frames[0], PLATE)
+    # Without the watch's flag, the same camera is checked as it is.
+    w.engine.set_watch("acc.wat_1", None)
+    f2 = Fire(watch_id="wat_1", account_id="acc", source_id="src", t=time.time(), description="someone", verify={"prompt": "Is someone there?"})
+    f2.frame = _scene()
+    asyncio.run(w.verify_and_publish(None, f2))
+    assert w.model.frames[1] is f2.frame
+
+
+def test_the_latest_snapshot_is_made_off_the_event_loop():
+    w = _worker({"faces": True})
+    p = w.pipelines["acc.src"]
+    seen = []
+    real = p.latest_jpeg
+
+    def latest():
+        try:
+            asyncio.get_running_loop()
+            seen.append("loop")
+        except RuntimeError:
+            seen.append("thread")
+        return real()
+
+    class R:
+        async def set(self, *_a, **_k):
+            return True
+
+    p.latest_jpeg = latest
+    w.r, w.pending, w.backlog, w.last_snapshot, w.last_seen, w.last_tick, w.usage = R(), {"acc.src": []}, [], {}, {"acc.src": time.time()}, time.time(), []
+    w.wake, w.watch_spans, w.monitors, w.sink = asyncio.Event(), {}, {}, None
+    w.stats = {"frames_processed": 0, "frames_dropped": 0}
+
+    async def ensure(_k):
+        return None
+
+    async def no_view_check(*_a):
+        return None
+
+    w.ensure_camera, w.view_check = ensure, no_view_check
+    w.analyse = lambda key, jpeg, t: (p.last_frame, [], [])
+    w.pending = {"acc.src": [(encode_jpeg(_scene()), time.time(), None, time.time())]}
+    asyncio.run(_run_process(w))
+    assert seen == ["thread"]
+
+
+async def _run_process(w):
+    await w.process(asyncio.get_running_loop())
+
+
+def test_models_load_in_a_thread_when_a_camera_asks_for_blurring():
+    loaded = []
+
+    class Lazy(Redactor):
+        def preload(self, blur):
+            loaded.append((blur, threading.current_thread().name))
+
+    w = Worker.__new__(Worker)
+    w.configs, w.pipelines, w.redactor = {}, {}, Lazy()
+    w.set_source("acc.src", {"zones": [], "blur": {"faces": True}})
+    for t in threading.enumerate():
+        if t.name == "blur-preload":
+            t.join(5)
+    assert loaded == [(Blur(faces=True), "blur-preload")]
+
+
+def test_the_heartbeat_advertises_blurring():
+    w = Worker.__new__(Worker)
+    w.pipelines, w.last_seen, w._cpu, w.cpu_percent, w.brain_id, w.started_at = {}, {}, (time.process_time(), time.monotonic()), 0.0, "b1", "x"
+    assert "blur" in w.load()["features"]
 
 
 # --- the real models ----------------------------------------------------------------------------------

@@ -49,7 +49,7 @@
     }
   },
   "balancer": {
-    "brains": "string sp:brain:{brain_id} = {id, cameras, cpu, threads, started_at, version}, EX 6, refreshed every 2 s; cpu is the brain process's CPU percent (100 = one core); set sp:brains lists brain ids (an id whose key is gone is dead).",
+    "brains": "string sp:brain:{brain_id} = {id, cameras, cpu, threads, started_at, version, features}, EX 6, refreshed every 2 s; cpu is the brain process's CPU percent (100 = one core); set sp:brains lists brain ids (an id whose key is gone is dead). features lists what the brain supports beyond the base protocol: \"blur\" (ADR 0068); the API sends a request that needs blurring only when every live brain lists it.",
     "assign": "hash sp:assign, field {account_id}.{source_id} = brain_id, set by the API with a compare-and-set script when the camera's first frames arrive (and again when its brain is dead). Least busy live brain wins: fewest cameras, then lowest cpu; a new brain has none, so it takes new cameras first. HDEL when the camera goes offline. A gentle rebalance moves one camera every 30 s from the busiest brain while it has 2 or more cameras more than the least busy one (lock sp:balancer:lock, NX EX 25).",
     "takeover": "A brain that gets frames for a camera it has no pipeline for re-reads that camera's zones and watches before the first frame."
   },

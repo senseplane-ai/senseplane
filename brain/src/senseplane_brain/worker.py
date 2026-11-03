@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import socket
+import threading
 import time
 import uuid
 from collections import deque
@@ -109,6 +110,9 @@ ACTIVE_CAMERA_S = 30.0  # a camera counts towards this brain's load while frames
 DROP_PIPELINE_S = 60.0  # a camera with no frames for this long is forgotten (moved, or offline)
 WATCH_GAP_S = 60.0  # a watch activity ends this long after its condition last held (ADR 0057)
 CHAT_EVENTS_TTL_S = 300
+# What this brain can do beyond the base protocol, in its heartbeat: the API sends a request that needs
+# blurring only when every live brain says "blur" (a brain from before blurring would answer it raw).
+FEATURES = ["blur"]
 CHAT_TOOL_TIMEOUT_S = 30
 
 
@@ -204,15 +208,27 @@ class Worker:
     def redact(self, key: str, rgb: np.ndarray, extra: Blur = Blur(), boxes: tuple | None = None) -> np.ndarray:
         """The frame as it may leave the brain: faces and plates blurred when the source's settings (`blur`
         in its config, source over account) or the request (`extra`: an agent that only sees blurred media)
-        ask for it. Raises if blurring fails, so an unblurred frame never goes out instead."""
-        blur = Blur.of(self.configs.get(key)) | extra
+        ask for it. Raises if blurring fails, so an unblurred frame never goes out instead. `boxes` is
+        (people, vehicles) in this frame; without it, the frame's own tracks if it is the camera's latest,
+        else none known: no head fallback, and plates are looked for in the whole frame."""
+        blur = self.camera_blur(key) | extra
         if not blur:
             return rgb
         p = self.pipelines.get(key)
         if boxes is None and p is not None and rgb is p.last_frame:
             boxes = p.track_boxes()
-        people, vehicles = boxes or ([], [])
-        return self.redactor.apply(rgb, blur, people, vehicles)
+        people, vehicles = boxes if boxes is not None else ([], None)
+        return self.redactor.apply(rgb, blur, people, vehicles, (self.configs.get(key) or {}).get("privacy_masks"))
+
+    def camera_blur(self, key: str) -> Blur:
+        """A camera's blurring (its `blur` config). A camera the brain has no config for is unknown, so
+        everything is blurred until its config arrives: failing closed, never open."""
+        cfg = self.configs.get(key)
+        return Blur(faces=True, plates=True) if cfg is None else Blur.of(cfg)
+
+    def watch_blur(self, account_id: str, watch_id: str) -> Blur:
+        """A watch's own `blur` (its creator or a destination only sees blurred media, set by the API)."""
+        return Blur.of(self.engine.watches.get(f"{account_id}.{watch_id}"))
 
     def do_redact(self, req):
         """A stored snapshot blurred for an agent that only sees blurred media (the API serving it, ADR 0068)."""
@@ -322,6 +338,9 @@ class Worker:
             p = self.pipeline(key)
             out = p.on_audio(np.frombuffer(f.get("data") or b"", dtype=np.float32), t)
             fires = self.engine.on_audio(acc, src, p.last_sound_scores, t, p.last_frame)
+            for fire in fires:
+                if fire.frame is not None and fire.frame is p.last_frame:
+                    fire.boxes = p.track_boxes()
             await self.publish(self.sink, out + self.watch_activity(key, t))
             for fire in fires:
                 asyncio.create_task(self.verify_and_publish(self.sink, fire))
@@ -358,6 +377,20 @@ class Worker:
             self.configs[key] = cfg
         if key in self.pipelines:
             self.pipelines[key].zones = (cfg or {}).get("zones", [])
+        if cfg is not None and Blur.of(cfg):
+            self.preload_blur(Blur.of(cfg))
+
+    def preload_blur(self, blur: Blur):
+        """Loads the blurring models in a thread as soon as a camera asks for them, not on a frame's way out."""
+        r = self.redactor
+        if (blur.faces and r._faces is None) or (blur.plates and r._plates is None):
+            def load():
+                try:
+                    r.preload(blur)
+                except Exception as err:  # noqa: BLE001 - loaded again (and failing closed) on first use
+                    log.warning("blurring models did not load", extra={"fields": {"error": repr(err)}})
+
+            threading.Thread(target=load, name="blur-preload", daemon=True).start()
 
     async def reload(self):
         sources = await self.r.hgetall(SOURCES)
@@ -407,7 +440,7 @@ class Worker:
         now = time.time()
         cameras = sum(1 for k in self.pipelines if now - self.last_seen.get(k, 0) < ACTIVE_CAMERA_S)
         return {"id": self.brain_id, "cameras": cameras, "cpu": self.cpu_percent, "threads": int(os.environ.get("DETECTOR_THREADS", "2")),
-                "started_at": self.started_at, "version": __version__}
+                "started_at": self.started_at, "version": __version__, "features": FEATURES}
 
     async def heartbeat(self, stop: asyncio.Event):
         while not stop.is_set():
@@ -650,7 +683,8 @@ class Worker:
                     asyncio.create_task(self.verify_and_publish(self.sink, fire))  # tasks copy the current context
             if now - self.last_snapshot.get(key, 0) >= 10:
                 self.last_snapshot[key] = now
-                snap = p.latest_jpeg()
+                # Blurring runs detectors: in a thread, never on the event loop.
+                snap = await loop.run_in_executor(None, telemetry.in_context(p.latest_jpeg))
                 if snap:
                     try:
                         await self.r.set(snapshot_key(key), snap, ex=86400)
@@ -707,13 +741,16 @@ class Worker:
         summary, confidence, labels = f"Watch triggered: {fire.description}.", None, []
         verified = None  # no check on this watch
         key = f"{fire.account_id}.{fire.source_id}"
-        if fire.frame is not None and Blur.of(self.configs.get(key)):
-            # What the model checks and the event's snapshot are the blurred frames (ADR 0068).
+        extra = self.watch_blur(fire.account_id, fire.watch_id)
+        if fire.frame is not None and (self.camera_blur(key) | extra):
+            # What the model checks and the event's snapshot are the blurred frames (ADR 0068): the camera's
+            # setting, or the watch's own when its creator or a destination only sees blurred media.
             loop = asyncio.get_running_loop()
             try:
-                fire.frame = await loop.run_in_executor(None, self.redact, key, fire.frame, Blur(), fire.boxes or ([], []))
+                # The before frame is from another moment: no tracks of it are known (whole-frame plate pass).
+                fire.frame = await loop.run_in_executor(None, self.redact, key, fire.frame, extra, fire.boxes)
                 if fire.before is not None:
-                    fire.before = await loop.run_in_executor(None, self.redact, key, fire.before, Blur(), ([], []))
+                    fire.before = await loop.run_in_executor(None, self.redact, key, fire.before, extra, ([], None))
             except Exception:  # noqa: BLE001 - neither the model nor the event gets an unblurred frame
                 log.exception("blurring a watch frame failed", extra={"fields": {"watch": fire.watch_id}})
                 fire.frame, fire.before = None, None

@@ -154,15 +154,24 @@ class PlateDetector:
         return self._priors[(w, h)]
 
     def _run(self, rgb: np.ndarray) -> list[tuple[Box, float]]:
-        """Plates in one image, in its pixels."""
+        """Plates in one image, in its pixels. The image is padded (right and bottom, so pixels keep their
+        place) to a multiple of the net's largest stride, so its outputs line up with the priors."""
         h, w = rgb.shape[:2]
-        self.net.setInput(cv2.dnn.blobFromImage(np.ascontiguousarray(rgb[:, :, ::-1])))  # BGR, 0-255
+        ph, pw = -(-h // 64) * 64, -(-w // 64) * 64
+        padded = np.zeros((ph, pw, 3), dtype=np.uint8)
+        padded[:h, :w] = rgb[:, :, ::-1]  # BGR, 0-255
+        self.net.setInput(cv2.dnn.blobFromImage(padded))
         loc, conf, iou = self.net.forward(["loc", "conf", "iou"])
+        priors = self.priors(pw, ph)
+        if len(priors) != len(loc):
+            raise RuntimeError(f"plate model gave {len(loc)} rows for {pw}x{ph}, priors are {len(priors)}")
+        ow, oh = w, h
+        w, h = pw, ph  # boxes come out in the padded image's pixels, the same as the original's
         scores = np.sqrt(np.clip(conf[:, 1], 0, 1) * np.clip(iou[:, 0], 0, 1))
         keep = np.where(scores >= self.score_threshold)[0]
         if not len(keep):
             return []
-        p, lc = self.priors(w, h)[keep], loc[keep]
+        p, lc = priors[keep], loc[keep]
         # The plate's four corners (it may be at an angle); its upright bounding box is what gets blurred.
         corners = np.stack([p[:, 0:2] + lc[:, o:o + 2] * self.VARIANCE * p[:, 2:4] for o in (4, 6, 10, 12)], 1) * (w, h)
         x1, y1 = corners[:, :, 0].min(1), corners[:, :, 1].min(1)
@@ -171,13 +180,14 @@ class PlateDetector:
         kept = np.array(cv2.dnn.NMSBoxes(boxes, scores[keep].tolist(), self.score_threshold, self.nms_threshold)).flatten()
         # A "plate" over half the picture is the model misreading a close-up, not a plate.
         return [((boxes[k][0], boxes[k][1], boxes[k][0] + boxes[k][2], boxes[k][1] + boxes[k][3]), float(scores[keep][k])) for k in kept
-                if boxes[k][2] < w * 0.5 and boxes[k][3] < h * 0.5]
+                if boxes[k][2] < ow * 0.5 and boxes[k][3] < oh * 0.5]
 
     def detect(self, rgb: np.ndarray, vehicles: list[Box] | None = None) -> list[tuple[Box, float]]:
-        """Plates in the frame. With `vehicles` (the tracker's), only on those, each enlarged; plates are
-        on vehicles, and a frame with none costs nothing. Without (a stored snapshot), the whole frame."""
+        """Plates in the frame. With vehicles the tracker follows, on each of them, enlarged. Otherwise (none
+        tracked, a stored snapshot, a frame from another moment) the whole frame: a parked car the tracker
+        has dropped, or a frame no tracks belong to, still gets looked at (about 40 ms at 640x360)."""
         h, w = rgb.shape[:2]
-        if vehicles is None:
+        if not vehicles:
             found = self._run(rgb)
         else:
             found = []
@@ -236,39 +246,58 @@ class Redactor:
     def __init__(self, faces: FaceDetector | None = None, plates: PlateDetector | None = None):
         self._faces = faces
         self._plates = plates
-        self.lock = threading.Lock()  # ONNX Runtime sessions are shared by the worker's threads
+        # One lock per model: a session (ONNX Runtime, OpenCV DNN) runs one frame at a time. Loading has
+        # its own lock, so a thread waiting to detect never waits behind a download.
+        self._face_lock, self._plate_lock, self._load_lock = threading.Lock(), threading.Lock(), threading.Lock()
 
     @property
     def faces(self) -> FaceDetector:
         if self._faces is None:
-            self._faces = FaceDetector()
+            with self._load_lock:
+                if self._faces is None:
+                    self._faces = FaceDetector()
         return self._faces
 
     @property
     def plates(self) -> PlateDetector:
         if self._plates is None:
-            self._plates = PlateDetector()
+            with self._load_lock:
+                if self._plates is None:
+                    self._plates = PlateDetector()
         return self._plates
+
+    def preload(self, blur: Blur) -> None:
+        """Loads (and on first use downloads) the models a setting needs; the worker calls it in a thread
+        as soon as a camera's config asks for blurring, so no frame waits for it."""
+        if blur.faces:
+            _ = self.faces
+        if blur.plates:
+            _ = self.plates
 
     def boxes(self, rgb: np.ndarray, blur: Blur, people: list[Box] | None = None, vehicles: list[Box] | None = None) -> list[Box]:
         """The regions to blur: padded faces, the heads of people without a face found, padded plates."""
         h, w = rgb.shape[:2]
         out: list[Box] = []
         if blur.faces:
-            with self.lock:
-                faces = [b for b, _ in self.faces.detect(rgb)]
+            faces_model = self.faces
+            with self._face_lock:
+                faces = [b for b, _ in faces_model.detect(rgb)]
             out += [pad(b, FACE_PAD, w, h) for b in faces]
             for p in people or []:
                 if not any(_inside(f, p) for f in faces):
                     out.append(pad(head_of(p), 0.1, w, h))
         if blur.plates:
-            with self.lock:
-                plates = self.plates.detect(rgb, vehicles)
+            plates_model = self.plates
+            with self._plate_lock:
+                plates = plates_model.detect(rgb, vehicles)
             out += [pad(b, PLATE_PAD, w, h) for b, _ in plates]
         return out
 
-    def apply(self, rgb: np.ndarray, blur: Blur, people: list[Box] | None = None, vehicles: list[Box] | None = None) -> np.ndarray:
-        """A blurred copy of the frame, or the frame itself when there is nothing to blur."""
+    def apply(self, rgb: np.ndarray, blur: Blur, people: list[Box] | None = None, vehicles: list[Box] | None = None,
+              masks: list | None = None) -> np.ndarray:
+        """A blurred copy of the frame, or the frame itself when there is nothing to blur. `masks` are the
+        camera's privacy masks (normalised polygons): they stay black, since pixelating across a mask's
+        edge would grey it. Only they do: dark pixels elsewhere (a face at night) are blurred like any other."""
         if not blur:
             return rgb
         regions = self.boxes(rgb, blur, people, vehicles)
@@ -277,6 +306,16 @@ class Redactor:
         out = rgb.copy()
         for b in regions:
             pixelate(out, b)
-        # Privacy masks (black, from the API) stay black: pixelating across a mask's edge must not grey it.
-        out[(rgb == 0).all(axis=2)] = 0
+        if masks:
+            out[mask_pixels(masks, rgb.shape[1], rgb.shape[0])] = 0
         return out
+
+
+def mask_pixels(masks: list, w: int, h: int) -> np.ndarray:
+    """Privacy masks (polygons, [x, y] in 0-1, as the API rasterises them) as a boolean pixel mask."""
+    m = np.zeros((h, w), dtype=np.uint8)
+    for poly in masks:
+        pts = np.array([[x * w, y * h] for x, y in poly], dtype=np.float64)
+        if len(pts) >= 3:
+            cv2.fillPoly(m, [np.round(pts).astype(np.int32)], 1)
+    return m.astype(bool)

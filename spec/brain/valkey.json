@@ -1222,6 +1222,10 @@
             "minItems": 4,
             "maxItems": 4,
             "description": "x1, y1, x2, y2 as fractions of the frame (0..1)"
+          },
+          "checked": {
+            "type": "boolean",
+            "description": "The person check with the model was done when the follow was made: only the detector looks again"
           }
         }
       },

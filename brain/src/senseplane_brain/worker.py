@@ -561,7 +561,8 @@ class Worker:
         h, w = rgb.shape[:2]
         key = f"{req['account_id']}.{req['source_id']}"
         try:
-            ref, calls = self.follower().reference(rgb, (box[0] * w, box[1] * h, box[2] * w, box[3] * h), {"account": req["account_id"]},
+            # `checked`: the API asked when the follow was made; the job only needs the vector again (no second model call).
+            ref, calls = self.follower().reference(rgb, (box[0] * w, box[1] * h, box[2] * w, box[3] * h), {"account": req["account_id"]}, ask_model=not req.get("checked"),
                                                    redact=lambda c: self.redact(key, c))
         except PersonRefused:
             return {"error": "person"}

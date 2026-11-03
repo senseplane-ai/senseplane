@@ -182,7 +182,7 @@ class Follower:
         self.detector, self.embedder, self.model = detector, embedder, model
 
     # --- the reference ------------------------------------------------------------
-    def reference(self, rgb: np.ndarray, box: Box, meta: dict | None = None, redact=None) -> tuple[Reference, int]:
+    def reference(self, rgb: np.ndarray, box: Box, meta: dict | None = None, redact=None, ask_model: bool = True) -> tuple[Reference, int]:
         """The reference from a box on a frame. Raises PersonRefused for a person. Returns it and the model calls used."""
         h, w = rgb.shape[:2]
         x1, y1, x2, y2 = max(0.0, box[0]), max(0.0, box[1]), min(float(w), box[2]), min(float(h), box[3])
@@ -199,7 +199,7 @@ class Follower:
                 label, best = d.label, iou(box, d.box)
         c = crop(rgb, box)
         calls = 0
-        if self.model is not None:
+        if self.model is not None and ask_model:
             calls += 1
             a = self.model.ask(redact(c) if redact else c, "Is the main thing in this picture a person, or part of a person (a face, a hand, a body)?",
                                {**(meta or {}), "purpose": "follow"})

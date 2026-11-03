@@ -11,6 +11,7 @@
 import { sql } from "kysely";
 import type { DataAccess } from "./data/access.js";
 import type { ObjectStorage } from "./storage.js";
+import { sweepSpeechClips } from "./speak.js";
 
 const BATCH = 1000;
 
@@ -20,6 +21,8 @@ export interface SweepResult {
   objects: number;
   /** Sensor readings past retention. */
   readings?: number;
+  /** Clips of what agents and watches said through cameras, past retention (ADR 0069). */
+  speech?: number;
 }
 
 /** The deployment's storage cap for an account (the quota provider's), used by fill mode when no byte cap is set. */
@@ -53,6 +56,7 @@ export async function sweepOnce(data: DataAccess, storage: ObjectStorage, now = 
   }
   await sweepFill(data, storage, result, storageCap);
   result.readings = await sweepReadings(data, now);
+  result.speech = await sweepSpeechClips(data, storage, now);
   return result;
 }
 

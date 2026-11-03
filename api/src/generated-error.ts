@@ -31,5 +31,9 @@ export interface components {
     | "confirmation_expired"
     | "confirmation_denied"
     | "device_offline"
-    | "device_failed";
+    | "device_failed"
+    | "no_speaker"
+    | "speaker_busy"
+    | "message_too_long"
+    | "camera_offline";
 }

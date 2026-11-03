@@ -31,6 +31,13 @@ export interface ControlClient {
   startEgress(body: Record<string, unknown>): Promise<EgressSnapshot>;
   getEgress(sessionId: string): Promise<EgressSnapshot | undefined>;
   stopEgress(sessionId: string): Promise<void>;
+  /**
+   * Talk-back (ADR 0069): tells one participant (a phone's capture page) to play a clip; false when it isn't in the room.
+   * Optional: a media plane without it can't play agents' messages on phones.
+   */
+  speak?(roomId: string, identity: string, body: { id: string; url: string; durationMs: number }): Promise<boolean>;
+  /** Stops a clip that participant is playing (a person's push-to-talk cut it off). */
+  stopSpeak?(roomId: string, identity: string, id: string): Promise<void>;
 }
 
 export class MediaControlError extends Error {
@@ -79,6 +86,16 @@ export function httpControlClient(baseUrl: string, controlToken: () => Promise<s
     async stopEgress(sessionId) {
       const r = await call("DELETE", `/control/egress/${enc(sessionId)}`);
       if (r.status !== 404) ok(r, "stop egress");
+    },
+    async speak(roomId, identity, body) {
+      const r = await call("POST", `/control/rooms/${enc(roomId)}/participants/${enc(identity)}/speak`, body);
+      if (r.status === 404) return false;
+      ok(r, "speak");
+      return true;
+    },
+    async stopSpeak(roomId, identity, id) {
+      const r = await call("POST", `/control/rooms/${enc(roomId)}/participants/${enc(identity)}/speak/stop`, { id });
+      if (r.status !== 404) ok(r, "stop speaking");
     },
   };
 }

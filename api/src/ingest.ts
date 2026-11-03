@@ -58,9 +58,12 @@ export interface IngestSigner {
     t: CaptureTicket & { name?: string; maxResolution?: "720p" | "1080p"; maxActiveSources?: number; via?: Via },
     ttlSeconds: number,
   ): Promise<{ token: string; expiresAt: Date }>;
-  /** Live view (ADR 0042): subscribe-only; `sessionId` is the jti (single use). */
+  /**
+   * Live view (ADR 0042): subscribe-only; `sessionId` is the jti (single use). With `talk` (push-to-talk, ADR 0069)
+   * it may also send its microphone, heard only by the phone that publishes the camera.
+   */
   signViewer(
-    t: { accountId: string; sourceId: string; sessionId: string; audio: boolean; idleTimeoutSeconds: number; maxLiveViewers?: number | null },
+    t: { accountId: string; sourceId: string; sessionId: string; audio: boolean; idleTimeoutSeconds: number; maxLiveViewers?: number | null; talk?: boolean },
     ttlSeconds: number,
   ): Promise<{ token: string; expiresAt: Date }>;
   /** The camera's feed egress: kind egress over a plain transport. */
@@ -128,8 +131,10 @@ export async function createIngestSigner(
     return createPublicKey({ key: parsed!.pem, format: "pem" }).export({ type: "spki", format: "pem" }).toString();
   })();
   const sign = (claims: Record<string, unknown>) => new SignJWT(claims).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid }).sign(privateKey);
-  const publisherGrants = (audio: boolean, extra: { maxResolution?: string; maxActiveSources?: number }) => ({
-    canPublish: true, canSubscribe: false, canPublishData: false, publishKinds: audio ? ["video", "audio"] : ["video"],
+  // A phone on the capture page also receives audio: a person's push-to-talk (ADR 0069), the only audio sent to it.
+  const publisherGrants = (audio: boolean, extra: { maxResolution?: string; maxActiveSources?: number; via?: Via }) => ({
+    canPublish: true, canPublishData: false, publishKinds: audio ? ["video", "audio"] : ["video"],
+    ...(extra.via === "whip" ? { canSubscribe: false } : { canSubscribe: true, subscribeKinds: ["audio"] }),
     ...(extra.maxResolution ? { maxResolution: extra.maxResolution } : {}), ...(extra.maxActiveSources ? { maxActiveSources: extra.maxActiveSources } : {}),
   });
 
@@ -175,8 +180,10 @@ export async function createIngestSigner(
       const claims = {
         v: 1, iss: issuer, aud: "media", room: roomFor(t.sourceId), identity: `${t.sourceId}:viewer:${t.sessionId}`, kind: "human", transport: "webrtc",
         grants: {
-          canPublish: false, canSubscribe: true, canPublishData: false,
+          canPublish: Boolean(t.talk), canSubscribe: true, canPublishData: false,
           subscribeKinds: t.audio ? ["video", "audio"] : ["video"],
+          // Push-to-talk: the microphone only, and only the camera's phone hears it.
+          ...(t.talk ? { publishKinds: ["audio"], visibleTo: { mode: "allow", identities: [`${t.sourceId}:capture`] } } : {}),
           idleTimeoutSeconds: t.idleTimeoutSeconds,
           ...(t.maxLiveViewers ? { maxLiveViewers: t.maxLiveViewers } : {}),
         },

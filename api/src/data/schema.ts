@@ -76,6 +76,8 @@ export interface SourcesTable {
   status_since: ColumnType<Date | null, never, never>;
   /** A place the source belongs to, for grouping questions across places (ADR 0057). */
   site: ColumnType<string | null, string | null | undefined, string | null>;
+  /** The camera can play sound (ADR 0069): a phone, or an IP camera with two-way audio its box found. */
+  speaker: ColumnType<boolean, boolean | undefined, boolean>;
 }
 
 /** One thing, in one place, from a start to an end (ADR 0057). */
@@ -185,6 +187,35 @@ export interface DeviceCommandsTable {
   expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   decided_by: string | null;
   decided_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: Timestamp;
+  finished_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+}
+
+export type SpeakStatus = "queued" | "sent" | "playing" | "played" | "interrupted" | "refused" | "offline" | "late" | "failed";
+
+/** Something said through a camera's speaker (ADR 0069): an agent's or a watch's message, or a person's push-to-talk. */
+export interface SpeakMessagesTable {
+  id: string;
+  account_id: string;
+  source_id: string;
+  kind: "agent" | "watch" | "person";
+  actor: string;
+  actor_kind: string;
+  actor_name: string | null;
+  via: string;
+  agent_id: string | null;
+  watch_id: string | null;
+  event_id: string | null;
+  live_session_id: string | null;
+  text: string | null;
+  status: SpeakStatus;
+  message: string | null;
+  duration_ms: number | null;
+  clip_key: string | null;
+  clip_bytes: number | null;
+  bridge_command_id: string | null;
+  ends_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   created_at: Timestamp;
   finished_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
@@ -486,7 +517,7 @@ export interface WatchesTable {
   claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
-export type Destination = { type: "webhook" | "agent" | "channel"; id: string };
+export type Destination = { type: "webhook" | "agent" | "channel" | "speak"; id: string; text?: string };
 
 /** A chat in a messaging app that alerts go to and that can ask (ADR 0059). */
 export interface ChannelsTable {
@@ -668,6 +699,7 @@ export interface Database {
   bridge_links: BridgeLinksTable;
   bridge_commands: BridgeCommandsTable;
   device_commands: DeviceCommandsTable;
+  speak_messages: SpeakMessagesTable;
   bridge_cameras_found: BridgeCamerasFoundTable;
   account_keys: AccountKeysTable;
   users: UsersTable;

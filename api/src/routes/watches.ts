@@ -3,7 +3,7 @@
 
 // Watches: compiled by the brain once at creation (rpc.brain.compile), stored
 // here, shared with the brain through KV `watches`. Also look/ask and memory search.
-import { canSense, grantFilter, seesSource } from "../access.js";
+import { SPEAK, canSense, grantFilter, seesSource } from "../access.js";
 import { BLUR_ALL, blurFor, blurredOnly, effectiveBlur, requireBlurringBrains } from "../blur.js";
 import type { Database } from "../data/schema.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -58,7 +58,7 @@ export const toWatch = (w: WatchRow) => ({
 // Watch destinations and schedule (ADR 0043, 0059).
 const destinationSchema = {
   type: "object", additionalProperties: false, required: ["type", "id"],
-  properties: { type: { enum: destinationSchemaJson.properties.type.enum }, id: { type: "string", minLength: 1, maxLength: 64 } },
+  properties: { type: { enum: destinationSchemaJson.properties.type.enum }, id: { type: "string", minLength: 1, maxLength: 64 }, text: { type: "string", minLength: 1, maxLength: 500 } },
 };
 const notifySchema = { type: "array", maxItems: 20, items: destinationSchema };
 const scheduleSchema = {
@@ -82,9 +82,10 @@ function checkSchedule(s: WatchSchedule | null | undefined) {
  * the account's webhooks or other agents).
  */
 export async function checkNotify(data: DataAccess, req: FastifyRequest, notify: Destination[]): Promise<Destination[]> {
-  const unique = [...new Map(notify.map((d) => [`${d.type}:${d.id}`, { type: d.type, id: d.id }])).values()];
+  const unique = [...new Map(notify.map((d) => [`${d.type}:${d.id}`, { type: d.type, id: d.id, ...(d.type === "speak" ? { text: d.text?.trim() ?? "" } : {}) }])).values()];
+  await checkSpeak(data, req, unique.filter((d) => d.type === "speak"));
   if (req.access?.agentId) {
-    if (unique.some((d) => d.type !== "agent" || d.id !== req.access!.agentId)) {
+    if (unique.some((d) => d.type !== "speak" && (d.type !== "agent" || d.id !== req.access!.agentId))) {
       throw new ApiError(403, "forbidden", "an agent key can only send a watch's events to itself");
     }
     return unique;
@@ -96,11 +97,28 @@ export async function checkNotify(data: DataAccess, req: FastifyRequest, notify:
     agent: new Set(agentIds.length ? (await s.db.selectFrom("agents").select("id").where("id", "in", agentIds).where("revoked_at", "is", null).execute()).map((r) => r.id) : []),
     channel: new Set(channelIds.length ? (await s.db.selectFrom("channels").select("id").where("id", "in", channelIds).where("status", "!=", "unlinked").execute()).map((r) => r.id) : []),
   }));
-  const unknown = unique.filter((d) => !known[d.type].has(d.id));
+  const unknown = unique.filter((d) => d.type !== "speak" && !known[d.type as keyof typeof known].has(d.id));
   if (unknown.length) {
     throw new ApiError(400, "validation_failed", `unknown destination(s): ${unknown.map((d) => `${d.type} ${d.id}`).join(", ")}`, { unknown });
   }
   return unique;
+}
+
+/**
+ * A watch that speaks (ADR 0069): each speak action names a camera with a speaker the caller can see and
+ * the text to say. An agent needs a speak grant on that camera, as it would to speak itself.
+ */
+async function checkSpeak(data: DataAccess, req: FastifyRequest, dests: Destination[]) {
+  for (const d of dests) {
+    if (!d.text) throw new ApiError(400, "validation_failed", "a speak action needs the text to say");
+    if (d.text.length > 500) throw new ApiError(400, "validation_failed", "a speak action's text is at most 500 characters");
+    const src = seesSource(req, d.id) ? await data.withAccount(req.accountId!, (s) => s.sources.get(d.id)) : undefined;
+    if (!src) throw new ApiError(400, "validation_failed", `unknown camera for a speak action: ${d.id}`, { unknown: [{ type: "speak", id: d.id }] });
+    if (src.type === "sensor" || !src.speaker) throw new ApiError(409, "no_speaker", `${src.name} has no speaker, so a watch can't speak through it.`);
+    if (req.access?.grants && !canSense(req, d.id, SPEAK)) {
+      throw new ApiError(403, "forbidden_sense", `This agent has no Speak permission for ${src.name}, so its watch can't speak there. A person can give it one on the Agents page.`);
+    }
+  }
 }
 
 /** Stops watches whose time is up (called by the API's periodic sweeper). */

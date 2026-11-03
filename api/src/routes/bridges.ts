@@ -49,6 +49,8 @@ export interface BridgeDeps {
   audit?: AuditLog;
   /** Cuts a camera's live stream off at the media plane (a removed box's cameras). */
   disconnect?(sourceId: string): Promise<void>;
+  /** The box played (or couldn't play) a message on a camera (ADR 0069). */
+  onSpeakReported?(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined): Promise<void>;
 }
 
 const healthBody = {
@@ -77,6 +79,8 @@ const healthBody = {
           source_id: { type: "string", maxLength: 64 },
           state: { enum: ["connecting", "online", "reconnecting", "offline"] },
           detail: { type: "string", maxLength: 500 },
+          // Two-way audio the box found when it connected (ADR 0069).
+          speaker: { type: "boolean" },
         },
       },
     },
@@ -191,22 +195,29 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
 
     // `--rtsp URL`: the same URL again is a no-op; otherwise the oldest camera still waiting
     // for a URL takes it; otherwise a new camera is added to this bridge.
-    scope.post<{ Body: { rtsp_url: string; name?: string } }>(
+    scope.post<{ Body: { rtsp_url: string; name?: string; speaker?: boolean } }>(
       "/v1/bridge/cameras",
-      { schema: { body: { type: "object", additionalProperties: false, required: ["rtsp_url"], properties: { rtsp_url: { type: "string", maxLength: 2048, pattern: "^rtsps?://" }, name: { type: "string", minLength: 1, maxLength: 120 } } } } },
+      { schema: { body: { type: "object", additionalProperties: false, required: ["rtsp_url"], properties: { rtsp_url: { type: "string", maxLength: 2048, pattern: "^rtsps?://" }, name: { type: "string", minLength: 1, maxLength: 120 }, speaker: { type: "boolean" } } } } },
       async (req, reply) => {
         needWhip();
         const { bridgeId, accountId } = req.bridge!;
         const all = await cameras(req);
         const same = all.find((c) => c.rtsp_url && box().decrypt(c.rtsp_url) === req.body.rtsp_url);
-        if (same) return toCamera(req, same);
+        // The box says whether the camera has a speaker it can play to (ADR 0069); unsaid keeps what was known.
+        const speaker = req.body.speaker === undefined ? {} : { speaker: req.body.speaker };
+        if (same) {
+          if (req.body.speaker !== undefined && same.speaker !== req.body.speaker) {
+            await deps.data.withAccount(accountId, (s) => s.db.updateTable("sources").set(speaker).where("id", "=", same.id).execute());
+          }
+          return toCamera(req, same);
+        }
         const waiting = all.find((c) => !c.rtsp_url);
         const enc = box().encrypt(req.body.rtsp_url);
         let src: Source;
         let created = false;
         if (waiting) {
           src = await deps.data.withAccount(accountId, async (s) => {
-            await s.db.updateTable("sources").set({ rtsp_url: enc, ...(req.body.name ? { name: req.body.name } : {}) }).where("id", "=", waiting.id).execute();
+            await s.db.updateTable("sources").set({ rtsp_url: enc, ...speaker, ...(req.body.name ? { name: req.body.name } : {}) }).where("id", "=", waiting.id).execute();
             return (await s.sources.get(waiting.id))!;
           });
         } else {
@@ -223,7 +234,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
               }
             })();
             const row = await s.sources.create({ name: req.body.name ?? `Camera ${host}`, type: "rtsp", senses: ["video"], record_audio: false });
-            await s.db.updateTable("sources").set({ bridge_id: bridgeId, rtsp_url: enc }).where("id", "=", row.id).execute();
+            await s.db.updateTable("sources").set({ bridge_id: bridgeId, rtsp_url: enc, ...speaker }).where("id", "=", row.id).execute();
             return (await s.sources.get(row.id))!;
           });
           created = true;
@@ -233,7 +244,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
-    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; mqtt?: { connected: boolean; entities?: number }; cameras_found?: number } }>(
+    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string; speaker?: boolean }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; mqtt?: { connected: boolean; entities?: number }; cameras_found?: number } }>(
       "/v1/bridge/health",
       { schema: { body: healthBody } },
       async (req, reply) => {
@@ -265,6 +276,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
             await s.db.updateTable("sources")
               .set((eb) => ({
                 bridge_state: c.state, bridge_detail: c.detail ? redactUrls(c.detail).slice(0, 500) : null,
+                ...(c.speaker !== undefined ? { speaker: c.speaker } : {}),
                 ...(status ? { status: eb.case().when("status", "=", "paused").then("paused").else(status).end() } : {}),
               }))
               .where("id", "=", c.source_id).where("bridge_id", "=", bridgeId).execute();
@@ -282,7 +294,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         properties: {
           entity_id: { type: "string", minLength: 3, maxLength: 200, pattern: "^[a-z0-9_]+\\.[a-z0-9_]+$" }, name: { type: "string", maxLength: 200 },
           area: { type: "string", maxLength: 120 }, device_class: { type: "string", maxLength: 64 },
-          sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio", "sensors", "control"] } }, kind: { enum: ["number", "state", "event"] },
+          sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio", "sensors", "control", "speak"] } }, kind: { enum: ["number", "state", "event"] },
           // What the box can do to it (ADR 0067); the API offers only what the device's type allows.
           controls: { type: "array", maxItems: 20, items: { type: "string", maxLength: 40 } },
         },
@@ -439,6 +451,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         if (!done) throw new ApiError(404, "not_found", "no such command waiting for a result");
         await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: `bridge.${done.kind}_${req.body.ok ? "done" : "failed"}`, target: req.params.id, status: 200 });
         if (done.kind === "device_control") await finishDeviceCommand(deps.data, accountId, req.params.id, req.body.ok, req.body.result, req.body.error, deps.audit);
+        if (done.kind === "speak") await deps.onSpeakReported?.(accountId, req.params.id, req.body.ok, req.body.error);
         return reply.code(204).send();
       },
     );

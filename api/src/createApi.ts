@@ -65,6 +65,8 @@ import { isProduction } from "./ingest.js";
 import { createSecretBox, newSecretsKey } from "./secret-box.js";
 import { expireIdempotencyKeys, registerIdempotency } from "./idempotency.js";
 import { registerTeamRoutes } from "./routes/team.js";
+import { registerSpeakRoutes } from "./routes/speak.js";
+import { type Speech, type TtsConfig, createSpeech, startSpeechWorker, ttsConfigFromEnv } from "./speak.js";
 import { type AuthConfig, authConfig, httpOAuthClient, type OAuthClient, registerAuthRoutes } from "./routes/auth.js";
 
 declare module "fastify" {
@@ -137,6 +139,10 @@ export interface CreateApiOptions {
   telegramFetch?: typeof fetch;
   /** Device commands (ADR 0067): how long a box has to take one, a request waits, and a person has to confirm (tests shorten them). */
   deviceTimings?: { takeMs?: number; waitMs?: number; confirmMs?: number };
+  /** Text to speech for talk-back (ADR 0069); default from TTS_BASE_URL, TTS_API_KEY, TTS_MODEL and TTS_VOICE. false turns it off. */
+  tts?: TtsConfig | false;
+  /** Shorter waits for a box to take and play a message, in tests. */
+  speakTimings?: { takeMs?: number; waitMs?: number };
   /** Live view (ADR 0042): viewers idle this long are closed (default LIVE_IDLE_TIMEOUT_SECONDS or 600). */
   liveIdleTimeoutSeconds?: number;
   /** Live view join token lifetime (default 60 s). */
@@ -152,6 +158,8 @@ export interface SenseplaneApi {
   quotaFor(accountId: string): Promise<Quota>;
   /** A person's answer to a device request waiting for confirmation (ADR 0067); Telegram's buttons use it. */
   decideConfirmation: NonNullable<ChannelDeps["decideConfirmation"]>;
+  /** Talk-back (ADR 0069): says the watch messages waiting (the speech worker does this when workers run). */
+  speech: Pick<Speech, "runQueued">;
   listen(options: { port: number; host?: string }): Promise<void>;
   close(): Promise<void>;
 }
@@ -445,9 +453,14 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       })
     : undefined;
   const mediaControl: MediaControl | undefined = mediaDriver;
+  // Talk-back (ADR 0069): agents' and watches' messages, and people's push-to-talk.
+  const tts = options.tts === false ? undefined : options.tts ?? ttsConfigFromEnv();
+  const speech = createSpeech({ data, storage, media: mediaControl, audit, signer: playbackSigner, log: app.log, ...(tts ? { tts } : {}), ...options.speakTimings });
+  registerSpeakRoutes(app, { data, speech, audit, signer: playbackSigner, base, ttlSeconds: options.playbackTtlSeconds ?? 900 });
   const maxResolutionFor = async (id: string) => (await quotaFor(id)).maxResolution ?? "720p";
   registerMediaCallbacks(app, {
     data, signer, storage, media: mediaControl, masks, log: app.log, keys: keyRing,
+    onTalk: (accountId, sourceId, sessionId, event, at) => speech.personTalk(accountId, sourceId, sessionId, event, at),
     ...(valkeyBus ? {
       publishMedia: (a: string, s: string, kind: "frame" | "audio", meta: Record<string, unknown>, buf: Buffer) => valkeyBus.publishMedia(a, s, kind, meta, buf),
       releaseCamera: (a: string, s: string) => valkeyBus.balancer.release(`${a}.${s}`),
@@ -522,6 +535,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   }
   registerBridgeRoutes(app, {
     data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
+    onSpeakReported: (accountId, id, ok, error) => speech.boxReported(accountId, id, ok, error),
     ...(mediaDriver?.publicUrl ? { whip: { publicUrl: mediaDriver.publicUrl, authorizeUrl: whipAuthorizeUrl, signer } } : {}),
   });
   registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
@@ -592,6 +606,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       stoppers.push(startTelegramUpdates(channels));
     }
     stoppers.push(startChannelSender(channels));
+    stoppers.push(startSpeechWorker(speech, app.log));
     stoppers.push(startJobs(data, jobs, app.log));
     stoppers.push(startScheduledWatches(data, app.log));
     // Deliveries are built outside a request, so links use the configured public URL.
@@ -634,6 +649,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     },
     quotaFor,
     decideConfirmation: devices.decide,
+    speech,
     async listen({ port, host = "0.0.0.0" }) {
       await app.listen({ port, host });
       if (internal) await internal.listen({ port: options.internalPort!, host: process.env.INTERNAL_HOST ?? "127.0.0.1" });

@@ -12,6 +12,7 @@ import { queueEventForChannels } from "./channels.js";
 import { deliveryKick, rememberEventTrace } from "./workers.js";
 import { kickOutputs } from "./outputs-kick.js";
 import type { ReadingOut } from "./readings.js";
+import { queueWatchSpeech } from "./speak.js";
 
 export type EventRow = Selectable<EventsTable>;
 
@@ -66,6 +67,8 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
     setTimeout(() => deliveryKick.dispatchEvent(new Event("kick")), 20);
   }
   if (route.channels.length) await queueEventForChannels(s, route.channels, row.id);
+  // A watch that speaks (ADR 0069): only when it fired, never for "couldn't be checked".
+  if (route.speak.length && row.type === "watch.triggered") await queueWatchSpeech(s, row, route.speak);
   if (route.agents.length) {
     // Revoked agents are skipped; the watch keeps their ids.
     const live = await s.db.selectFrom("agents").select("id").where("id", "in", route.agents).where("revoked_at", "is", null).execute();
@@ -96,9 +99,10 @@ export function routeEvent(type: string, notify: Destination[] | null | undefine
       webhooks: hooks.filter((h) => want.has(h.id)).map((h) => h.id),
       agents: [...new Set(notify.filter((d) => d.type === "agent").map((d) => d.id))],
       channels: [...new Set(notify.filter((d) => d.type === "channel").map((d) => d.id))],
+      speak: notify.filter((d) => d.type === "speak" && d.text),
     };
   }
-  return { webhooks: hooks.filter((h) => h.events.some((p) => typeMatches(p, type))).map((h) => h.id), agents: [] as string[], channels: [] as string[] };
+  return { webhooks: hooks.filter((h) => h.events.some((p) => typeMatches(p, type))).map((h) => h.id), agents: [] as string[], channels: [] as string[], speak: [] as Destination[] };
 }
 
 /**

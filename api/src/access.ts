@@ -24,13 +24,15 @@ export const ABILITIES = ["watch", "history"] as const;
 
 /**
  * The grant sense that covers every sensor sense (ADR 0060): temperature,
- * contact, power and any sense a sensor reports later. video, audio and
- * control are never covered by it.
+ * contact, power and any sense a sensor reports later. video, audio,
+ * control and speak are never covered by it.
  */
 export const SENSORS = "sensors";
 /** Switching the devices on a sensor source (ADR 0067): only ever granted by name, like video and audio. */
 export const CONTROL = "control";
-const NEVER_IMPLIED = new Set(["video", "audio", CONTROL]);
+/** Talking through a camera's speaker (ADR 0069): only ever granted by name, like control. */
+export const SPEAK = "speak";
+const NEVER_IMPLIED = new Set(["video", "audio", CONTROL, SPEAK]);
 
 /** Does a grant's sense list cover this sense? */
 export function coversSense(granted: readonly string[], sense: string): boolean {
@@ -153,6 +155,8 @@ const AGENT_ROUTES = new Set([
   "GET /v1/watch-packs", "POST /v1/watch-packs/:id/apply",
   // Devices (ADR 0067): switching one needs a control grant on its source, checked by the route.
   "GET /v1/devices", "GET /v1/devices/:id", "POST /v1/devices/:id/commands", "GET /v1/device-commands/:id",
+  // Talk-back (ADR 0069): speaking needs a speak grant on the camera, checked (and audited) by the route.
+  "POST /v1/sources/:id/speak", "GET /v1/speak-messages", "GET /v1/speak-messages/:id",
 ]);
 
 /** Agent routes that need the `watch` ability on a grant (ADR 0048). */

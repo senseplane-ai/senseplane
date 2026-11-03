@@ -116,7 +116,7 @@ export async function readObject(storage: ObjectStorage, key: string): Promise<B
 }
 
 /** Objects sealed with the account's key (ADR 0066); recording segments are encrypted by the media plane instead. */
-const SEALED_PREFIXES = ["snapshots/", "exports/"];
+const SEALED_PREFIXES = ["snapshots/", "exports/", "speak/"];
 const sealedKey = (key: string) => SEALED_PREFIXES.some((p) => key.startsWith(p));
 const accountOfKey = (key: string) => {
   const id = key.split("/")[1];

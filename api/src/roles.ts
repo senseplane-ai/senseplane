@@ -40,6 +40,8 @@ const MEMBER_WRITES = new Set([
   "POST /v1/events/:id/feedback", "POST /v1/sources/:id/ask",
   // Switching a device someone made controllable, and confirming an agent's request (ADR 0067).
   "POST /v1/devices/:id/commands", "POST /v1/confirmations/:id",
+  // Saying something through a camera's speaker (ADR 0069); push-to-talk in live view is checked by the live route.
+  "POST /v1/sources/:id/speak",
 ]);
 
 /** Owner only. Workspace keys act above every role, so only an owner hands one out. */

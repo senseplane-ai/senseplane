@@ -357,6 +357,13 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     throw new ApiError(404, "not_found", "not a snapshot link");
   });
 
+  // What an agent or a watch said through a camera (ADR 0069): the clip as played, chime included.
+  app.get<{ Params: { token: string } }>("/media/:token/speak.wav", async (req, reply) => {
+    const { scope } = await authorize(req.params.token);
+    if (scope.kind === "object" && scope.key.startsWith(`speak/${scope.accountId}/`)) return deliver(reply, scope.key, "audio/wav");
+    throw new ApiError(404, "not_found", "not a speak link");
+  });
+
   app.get<{ Params: { token: string } }>("/media/:token/export.json", async (req, reply) => {
     const { scope } = await authorize(req.params.token);
     if (scope.kind === "object" && scope.key.startsWith(`exports/${scope.accountId}/`)) {

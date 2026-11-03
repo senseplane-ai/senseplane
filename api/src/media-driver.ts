@@ -38,6 +38,10 @@ export interface MediaControl {
   removeViewer?(sourceId: string, sessionId: string, reason: string): Promise<void>;
   /** The media plane's public base for WHIP URLs (MEDIA_PUBLIC_URL), when WHIP is offered. */
   publicUrl?: string;
+  /** Talk-back (ADR 0069): the phone's capture page plays a clip; false when the phone isn't connected. */
+  speak?(sourceId: string, clip: { id: string; url: string; durationMs: number }): Promise<boolean>;
+  /** Stops a clip on the phone (a person's push-to-talk). */
+  stopSpeak?(sourceId: string, id: string): Promise<void>;
 }
 
 export const CAMERA_IDENTITIES = (sourceId: string) => [`${sourceId}:capture`, `${sourceId}:whip`];
@@ -130,6 +134,13 @@ export function createMediaDriver(deps: {
       const participants = room?.status === "live" ? room.participants : [];
       const streaming = participants.some((p) => CAMERA_IDENTITIES(source.id).includes(p.identity) && p.publishing.some((x) => x.kind === "video"));
       return { signalUrl, streaming, viewers: participants.filter((p) => isViewer(p.identity)).length };
+    },
+    async speak(sourceId, clip) {
+      if (!deps.control.speak) return false;
+      return deps.control.speak(roomFor(sourceId), `${sourceId}:capture`, clip);
+    },
+    async stopSpeak(sourceId, id) {
+      await deps.control.stopSpeak?.(roomFor(sourceId), `${sourceId}:capture`, id);
     },
     async removeViewer(sourceId, sessionId, reason) {
       await deps.control.removeParticipant(roomFor(sourceId), `${sourceId}:viewer:${sessionId}`, reason).catch((err) => deps.log.warn({ err, sourceId }, "could not end a live viewer"));

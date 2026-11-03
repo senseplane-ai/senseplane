@@ -136,7 +136,7 @@ export async function reencryptKeys(deps: RotationDeps, budgetMs = 45_000, now =
 
     // Snapshots and exports: their version is in their header.
     let objectsDone = !segmentsLeft && !clipsLeft && Boolean(deps.storage.list);
-    for (const prefix of [`snapshots/${acc}/`, `exports/${acc}/`]) {
+    for (const prefix of [`snapshots/${acc}/`, `exports/${acc}/`, `speak/${acc}/`]) {
       if (!objectsDone || !deps.storage.list) break;
       for await (const key of deps.storage.list(prefix)) {
         if (now() >= until) {

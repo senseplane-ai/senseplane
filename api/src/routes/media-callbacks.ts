@@ -33,6 +33,8 @@ export interface CallbackDeps {
   log: FastifyBaseLogger;
   /** Account keys: a media plane that offers to encrypt segments gets each one's key (ADR 0066). */
   keys?: KeyRing;
+  /** A person started or stopped talking through the camera in live view (push-to-talk, ADR 0069). */
+  onTalk?(accountId: string, sourceId: string, sessionId: string, event: "start" | "end", at: Date): Promise<void>;
 }
 
 const FEED_EVENTS = new Set(["source.online", "source.offline", "segment.written", "recording.gap", "resolution_rejected"]);
@@ -99,7 +101,13 @@ export function registerMediaCallbacks(app: FastifyInstance, deps: CallbackDeps)
       // Room callbacks: viewers joining and leaving (live view), the room ending.
       if (typeof body.roomId === "string") {
         if (body.roomId !== roomFor(sourceId)) throw new ApiError(403, "forbidden", "this token is for another room");
-        const d = (body.data ?? {}) as { identity?: string; reason?: string };
+        const d = (body.data ?? {}) as { identity?: string; reason?: string; source?: string };
+        // A viewer's microphone track (push-to-talk): who talked through the camera, and for how long.
+        if ((event === "producer.added" || event === "producer.removed") && d.source === "talkback" && d.identity && isViewer(d.identity)) {
+          const sid = viewerSession(d.identity);
+          if (sid) await deps.onTalk?.(accountId, sourceId, sid, event === "producer.added" ? "start" : "end", at);
+          return { ok: true };
+        }
         if ((event === "participant.joined" || event === "participant.left") && d.identity && isViewer(d.identity)) {
           const sid = viewerSession(d.identity);
           if (sid) await handleViewerEvent(deps.data, accountId, event === "participant.joined" ? "joined" : "left", sid, at, d.reason);

@@ -62,7 +62,8 @@ describe("sources, ingest tokens, account retention, segment index", () => {
     expect(Object.keys(payload).sort()).toEqual(["aud", "exp", "grants", "iat", "identity", "iss", "jti", "kind", "name", "room", "transport", "v"]);
     expect(payload).toMatchObject({
       v: 1, room: `sp-${src.id}`, identity: `${src.id}:capture`, kind: "human", transport: "webrtc",
-      grants: { canPublish: true, canSubscribe: false, canPublishData: false, publishKinds: ["video", "audio"] },
+      // The phone also hears push-to-talk (ADR 0069): audio only.
+      grants: { canPublish: true, canSubscribe: true, canPublishData: false, publishKinds: ["video", "audio"], subscribeKinds: ["audio"] },
     });
     expect(payload.exp! - payload.iat!).toBe(600);
     // At token time the camera's room and its feed (segments into the account's prefix, frames) exist (ADR 0049).
@@ -147,6 +148,7 @@ describe("sources, ingest tokens, account retention, segment index", () => {
       "service_unavailable", "internal", "idempotency_key_reused", "signup_refused",
       "forbidden_role", "invite_invalid", "conflict", "feature_not_available", "limit_reached",
       "not_controllable", "confirmation_required", "confirmation_expired", "confirmation_denied", "device_offline", "device_failed",
+      "no_speaker", "speaker_busy", "message_too_long", "camera_offline",
     ];
     expect(spec.properties.error.properties.code.enum).toEqual(codes);
   });

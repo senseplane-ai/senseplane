@@ -17,11 +17,15 @@ export function fakeMediaPlane(signalUrl = "ws://media.test/") {
   const egress = new Map<string, { body: Record<string, unknown>; status: EgressSnapshot["status"] }>();
   const removed: { room: string; identity: string; reason?: string }[] = [];
   const calls: string[] = [];
+  /** Clips the media plane was asked to play (talk-back, ADR 0069), and the ones stopped. */
+  const spoken: { room: string; identity: string; id: string; url: string; durationMs: number }[] = [];
+  const stopped: { room: string; identity: string; id: string }[] = [];
   const client: ControlClient = {
     async createRoom(input) {
       calls.push(`createRoom ${input.roomId}`);
       const r = rooms.get(input.roomId);
       if (!r || r.status === "ended") rooms.set(input.roomId, { input, status: "live", participants: new Map() });
+      else r.input = input; // a camera that published first keeps its participants
       return { roomId: input.roomId, signal_url: signalUrl };
     },
     async getRoom(roomId): Promise<RoomView | undefined> {
@@ -50,9 +54,17 @@ export function fakeMediaPlane(signalUrl = "ws://media.test/") {
       const e = egress.get(id);
       if (e) e.status = "finished";
     },
+    async speak(room, identity, body) {
+      if (!rooms.get(room)?.participants.has(identity)) return false;
+      spoken.push({ room, identity, ...body });
+      return true;
+    },
+    async stopSpeak(room, identity, id) {
+      stopped.push({ room, identity, id });
+    },
   };
   return {
-    client, rooms, egress, removed, calls,
+    client, rooms, egress, removed, calls, spoken, stopped,
     /** The camera publishes video (a capture page by default) in its room. */
     publish(sourceId: string, identity = `${sourceId}:capture`) {
       const room = rooms.get(`sp-${sourceId}`) ?? { input: { roomId: `sp-${sourceId}` }, status: "live" as const, participants: new Map() };

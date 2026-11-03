@@ -42,8 +42,8 @@ const kickSoon = (t: EventTarget) => setTimeout(() => t.dispatchEvent(new Event(
 const sameSecret = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 
 const LINK_TTL_S = 10 * 60;
-/** Never in a chat's first grant: listening and switching devices are given by a person on the Agents page. */
-const LINK_NEVER = new Set(["audio", "control", "sensors"]);
+/** Never in a chat's first grant: listening, switching devices and speaking are given by a person on the Agents page. */
+const LINK_NEVER = new Set(["audio", "control", "speak", "sensors"]);
 /** A question more than this after the last one starts a new conversation. */
 const CONVERSATION_IDLE_MS = 30 * 60_000;
 const QUESTIONS_PER_HOUR = 30;

@@ -19,6 +19,7 @@ import { ApiError } from "../errors.js";
 import type { IngestSigner } from "../ingest.js";
 import type { MediaControl } from "../media-driver.js";
 import type { AuditLog, Quota } from "../module.js";
+import { atLeast } from "../roles.js";
 
 export interface LiveDeps {
   data: DataAccess;
@@ -51,9 +52,9 @@ export async function openViewers(data: DataAccess, accountId: string, sourceId?
 }
 
 export function registerLiveRoutes(app: FastifyInstance, deps: LiveDeps) {
-  app.post<{ Params: { id: string }; Body: { audio?: boolean } | undefined }>(
+  app.post<{ Params: { id: string }; Body: { audio?: boolean; talk?: boolean } | undefined }>(
     "/v1/sources/:id/live",
-    { schema: { body: { type: ["object", "null"], additionalProperties: false, properties: { audio: { type: "boolean" } } } } },
+    { schema: { body: { type: ["object", "null"], additionalProperties: false, properties: { audio: { type: "boolean" }, talk: { type: "boolean" } } } } },
     async (req) => {
       const accountId = req.accountId!;
       const source = await deps.data.withAccount(accountId, (s) => s.sources.get(req.params.id));
@@ -63,6 +64,19 @@ export function registerLiveRoutes(app: FastifyInstance, deps: LiveDeps) {
       // A video grant is required (checkRoute); audio needs its own grant as well as `audio: true`.
       const wantsAudio = req.body?.audio === true;
       if (wantsAudio && !canSense(req, source.id, "audio")) throw new ApiError(403, "forbidden_sense", "this agent has no audio grant for this source");
+      // Push-to-talk (ADR 0069) is for people, member and up, and workspace keys; agents speak with the speak tool.
+      const talk = req.body?.talk === true;
+      if (talk) {
+        if (req.access?.grants) throw new ApiError(403, "forbidden", "agents can't talk in live view; they speak with POST /v1/sources/{id}/speak and a speak grant");
+        const role = req.access?.role;
+        if (role && !atLeast(role, "member")) {
+          throw new ApiError(403, "forbidden_role", `Your role in this workspace (${role}) can't talk through cameras; it needs member or above.`, { role, required: "member" });
+        }
+        if (!source.speaker) throw new ApiError(409, "no_speaker", `${source.name} has no speaker.`);
+        if (source.type !== "browser") {
+          throw new ApiError(409, "no_speaker", `Push-to-talk works with phone cameras on the capture page for now; ${source.name} can play agents' messages (speak) instead.`);
+        }
+      }
       const quota = await deps.quotaFor(accountId);
       if (quota.liveView === false) throw new ApiError(403, "feature_not_available", "Live view isn't available on this account.", { feature: "live_view" });
       const over = await deps.overAllowance(accountId);
@@ -83,16 +97,16 @@ export function registerLiveRoutes(app: FastifyInstance, deps: LiveDeps) {
       const audio = wantsAudio && source.record_audio;
       const sessionId = newSessionId();
       const { token, expiresAt } = await deps.signer.signViewer(
-        { accountId, sourceId: source.id, sessionId, audio, idleTimeoutSeconds: deps.idleTimeoutSeconds, maxLiveViewers: max },
+        { accountId, sourceId: source.id, sessionId, audio, idleTimeoutSeconds: deps.idleTimeoutSeconds, maxLiveViewers: max, talk },
         deps.tokenTtlSeconds,
       );
       await deps.data.withAccount(accountId, (s) =>
         s.db.insertInto("live_sessions").values({ id: sessionId, account_id: accountId, source_id: source.id, actor: req.access?.actor ?? "unknown", audio, expires_at: expiresAt }).execute());
       // Watching someone live is audited on its own line, not only as a request.
-      await deps.audit.write({ accountId, actor: req.access?.actor ?? "unknown", action: "live.start", target: source.id, status: 200, details: { session_id: sessionId, audio } });
+      await deps.audit.write({ accountId, actor: req.access?.actor ?? "unknown", action: "live.start", target: source.id, status: 200, details: { session_id: sessionId, audio, ...(talk ? { talk } : {}) } });
       return {
         session_id: sessionId, media_url: media.signalUrl, token, expires_at: expiresAt.toISOString(),
-        idle_timeout_seconds: deps.idleTimeoutSeconds, audio,
+        idle_timeout_seconds: deps.idleTimeoutSeconds, audio, talk,
       };
     },
   );

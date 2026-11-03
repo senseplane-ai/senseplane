@@ -458,6 +458,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bridge/outputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What this box may publish to its MQTT broker, long-polled
+         * @description MQTT out (ADR 0071). Only when the account turned `mqtt_publish` on for this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and the lists are empty. The cameras with their online state, the watches that alert, and the person, vehicle and animal detections and watch firings after `after`, in order. Without `after` it answers at once with no events and a `cursor` at the newest event (old events are not replayed); with it, it waits up to `wait` seconds (at most 25) for one, or for publishing to be turned on or off.
+         */
+        get: operations["takeBridgeOutputs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridge/pair": {
         parameters: {
             query?: never;
@@ -530,7 +550,11 @@ export interface paths {
         delete: operations["removeBridge"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Rename a box, or turn publishing to MQTT on or off
+         * @description `mqtt_publish` (off by default) lets the box publish this account's camera online state, person, vehicle and animal detections and watch firings to its MQTT broker as Home Assistant discovery entities (ADR 0071). Audited.
+         */
+        patch: operations["updateBridge"];
         trace?: never;
     };
     "/bridges/{id}/entities": {
@@ -805,6 +829,64 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integration/readings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The readings webhook (IFTTT, n8n, Zapier, ESPHome, Shelly, scripts)
+         * @description Takes a sensor's integration token (`sit_…`) and files the readings under its source (ADR 0071; recipes in docs/sensors-webhook.md). The body is `{"readings": [...]}` or one reading's fields, as JSON, a form or plain text holding JSON; with no body, one reading's fields as query parameters. Values may be text: numbers ("21.5"), true/false, on/off, 1/0 and the sense's own words ("open", "closed", "wet", "dry"); a known number sense may leave out its unit; a device may be `device` or `device_id` and `device_name`; `measured_at` may be Unix seconds. With a signing secret on the token (POST /sources/{id}/webhook/secret), every push carries `Senseplane-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">`, as Senseplane signs its own webhooks (a push without a body signs its query string); a time more than 5 minutes off, a mismatch or a signature already used answer 401, and that token may then use no other endpoint. `video`, `audio`, `sensors` and `control` are never readings. Limited per token like every key.
+         */
+        post: operations["pushWebhookReadings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A sensor's readings webhook URL and whether its pushes are signed */
+        get: operations["getReadingsWebhook"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}/webhook/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn on signing, or replace the secret
+         * @description Gives the sensor's current integration token a new signing secret, shown once; from now every push with that token must be signed. A rotated token keeps it. 409 when the sensor has no token. Audited.
+         */
+        post: operations["createReadingsWebhookSecret"];
+        /** Turn signing off */
+        delete: operations["deleteReadingsWebhookSecret"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1960,6 +2042,45 @@ export interface components {
         ReadingsRequest: {
             readings: components["schemas"]["ReadingInput"][];
         };
+        /** @description One reading as the readings webhook takes it (ADR 0071): like ReadingInput, but `value` may be text and a known number sense's `unit` may be left out. */
+        WebhookReading: {
+            sense: string;
+            /** @enum {string} */
+            kind?: "number" | "state" | "event";
+            value?: number | boolean | string;
+            unit?: string;
+            detail?: string;
+            device?: {
+                id: string;
+                name?: string;
+            };
+            device_id?: string;
+            device_name?: string;
+            /** @description RFC 3339, or Unix seconds */
+            measured_at?: string | number;
+        };
+        WebhookReadings: {
+            readings: components["schemas"]["WebhookReading"][];
+        } | components["schemas"]["WebhookReading"];
+        ReadingsWebhook: {
+            /**
+             * Format: uri
+             * @description The URL to push to
+             */
+            url: string;
+            /** @description The start of the current integration token; null when it has none */
+            token_prefix: string | null;
+            /** @description Whether pushes with it must be signed */
+            signed: boolean;
+        };
+        ReadingsWebhookSecret: {
+            /** Format: uri */
+            url: string;
+            token_prefix: string | null;
+            signed: boolean;
+            /** @description whsec_…, shown once */
+            secret: string;
+        };
         /** @description One reading (ADR 0060). A number needs `value` and `unit` (a known sense in its unit: temperature in celsius, power in watt, ...; spec/senses.json); a state needs `value` true or false (contact true = open, switch true = on, ...); an event needs neither (doorbell, button, with an optional `detail`). `kind` may be left out for known senses and is otherwise taken from `value`. */
         ReadingInput: {
             sense: string;
@@ -2138,6 +2259,33 @@ export interface components {
             } | null;
             /** @description How many cameras it lists to pick from (ADR 0063); null when it doesn't look */
             cameras_found?: number | null;
+            /** @description Whether it publishes Senseplane's events to its MQTT broker for Home Assistant (ADR 0071); off by default */
+            mqtt_publish?: boolean;
+        };
+        BridgeOutputs: {
+            mqtt_publish: boolean;
+            /** @description Pass as `after` next time */
+            cursor: string | null;
+            cameras: {
+                id: string;
+                name: string;
+                online: boolean;
+            }[];
+            watches: {
+                id: string;
+                /** @description The instruction */
+                name: string;
+            }[];
+            events: {
+                id: string;
+                /** @enum {string} */
+                type: "detection.person" | "detection.vehicle" | "detection.animal" | "watch.triggered" | "reading.threshold";
+                source_id: string;
+                watch_id?: string;
+                /** Format: date-time */
+                occurred_at: string;
+                summary: string;
+            }[];
         };
         ClipCreate: {
             source: string;
@@ -4468,6 +4616,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    takeBridgeOutputs: {
+        parameters: {
+            query?: {
+                /** @description The cursor from the last answer */
+                after?: string;
+                /** @description Seconds to wait for an event (0–25) */
+                wait?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeOutputs"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     startBridgePairing: {
         parameters: {
             query?: never;
@@ -4611,6 +4785,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateBridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    mqtt_publish?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bridge"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -5105,6 +5310,118 @@ export interface operations {
                         source: components["schemas"]["source"];
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pushWebhookReadings: {
+        parameters: {
+            query?: {
+                /** @description One reading in the query (no body) */
+                sense?: string;
+                value?: string;
+                unit?: string;
+                device_id?: string;
+                device_name?: string;
+                detail?: string;
+            };
+            header?: {
+                /** @description Required when the token has a signing secret */
+                "Senseplane-Signature"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WebhookReadings"];
+                "application/x-www-form-urlencoded": components["schemas"]["WebhookReading"];
+                "text/plain": string;
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        accepted: number;
+                        /** @description IDs of events these readings fired */
+                        events: string[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getReadingsWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingsWebhook"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createReadingsWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK; `secret` is shown once */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingsWebhookSecret"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteReadingsWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signing is off */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

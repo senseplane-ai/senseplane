@@ -738,6 +738,32 @@ paths:
       responses:
         '204': {description: Recorded}
         default: {$ref: '#/components/responses/Error'}
+  /bridge/outputs:
+    get:
+      operationId: takeBridgeOutputs
+      summary: What this box may publish to its MQTT broker, long-polled
+      description: >-
+        MQTT out (ADR 0071). Only when the account turned `mqtt_publish` on for
+        this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and
+        the lists are empty. The cameras with their online state, the watches
+        that alert, and the person, vehicle and animal detections and watch
+        firings after `after`, in order. Without `after` it answers at once
+        with no events and a `cursor` at the newest event (old events are not
+        replayed); with it, it waits up to `wait` seconds (at most 25) for one,
+        or for publishing to be turned on or off.
+      tags: [bridge]
+      security:
+        - bridgeToken: []
+      parameters:
+        - {name: after, in: query, required: false, description: The cursor from the last answer, schema: {type: string}}
+        - {name: wait, in: query, required: false, description: Seconds to wait for an event (0–25), schema: {type: integer, minimum: 0, maximum: 25}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BridgeOutputs'}
+        default: {$ref: '#/components/responses/Error'}
   /bridge/pair:
     post:
       operationId: startBridgePairing
@@ -841,6 +867,35 @@ paths:
               schema: {$ref: '#/components/schemas/Bridge'}
         default: {$ref: '#/components/responses/Error'}
   /bridges/{id}:
+    patch:
+      operationId: updateBridge
+      summary: Rename a box, or turn publishing to MQTT on or off
+      description: >-
+        `mqtt_publish` (off by default) lets the box publish this account's
+        camera online state, person, vehicle and animal detections and watch
+        firings to its MQTT broker as Home Assistant discovery entities
+        (ADR 0071). Audited.
+      tags: [bridges]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: {type: string, minLength: 1, maxLength: 120}
+                mqtt_publish: {type: boolean}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Bridge'}
+        default: {$ref: '#/components/responses/Error'}
     delete:
       operationId: removeBridge
       summary: Remove a bridge (box)
@@ -1254,6 +1309,99 @@ paths:
                 required: [source]
                 properties:
                   source: {$ref: '#/components/schemas/Source'}
+        default: {$ref: '#/components/responses/Error'}
+  /integration/readings:
+    post:
+      operationId: pushWebhookReadings
+      summary: The readings webhook (IFTTT, n8n, Zapier, ESPHome, Shelly, scripts)
+      description: >-
+        Takes a sensor's integration token (`sit_…`) and files the readings
+        under its source (ADR 0071; recipes in docs/sensors-webhook.md). The
+        body is `{"readings": [...]}` or one reading's fields, as JSON, a form
+        or plain text holding JSON; with no body, one reading's fields as query
+        parameters. Values may be text: numbers ("21.5"), true/false, on/off,
+        1/0 and the sense's own words ("open", "closed", "wet", "dry"); a known
+        number sense may leave out its unit; a device may be `device` or
+        `device_id` and `device_name`; `measured_at` may be Unix seconds.
+        With a signing secret on the token (POST /sources/{id}/webhook/secret),
+        every push carries `Senseplane-Signature: t=<unix seconds>,v1=<hex
+        HMAC-SHA256 of "<t>.<body>">`, as Senseplane signs its own webhooks
+        (a push without a body signs its query string); a time more than 5
+        minutes off, a mismatch or a signature already used answer 401, and
+        that token may then use no other endpoint. `video`, `audio`, `sensors`
+        and `control` are never readings. Limited per token like every key.
+      tags: [sources]
+      security:
+        - integrationToken: []
+      parameters:
+        - {name: Senseplane-Signature, in: header, required: false, description: 'Required when the token has a signing secret', schema: {type: string}}
+        - {name: sense, in: query, required: false, description: 'One reading in the query (no body)', schema: {type: string}}
+        - {name: value, in: query, required: false, schema: {type: string}}
+        - {name: unit, in: query, required: false, schema: {type: string}}
+        - {name: device_id, in: query, required: false, schema: {type: string}}
+        - {name: device_name, in: query, required: false, schema: {type: string}}
+        - {name: detail, in: query, required: false, schema: {type: string}}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WebhookReadings'}
+          application/x-www-form-urlencoded:
+            schema: {$ref: '#/components/schemas/WebhookReading'}
+          text/plain:
+            schema: {type: string, description: 'JSON, as for application/json'}
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, events]
+                properties:
+                  accepted: {type: integer}
+                  events: {type: array, items: {type: string}, description: IDs of events these readings fired}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/webhook:
+    get:
+      operationId: getReadingsWebhook
+      summary: A sensor's readings webhook URL and whether its pushes are signed
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReadingsWebhook'}
+        default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/webhook/secret:
+    post:
+      operationId: createReadingsWebhookSecret
+      summary: Turn on signing, or replace the secret
+      description: >-
+        Gives the sensor's current integration token a new signing secret,
+        shown once; from now every push with that token must be signed. A
+        rotated token keeps it. 409 when the sensor has no token. Audited.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK; `secret` is shown once
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReadingsWebhookSecret'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteReadingsWebhookSecret
+      summary: Turn signing off
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '204': {description: Signing is off}
         default: {$ref: '#/components/responses/Error'}
   # --- end ingest --------------------------------------------------------------
   /capture/join:
@@ -2939,6 +3087,50 @@ components:
           minItems: 1
           maxItems: 1000
           items: {$ref: '#/components/schemas/ReadingInput'}
+    WebhookReading:
+      type: object
+      required: [sense]
+      description: >-
+        One reading as the readings webhook takes it (ADR 0071): like
+        ReadingInput, but `value` may be text and a known number sense's
+        `unit` may be left out.
+      properties:
+        sense: {type: string, pattern: '^[a-z][a-z0-9_]*$', maxLength: 40}
+        kind: {type: string, enum: [number, state, event]}
+        value: {type: [number, boolean, string]}
+        unit: {type: string, pattern: '^[a-z0-9_]{1,32}$'}
+        detail: {type: string, maxLength: 64}
+        device:
+          type: object
+          required: [id]
+          properties:
+            id: {type: string, minLength: 1, maxLength: 200}
+            name: {type: string, maxLength: 200}
+        device_id: {type: string, maxLength: 200}
+        device_name: {type: string, maxLength: 200}
+        measured_at: {type: [string, number], description: 'RFC 3339, or Unix seconds'}
+    WebhookReadings:
+      oneOf:
+        - type: object
+          required: [readings]
+          properties:
+            readings: {type: array, minItems: 1, maxItems: 1000, items: {$ref: '#/components/schemas/WebhookReading'}}
+        - {$ref: '#/components/schemas/WebhookReading'}
+    ReadingsWebhook:
+      type: object
+      required: [url, token_prefix, signed]
+      properties:
+        url: {type: string, format: uri, description: The URL to push to}
+        token_prefix: {type: [string, 'null'], description: 'The start of the current integration token; null when it has none'}
+        signed: {type: boolean, description: Whether pushes with it must be signed}
+    ReadingsWebhookSecret:
+      type: object
+      required: [url, token_prefix, signed, secret]
+      properties:
+        url: {type: string, format: uri}
+        token_prefix: {type: [string, 'null']}
+        signed: {type: boolean}
+        secret: {type: string, description: 'whsec_…, shown once'}
     ReadingInput:
       type: object
       additionalProperties: false
@@ -3115,6 +3307,42 @@ components:
             connected: {type: boolean}
             nodes: {type: integer}
         cameras_found: {type: [integer, 'null'], description: 'How many cameras it lists to pick from (ADR 0063); null when it doesn''t look'}
+        mqtt_publish: {type: boolean, description: 'Whether it publishes Senseplane''s events to its MQTT broker for Home Assistant (ADR 0071); off by default'}
+    BridgeOutputs:
+      type: object
+      required: [mqtt_publish, cursor, cameras, watches, events]
+      properties:
+        mqtt_publish: {type: boolean}
+        cursor: {type: [string, 'null'], description: Pass as `after` next time}
+        cameras:
+          type: array
+          items:
+            type: object
+            required: [id, name, online]
+            properties:
+              id: {type: string}
+              name: {type: string}
+              online: {type: boolean}
+        watches:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: {type: string}
+              name: {type: string, description: The instruction, shortened}
+        events:
+          type: array
+          items:
+            type: object
+            required: [id, type, source_id, occurred_at, summary]
+            properties:
+              id: {type: string}
+              type: {type: string, enum: [detection.person, detection.vehicle, detection.animal, watch.triggered, reading.threshold]}
+              source_id: {type: string}
+              watch_id: {type: string}
+              occurred_at: {type: string, format: date-time}
+              summary: {type: string}
     ClipCreate:
       type: object
       required: [source, from, to]

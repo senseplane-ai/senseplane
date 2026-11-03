@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -262,6 +264,53 @@ def test_pushes_readings_with_an_integration_token() -> None:
     reading = {"sense": "temperature", "value": 21, "unit": "celsius", "at": "2026-10-16T10:00:00Z"}
     assert sp.sources.push_readings(source.id, readings=[reading]).accepted == 1
     assert seen == ["GET /v1/integration Bearer sit_test", "POST /v1/sources/src_s/readings Bearer sit_test"]
+
+
+def test_readings_webhook_and_mqtt_publishing() -> None:
+    seen: list[str] = []
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        seen.append(f"{r.method} {r.url.path}{'?' + r.url.query.decode() if r.url.query else ''} {r.content.decode()}".strip())
+        if r.method == "DELETE":
+            return respond(None, 204)
+        if r.url.path.endswith("/webhook"):
+            return respond({"url": "http://x/v1/integration/readings", "token_prefix": "sit_abcd", "signed": False})
+        if r.url.path.endswith("/secret"):
+            return respond({"url": "http://x/v1/integration/readings", "token_prefix": "sit_abcd", "signed": True, "secret": "whsec_s"})
+        if r.url.path.endswith("/outputs"):
+            return respond({"mqtt_publish": True, "cursor": "evt_2", "cameras": [{"id": "src_1", "name": "Front door", "online": True}], "watches": [], "events": []})
+        return respond({"id": "brg_1", "name": "Home", "online": True, "created_at": "2026-11-03T10:00:00Z", "mqtt_publish": True})
+
+    sp = Senseplane(api_key="sk_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert sp.sources.webhook("src_s").signed is False
+    assert sp.sources.create_webhook_secret("src_s").secret == "whsec_s"
+    sp.sources.delete_webhook_secret("src_s")
+    assert sp.bridges.update("brg_1", mqtt_publish=True).mqtt_publish is True
+    assert sp.bridge.take_outputs(after="evt_1", wait=5).cameras[0].name == "Front door"
+    assert seen == [
+        "GET /v1/sources/src_s/webhook",
+        "POST /v1/sources/src_s/webhook/secret",
+        "DELETE /v1/sources/src_s/webhook/secret",
+        'PATCH /v1/bridges/brg_1 {"mqtt_publish":true}',
+        "GET /v1/bridge/outputs?after=evt_1&wait=5",
+    ]
+
+
+def test_pushes_to_the_readings_webhook_signed() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        seen.append(r)
+        return respond({"accepted": 1, "events": []}, 202)
+
+    sp = Senseplane(api_key="sit_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert sp.integration.push(sense="temperature", value="21.5").accepted == 1
+    assert sp.integration.push({"readings": [{"sense": "contact", "value": "open"}]}, signing_secret="whsec_s").accepted == 1
+    assert seen[0].url.path == "/v1/integration/readings" and "senseplane-signature" not in seen[0].headers
+    assert seen[0].content == b'{"sense":"temperature","value":"21.5"}'
+    parts = dict(p.split("=", 1) for p in seen[1].headers["senseplane-signature"].split(","))
+    want = hmac.new(b"whsec_s", f"{parts['t']}.".encode() + seen[1].content, hashlib.sha256).hexdigest()
+    assert parts["v1"] == want
 
 
 def test_team_endpoints() -> None:

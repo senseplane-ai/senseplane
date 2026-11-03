@@ -72,6 +72,21 @@ describe("client", () => {
     expect(seen).toEqual(["GET /v1/integration Bearer sit_test", "POST /v1/sources/src_s/readings Bearer sit_test"]);
   });
 
+  it("shows a sensor's readings webhook and turns signing on and off", async () => {
+    const seen: string[] = [];
+    const fakeFetch = async (req: Request) => {
+      seen.push(`${req.method} ${new URL(req.url).pathname}`);
+      if (req.method === "DELETE") return new Response(null, { status: 204 });
+      const body = { url: "http://x/v1/integration/readings", token_prefix: "sit_abcd", signed: req.method === "POST", ...(req.method === "POST" ? { secret: "whsec_s" } : {}) };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    };
+    const sp = new Senseplane({ apiKey: "sk_test", baseUrl: "http://x/v1", fetch: fakeFetch as typeof fetch });
+    expect((await sp.sources.webhook("src_s")).signed).toBe(false);
+    expect((await sp.sources.createWebhookSecret("src_s")).secret).toBe("whsec_s");
+    await sp.sources.deleteWebhookSecret("src_s");
+    expect(seen).toEqual(["GET /v1/sources/src_s/webhook", "POST /v1/sources/src_s/webhook/secret", "DELETE /v1/sources/src_s/webhook/secret"]);
+  });
+
   it("throws a typed error", async () => {
     const fakeFetch = async () =>
       new Response(JSON.stringify({ error: { code: "forbidden_sense", message: "no audio grant", request_id: "r1" } }), {

@@ -1394,6 +1394,83 @@ class TimelineResponse(BaseModel):
     """
 
 
+class Device(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(max_length=200, min_length=1)]
+    name: Annotated[str | None, Field(max_length=200)] = None
+
+
+class WebhookReading(BaseModel):
+    """
+    One reading as the readings webhook takes it (ADR 0071): like ReadingInput, but `value` may be text and a known number sense's `unit` may be left out.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    sense: Annotated[str, Field(max_length=40, pattern='^[a-z][a-z0-9_]*$')]
+    kind: Literal['number', 'state', 'event'] | None = None
+    value: float | bool | str | None = None
+    unit: Annotated[str | None, Field(pattern='^[a-z0-9_]{1,32}$')] = None
+    detail: Annotated[str | None, Field(max_length=64)] = None
+    device: Device | None = None
+    device_id: Annotated[str | None, Field(max_length=200)] = None
+    device_name: Annotated[str | None, Field(max_length=200)] = None
+    measured_at: str | float | None = None
+    """
+    RFC 3339, or Unix seconds
+    """
+
+
+class WebhookReadings1(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    readings: Annotated[list[WebhookReading], Field(max_length=1000, min_length=1)]
+
+
+class WebhookReadings(RootModel[WebhookReadings1 | WebhookReading]):
+    root: WebhookReadings1 | WebhookReading
+
+
+class ReadingsWebhook(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    url: str
+    """
+    The URL to push to
+    """
+    token_prefix: str | None
+    """
+    The start of the current integration token; null when it has none
+    """
+    signed: bool
+    """
+    Whether pushes with it must be signed
+    """
+
+
+class ReadingsWebhookSecret(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    url: str
+    token_prefix: str | None
+    signed: bool
+    secret: str
+    """
+    whsec_…, shown once
+    """
+
+
 class ReadingInput(BaseModel):
     """
     One reading (ADR 0060). A number needs `value` and `unit` (a known sense in its unit: temperature in celsius, power in watt, ...; spec/senses.json); a state needs `value` true or false (contact true = open, switch true = on, ...); an event needs neither (doorbell, button, with an optional `detail`). `kind` may be left out for known senses and is otherwise taken from `value`.
@@ -1700,6 +1777,66 @@ class Bridge(BaseModel):
     """
     How many cameras it lists to pick from (ADR 0063); null when it doesn't look
     """
+    mqtt_publish: bool | None = None
+    """
+    Whether it publishes Senseplane's events to its MQTT broker for Home Assistant (ADR 0071); off by default
+    """
+
+
+class Camera1(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    name: str
+    online: bool
+
+
+class Watch3(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    name: str
+    """
+    The instruction
+    """
+
+
+class Event2(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    type: Literal[
+        'detection.person',
+        'detection.vehicle',
+        'detection.animal',
+        'watch.triggered',
+        'reading.threshold',
+    ]
+    source_id: str
+    watch_id: str | None = None
+    occurred_at: AwareDatetime
+    summary: str
+
+
+class BridgeOutputs(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    mqtt_publish: bool
+    cursor: str | None
+    """
+    Pass as `after` next time
+    """
+    cameras: list[Camera1]
+    watches: list[Watch3]
+    events: list[Event2]
 
 
 class ClipCreate(BaseModel):
@@ -1835,7 +1972,7 @@ class DeviceState(BaseModel):
     at: AwareDatetime | None = None
 
 
-class Device(BaseModel):
+class Device2(BaseModel):
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
@@ -2447,7 +2584,7 @@ class Hours(BaseModel):
     to: str | None = None
 
 
-class Watch3(BaseModel):
+class Watch4(BaseModel):
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
@@ -2466,7 +2603,7 @@ class WatchPack(BaseModel):
     id: str
     name: str
     description: str
-    watches: list[Watch3]
+    watches: list[Watch4]
 
 
 class WatchPackList(BaseModel):
@@ -2862,6 +2999,15 @@ class BridgesPostRequest(BaseModel):
     name: Annotated[str, Field(max_length=120, min_length=1)]
 
 
+class BridgesIdPatchRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
+    mqtt_publish: bool | None = None
+
+
 class BridgesIdEntitiesGetResponse(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2902,7 +3048,7 @@ class DevicesGetResponse(BaseModel):
         extra='allow',
         populate_by_name=True,
     )
-    data: list[Device]
+    data: list[Device2]
     next_cursor: str | None = None
 
 
@@ -2990,6 +3136,18 @@ class BridgesPairPostRequest(BaseModel):
     )
     code: Annotated[str, Field(max_length=20)]
     name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
+
+
+class IntegrationReadingsPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    accepted: int
+    events: list[str]
+    """
+    IDs of events these readings fired
+    """
 
 
 class CaptureJoinPostRequest(BaseModel):

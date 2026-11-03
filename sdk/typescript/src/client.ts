@@ -121,6 +121,11 @@ export class Senseplane {
     /** A new WHIP, bridge or sensor integration token (shown once); the old one stops working. */
     rotateIngestToken: (id: string) => unwrap(this.raw.POST("/sources/{id}/ingest-token", { params: { path: { id } } })),
     revokeIngestToken: (id: string) => unwrap(this.raw.DELETE("/sources/{id}/ingest-token", { params: { path: { id } } })),
+    /** A sensor's readings webhook URL, and whether its pushes must be signed (ADR 0071). */
+    webhook: (id: string) => unwrap(this.raw.GET("/sources/{id}/webhook", { params: { path: { id } } })),
+    /** Turns signing on (or replaces the secret, shown once); every push with the sensor's token must then be signed. */
+    createWebhookSecret: (id: string) => unwrap(this.raw.POST("/sources/{id}/webhook/secret", { params: { path: { id } } })),
+    deleteWebhookSecret: (id: string) => unwrap(this.raw.DELETE("/sources/{id}/webhook/secret", { params: { path: { id } } })),
     /** Stops recording and analysis until `resume`; pushes are refused while paused. */
     pause: (id: string) => unwrap(this.raw.POST("/sources/{id}/pause", { params: { path: { id } } })),
     resume: (id: string) => unwrap(this.raw.POST("/sources/{id}/resume", { params: { path: { id } } })),

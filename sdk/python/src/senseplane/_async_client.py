@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol
@@ -38,7 +39,7 @@ from ._base import (
 )
 from ._errors import APIConnectionError, InternalServerError, RateLimitError
 from ._generated import models as m
-from ._webhooks import verify_webhook
+from ._webhooks import sign_webhook, verify_webhook
 
 Body = BaseModel | Mapping[str, Any] | None
 """A request body: a model, a dict with the API's field names, or None (then keyword arguments)."""
@@ -270,6 +271,18 @@ class AsyncSources(_Resource):
     async def revoke_ingest_token(self, id: str) -> None:
         await self._t.request("revokeIngestToken", path={"id": id})
 
+    async def webhook(self, id: str) -> m.ReadingsWebhook:
+        """A sensor's readings webhook URL, and whether its pushes must be signed (ADR 0071)."""
+        return parse(m.ReadingsWebhook, await self._t.request("getReadingsWebhook", path={"id": id}))
+
+    async def create_webhook_secret(self, id: str) -> m.ReadingsWebhookSecret:
+        """Turns signing on (or replaces the secret, shown once); every push with the sensor's token must then be signed."""
+        return parse(m.ReadingsWebhookSecret, await self._t.request("createReadingsWebhookSecret", path={"id": id}))
+
+    async def delete_webhook_secret(self, id: str) -> None:
+        """Turns signing off."""
+        await self._t.request("deleteReadingsWebhookSecret", path={"id": id})
+
     async def pause(self, id: str) -> m.Source:
         """Stops recording and analysis until `resume`; pushes are refused while paused."""
         return parse(m.Source, await self._t.request("pauseSource", path={"id": id}))
@@ -321,6 +334,10 @@ class AsyncBridge(_Resource):
         data = await self._t.request("postBridgeReadings", body=body_of(m.ReadingsRequest, body, fields))
         return parse(m.BridgeReadingsPostResponse, data)
 
+    async def take_outputs(self, *, after: str | None = None, wait: int | None = None) -> m.BridgeOutputs:
+        """What this box may publish to its MQTT broker (ADR 0071), long-polled; pass the last `cursor` as `after`."""
+        return parse(m.BridgeOutputs, await self._t.request("takeBridgeOutputs", query={"after": after, "wait": wait}))
+
     async def take_commands(self, *, wait: int | None = None) -> m.BridgeCommandsGetResponse:
         """Commands waiting for this bridge; `wait` seconds holds the request open until one arrives."""
         return parse(m.BridgeCommandsGetResponse, await self._t.request("takeBridgeCommands", query={"wait": wait}))
@@ -350,6 +367,10 @@ class AsyncBridges(_Resource):
     async def create(self, name: str) -> m.Bridge:
         """A new box; its token is in the response, shown once."""
         return parse(m.Bridge, await self._t.request("createBridge", body={"name": name}))
+
+    async def update(self, id: str, body: Body = None, /, **fields: Any) -> m.Bridge:
+        """Renames a box (`name`), or turns publishing to its MQTT broker on or off (`mqtt_publish`, ADR 0071)."""
+        return parse(m.Bridge, await self._t.request("updateBridge", path={"id": id}, body=body_of(m.BridgesIdPatchRequest, body, fields)))
 
     async def remove(self, id: str) -> None:
         """Removes a box; its cameras and sensors keep their history."""
@@ -462,6 +483,21 @@ class AsyncIntegration(_Resource):
     async def get(self) -> m.IntegrationGetResponse:
         """The source this token feeds (then `sources.push_readings`)."""
         return parse(m.IntegrationGetResponse, await self._t.request("getIntegration"))
+
+    async def push(
+        self, body: Mapping[str, Any] | None = None, /, *, signing_secret: str | None = None, **fields: Any
+    ) -> m.IntegrationReadingsPostResponse:
+        """The readings webhook (ADR 0071): one reading's fields (`sense="temperature", value=21.5`) or `readings=[...]`.
+
+        Values may be text and a known number sense's unit may be left out. With `signing_secret`, the
+        push is signed (`Senseplane-Signature`), as a token with signing on needs.
+        """
+        data = dict(body) if body is not None else dict(fields)
+        headers = None
+        if signing_secret:
+            headers = {"senseplane-signature": sign_webhook(json.dumps(data, separators=(",", ":")), signing_secret)}
+        res = await self._t.request("pushWebhookReadings", body=data, headers=headers)
+        return parse(m.IntegrationReadingsPostResponse, res)
 
 
 class AsyncCapture(_Resource):

@@ -484,6 +484,82 @@ export interface ClipSegmentsTable {
   enc_iv: Buffer | null;
 }
 
+type Nullable<T> = ColumnType<T | null, T | string | null | undefined, T | string | null>;
+
+export interface StoriesTable {
+  id: string;
+  account_id: string;
+  title: string | null;
+  mode: "labelled" | "fast";
+  status: ColumnType<"queued" | "rendering" | "ready" | "failed", "queued" | "rendering" | "ready" | "failed" | undefined, "queued" | "rendering" | "ready" | "failed">;
+  error: string | null;
+  created_by: string;
+  created_by_agent: string | null;
+  duration_ms: number | null;
+  bytes: ColumnType<string, number | string | bigint | undefined, number | string | bigint>;
+  has_audio: ColumnType<boolean, boolean | undefined, boolean>;
+  due_at: Nullable<Date>;
+  claimed_until: Nullable<Date>;
+  attempts: ColumnType<number, number | undefined, number>;
+  created_at: Timestamp;
+  ready_at: Nullable<Date>;
+}
+
+export interface StoryPiecesTable {
+  story_id: string;
+  seq: number;
+  account_id: string;
+  source_id: string;
+  source_name: string;
+  from_at: ColumnType<Date, Date | string, Date | string>;
+  to_at: ColumnType<Date, Date | string, Date | string>;
+  event_id: string | null;
+  audio: boolean;
+  recorded_ms: number | null;
+  offset_ms: number | null;
+}
+
+export interface StorySegmentsTable {
+  story_id: string;
+  seq: number;
+  account_id: string;
+  piece: number | null;
+  key: string;
+  init_key: string;
+  start_at: ColumnType<Date, Date | string, Date | string>;
+  duration_ms: number;
+  /** The id the segment's AES key comes from (ADR 0066): the camera for copies, the story itself for a render. */
+  key_source: string;
+  strip_audio: ColumnType<boolean, boolean | undefined, boolean>;
+  enc_version: number | null;
+  enc_iv: Buffer | null;
+}
+
+export type FollowStatus = "queued" | "running" | "done" | "failed" | "refused";
+
+export interface FollowsTable {
+  id: string;
+  account_id: string;
+  status: ColumnType<FollowStatus, FollowStatus | undefined, FollowStatus>;
+  error: string | null;
+  reference: ColumnType<Record<string, unknown>, string, string>;
+  source_ids: string[];
+  from_at: ColumnType<Date, Date | string, Date | string>;
+  to_at: ColumnType<Date, Date | string, Date | string>;
+  make_story: ColumnType<boolean, boolean | undefined, boolean>;
+  story_id: string | null;
+  result: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  frames_examined: ColumnType<number, number | undefined, number>;
+  model_calls: ColumnType<number, number | undefined, number>;
+  created_by: string;
+  created_by_agent: string | null;
+  due_at: Nullable<Date>;
+  claimed_until: Nullable<Date>;
+  attempts: ColumnType<number, number | undefined, number>;
+  created_at: Timestamp;
+  finished_at: Nullable<Date>;
+}
+
 export interface AccountKeysTable {
   account_id: string;
   version: number;
@@ -727,6 +803,10 @@ export interface Database {
   sensor_readings: SensorReadingsTable;
   clips: ClipsTable;
   clip_segments: ClipSegmentsTable;
+  stories: StoriesTable;
+  story_pieces: StoryPiecesTable;
+  story_segments: StorySegmentsTable;
+  follows: FollowsTable;
   accounts: AccountsTable;
   sources: SourcesTable;
   api_keys: ApiKeysTable;

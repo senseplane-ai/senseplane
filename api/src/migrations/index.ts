@@ -43,15 +43,15 @@ import * as m0038 from "./0038_device_command_checks.js";
 import * as m0040 from "./0040_privacy_blur.js";
 import * as m0041 from "./0041_blurred_only_grants.js";
 import * as m0042 from "./0042_blur_followups.js";
-import * as m0043 from "./0043_speak.js";
-import * as m0044 from "./0044_speak_clip_retention.js";
-import * as m0045 from "./0045_speak_followups.js";
 import * as m0049 from "./0049_signed_readings_webhook.js";
 import * as m0050 from "./0050_bridge_mqtt_publish.js";
+import * as m0051 from "./0051_speak.js";
+import * as m0052 from "./0052_speak_clip_retention.js";
+import * as m0053 from "./0053_speak_followups.js";
 
 /** Migrations are imported explicitly so they ship inside the package. */
 export const migrationProvider: MigrationProvider = {
   async getMigrations(): Promise<Record<string, Migration>> {
-    return { "0001_accounts_and_sources": m0001, "0002_ingest_keys_segments": m0002, "0003_clips_and_retention": m0003, "0004_events_webhooks_readings": m0004, "0005_watches_memory_usage": m0005, "0006_demo_sessions": m0006, "0007_watch_expiry": m0007, "0008_agents_grants_audit_metering": m0008, "0009_view_changed": m0009, "0010_encrypted_webhook_secrets": m0010, "0011_event_verified": m0011, "0012_idempotency_keys": m0012, "0013_users_and_sign_in": m0013, "0014_retention_modes": m0014, "0015_capture_link_binding": m0015, "0016_whip_ingest_tokens": m0016, "0017_conversations": m0017, "0018_live_view_sessions": m0018, "0019_watch_destinations": m0019, "0020_team_and_workspaces": m0020, "0021_bridges_and_integrations": m0021, "0022_connected_apps": m0022, "0023_media_feeds": m0023, "0024_activities": m0024, "0025_scheduled_watches": m0025, "0026_readings_partitions_in_utc": m0026, "0027_background_jobs": m0027, "0028_channels": m0028, "0029_readings_beyond_climate": m0029, "0030_bridge_sensors": m0030, "0031_bridge_pairing": m0031, "0032_bridge_links": m0032, "0033_bridge_commands": m0033, "0034_bridge_cameras_found": m0034, "0035_encryption_at_rest": m0035, "0036_key_rotation": m0036, "0037_device_control": m0037, "0038_device_command_checks": m0038, "0040_privacy_blur": m0040, "0041_blurred_only_grants": m0041, "0042_blur_followups": m0042, "0043_speak": m0043, "0044_speak_clip_retention": m0044, "0045_speak_followups": m0045, "0049_signed_readings_webhook": m0049, "0050_bridge_mqtt_publish": m0050 };
+    return { "0001_accounts_and_sources": m0001, "0002_ingest_keys_segments": m0002, "0003_clips_and_retention": m0003, "0004_events_webhooks_readings": m0004, "0005_watches_memory_usage": m0005, "0006_demo_sessions": m0006, "0007_watch_expiry": m0007, "0008_agents_grants_audit_metering": m0008, "0009_view_changed": m0009, "0010_encrypted_webhook_secrets": m0010, "0011_event_verified": m0011, "0012_idempotency_keys": m0012, "0013_users_and_sign_in": m0013, "0014_retention_modes": m0014, "0015_capture_link_binding": m0015, "0016_whip_ingest_tokens": m0016, "0017_conversations": m0017, "0018_live_view_sessions": m0018, "0019_watch_destinations": m0019, "0020_team_and_workspaces": m0020, "0021_bridges_and_integrations": m0021, "0022_connected_apps": m0022, "0023_media_feeds": m0023, "0024_activities": m0024, "0025_scheduled_watches": m0025, "0026_readings_partitions_in_utc": m0026, "0027_background_jobs": m0027, "0028_channels": m0028, "0029_readings_beyond_climate": m0029, "0030_bridge_sensors": m0030, "0031_bridge_pairing": m0031, "0032_bridge_links": m0032, "0033_bridge_commands": m0033, "0034_bridge_cameras_found": m0034, "0035_encryption_at_rest": m0035, "0036_key_rotation": m0036, "0037_device_control": m0037, "0038_device_command_checks": m0038, "0040_privacy_blur": m0040, "0041_blurred_only_grants": m0041, "0042_blur_followups": m0042, "0049_signed_readings_webhook": m0049, "0050_bridge_mqtt_publish": m0050, "0051_speak": m0051, "0052_speak_clip_retention": m0052, "0053_speak_followups": m0053 };
   },
 };

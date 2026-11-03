@@ -21,11 +21,14 @@ import (
 
 // MatterBLE is the app's Bluetooth connection to one Matter device (Android's GATT client).
 type MatterBLE interface {
-	// Connect connects to the device at this Bluetooth address, finds the
-	// Matter service, subscribes to its C2 characteristic's indications
-	// (passing each to inbox.Indicated, in order) and returns the ATT MTU.
+	// Connect connects to the device at this Bluetooth address, asks for a
+	// larger MTU, finds the Matter service and returns the ATT MTU. Each
+	// indication from C2 goes to inbox.Indicated, in order.
 	Connect(address string, inbox *BLEInbox) (int, error)
-	// Write writes one value to C1 (a write with response) and returns once it is written.
+	// Write writes one value to C1 (a write with response) and returns once
+	// it is written. The first is BTP's handshake request: once it is
+	// written, subscribe to C2's indications (Matter's order: devices answer
+	// the handshake when the subscription comes).
 	Write(data []byte) error
 	// Close disconnects.
 	Close()

@@ -218,3 +218,89 @@ def test_through_the_worker_requests(follower, scene):
     assert w.do_follow_reference({"account_id": "acc", "source_id": "cam", "jpeg_b64": b64(person),
                                   "box": [px1 / W, py1 / H, px2 / W, py2 / H]}) == {"error": "person"}
     assert w.do_follow_scan({"account_id": "acc", "source_id": "cam", "description": "a box", "frames": []}) == {"error": "no_model"}
+
+
+def _dim_half_person():
+    """The doorstep person, darkened to a third and with their lower half hidden: what the guard must still catch."""
+    frame = first_frame("doorstep-parcel-640x360.mp4", 12)
+    strict = YoloxDetector("yolox_s_int8", score_threshold=0.3)
+    p = next(d for d in strict.detect(frame) if d.label == "person").box
+    x1, y1, x2, y2 = (int(v) for v in p)
+    dim = (frame.astype(np.float32) * 0.33).astype(np.uint8)
+    mid = (y1 + y2) // 2
+    dim[mid:y2, x1:x2] = dim[max(0, y1 - (y2 - mid)):y1, x1:x2][: y2 - mid] if y1 - (y2 - mid) >= 0 else 40
+    return dim, (x1, y1, x2, y2), mid
+
+
+def test_refuses_a_dim_half_hidden_person_and_half_a_person_with_background(follower):
+    dim, (x1, y1, x2, y2), mid = _dim_half_person()
+    # Half the person and as much background beside it.
+    w = x2 - x1
+    with pytest.raises(PersonRefused):
+        follower.reference(dim, (float(x1), float(y1), float(min(W, x2 + w)), float(mid)))
+    # The upper half alone.
+    with pytest.raises(PersonRefused):
+        follower.reference(dim, (float(x1), float(y1), float(x2), float(mid)))
+
+
+def test_never_embeds_a_candidate_on_a_person(follower):
+    dim, (x1, y1, x2, y2), _mid = _dim_half_person()
+    frames = [first_frame("doorstep-parcel-640x360.mp4", 0.5)] * 3 + [dim]
+    cands = follower.candidates(frames)[-1]
+    from senseplane_brain.follow import inside
+
+    assert all(inside(c, (x1, y1, x2, y2)) < 0.3 and inside((x1, y1, x2, y2), c) < 0.3 for c in cands)
+
+
+def test_masks_apply_to_whole_frames_and_nothing_behind_them_is_reported(follower, scene):
+    _, frame, box = scene["a"][2]
+    ref, _ = follower.reference(frame, box)
+    right_half = [[[0.5, 0.0], [1.0, 0.0], [1.0, 1.0], [0.5, 1.0]]]
+    frames = [f for _, f, _ in scene["c"]]
+    seen_shapes = []
+
+    def redact(f):
+        seen_shapes.append(f.shape)
+        return f
+
+    open_, _ = follower.scan(ref, frames, budget=0)
+    masked, _ = follower.scan(ref, frames, budget=0, masks=right_half, redact=redact)
+    assert any(s.box[0] >= W / 2 for s in open_)
+    assert masked and all((s.box[0] + s.box[2]) / 2 < W / 2 for s in masked)
+    # Blurring is given whole frames (faces and masks found in context), never crops.
+    assert all(sh == frames[0].shape for sh in seen_shapes)
+
+
+class _Scripted:
+    """Says yes to the description and to "is it a person", and records the prompts."""
+
+    def __init__(self, person: bool):
+        self.person, self.prompts = person, []
+
+    def ask(self, rgb, question, meta=None, before=None):
+        self.prompts.append(question)
+        if "person" in question and "Does this picture show" not in question and "same individual" not in question:
+            return Answer(self.person, "", 0.9)
+        return Answer(True, "", 0.9)
+
+
+def test_a_described_thing_the_model_calls_a_person_is_never_the_reference(scene):
+    frames = [f for _, f, _ in scene["c"][24:30]]
+    for person, found in ((True, False), (False, True)):
+        model = _Scripted(person)
+        f = Follower(YoloxDetector("yolox_s_int8", score_threshold=0.3), ImageEmbedder(), model)
+        ref, _, calls = f.find_described(frames, "the brown box", budget=6)
+        assert (ref is not None) is found
+        assert calls <= 6
+        assert all("If what is shown is a person" in q for q in model.prompts if "Does this picture show" in q)
+
+
+def test_the_same_object_question_says_a_person_is_no(scene):
+    model = _Scripted(False)
+    f = Follower(YoloxDetector("yolox_s_int8", score_threshold=0.3), ImageEmbedder(), model)
+    _, frame, box = scene["a"][2]
+    ref, _ = f.reference(frame, box, ask_model=False)
+    f.score = lambda r, crops: np.full(len(crops), 0.75, dtype=np.float32)  # every match a close call
+    f.scan(ref, [fr for _, fr, _ in scene["c"]], budget=2)
+    same = [q for q in model.prompts if "same individual" in q]
+    assert same and all("If what is shown is a person" in q for q in same)

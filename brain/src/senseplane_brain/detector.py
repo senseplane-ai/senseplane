@@ -70,7 +70,9 @@ class YoloxDetector:
             strides.append(np.full((n * n, 1), stride))
         return np.concatenate(grids).astype(np.float32), np.concatenate(strides).astype(np.float32)
 
-    def detect(self, rgb: np.ndarray) -> list[Detection]:
+    def detect(self, rgb: np.ndarray, score_threshold: float | None = None) -> list[Detection]:
+        """`score_threshold` overrides the detector's for one call (the follow person guard looks much lower)."""
+        threshold = self.score_threshold if score_threshold is None else score_threshold
         h, w = rgb.shape[:2]
         ratio = min(self.size / h, self.size / w)
         resized = cv2.resize(rgb, (int(w * ratio), int(h * ratio)), interpolation=cv2.INTER_LINEAR)
@@ -83,7 +85,7 @@ class YoloxDetector:
         scores = out[:, 4:5] * out[:, 5:]
         cls = scores.argmax(1)
         conf = scores[np.arange(len(cls)), cls]
-        keep = (conf >= self.score_threshold) & np.isin(cls, list(LABELS))
+        keep = (conf >= threshold) & np.isin(cls, list(LABELS))
         if not keep.any():
             return []
         b, conf, cls = out[keep, :4], conf[keep], cls[keep]
@@ -93,7 +95,7 @@ class YoloxDetector:
         for label in set(labels.tolist()):
             idx = np.where(labels == label)[0]
             boxes = [[float(x1), float(y1), float(x2 - x1), float(y2 - y1)] for x1, y1, x2, y2 in xyxy[idx]]
-            kept = cv2.dnn.NMSBoxes(boxes, conf[idx].tolist(), self.score_threshold, self.nms_threshold)
+            kept = cv2.dnn.NMSBoxes(boxes, conf[idx].tolist(), threshold, self.nms_threshold)
             for k in np.array(kept).flatten():
                 x1, y1, x2, y2 = xyxy[idx[k]]
                 result.append(Detection(label, float(conf[idx[k]]), (max(0.0, float(x1)), max(0.0, float(y1)), min(float(w), float(x2)), min(float(h), float(y2)))))

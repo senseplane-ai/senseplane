@@ -548,6 +548,10 @@ class Worker:
             self._follower = Follower(self.confirm or self.detector, ImageEmbedder(), self.model)
         return self._follower
 
+    def follow_masks(self, key: str) -> list:
+        """A camera's privacy masks (normalised polygons), applied to every whole frame a follow looks at."""
+        return list((self.configs.get(key) or {}).get("privacy_masks") or [])
+
     def do_follow_reference(self, req):
         """The reference for a follow from a box on a frame; refused when it is a person."""
         from .follow import PersonRefused
@@ -563,7 +567,7 @@ class Worker:
         try:
             # `checked`: the API asked when the follow was made; the job only needs the vector again (no second model call).
             ref, calls = self.follower().reference(rgb, (box[0] * w, box[1] * h, box[2] * w, box[3] * h), {"account": req["account_id"]}, ask_model=not req.get("checked"),
-                                                   redact=lambda c: self.redact(key, c))
+                                                   redact=lambda f: self.redact(key, f), masks=self.follow_masks(key))
         except PersonRefused:
             return {"error": "person"}
         except ValueError:
@@ -583,7 +587,8 @@ class Worker:
         budget = max(0, int(req.get("budget") or 0))
         key = f"{req['account_id']}.{req['source_id']}"
         meta = {"account": req["account_id"]}
-        redact = lambda c: self.redact(key, c)  # noqa: E731 - what goes to the model is blurred as the camera asks
+        redact = lambda frame: self.redact(key, frame)  # noqa: E731 - whole frames, blurred as the camera asks, before anything is cropped
+        masks = self.follow_masks(key)
         f = self.follower()
         calls = 0
         found = None
@@ -592,13 +597,16 @@ class Worker:
         elif req.get("description"):
             if f.model is None:
                 return {"error": "no_model"}
-            ref, _, calls = f.find_described(frames, str(req["description"])[:300], budget, meta, redact=redact)
+            ref, _, calls = f.find_described(frames, str(req["description"])[:300], budget, meta, redact=redact,
+                                             person_check=req.get("person_check", True) is not False, masks=masks)
             if ref is None:
                 return {"sightings": [], "frames_examined": len(frames), "model_calls": calls}
             found = ref.to_wire()
+            if req.get("find_only"):
+                return {"reference": found, "model_calls": calls}
         else:
             return {"error": "no_reference"}
-        sightings, used = f.scan(ref, frames, budget - calls, meta, redact=redact)
+        sightings, used = f.scan(ref, frames, budget - calls, meta, redact=redact, masks=masks)
         out = []
         for s in sightings:
             h, w = frames[s.index].shape[:2]

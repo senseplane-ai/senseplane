@@ -1292,7 +1292,7 @@
     },
     "follow_scan": {
       "direction": "api \u2192 brain (ADR 0070)",
-      "description": "Where the reference is in a batch of frames from one camera: the best match per frame. With `description` and no reference, the first candidate the vision model says matches becomes the reference (returned). Candidates are never people.",
+      "description": "Where the reference is in a batch of frames from one camera (privacy masks already black; the brain blacks them out again on each whole frame): the best match per frame. With `description` and no reference, the first candidate the vision model says matches (and, with person_check, says is not a person) becomes the reference; with find_only that is all it does. Candidates overlapping a person (a low-score detector pass) are never compared.",
       "request": {
         "type": "object",
         "required": [
@@ -1363,6 +1363,14 @@
                 }
               }
             }
+          },
+          "find_only": {
+            "type": "boolean",
+            "description": "With description: only find the reference (the follow's first pass)"
+          },
+          "person_check": {
+            "type": "boolean",
+            "description": "With description: ask the model whether a match is a person (default true)"
           }
         }
       },

@@ -511,6 +511,15 @@ export function createSpeech(deps: SpeakDeps) {
     const open = await data.withAccount(accountId, (s) => s.db.selectFrom("speak_messages").selectAll().where("live_session_id", "=", sessionId).where("status", "=", "playing").executeTakeFirst());
     if (!open) return;
     const ms = Math.max(0, at.getTime() - new Date(open.created_at).getTime());
+    if (open.bridge_command_id) {
+      // A press for a box that never took it: nobody heard it, and the box won't get it later.
+      const missed = await data.withAccount(accountId, (s) => s.db.updateTable("bridge_commands").set({ status: "expired", args_sealed: null, finished_at: new Date() })
+        .where("id", "=", open.bridge_command_id!).where("status", "=", "pending").executeTakeFirst());
+      if (missed.numUpdatedRows) {
+        await finish(accountId, open.id, "offline", `${cap(name)}'s box didn't take the press, so nobody heard it. The box may be offline.`, 503, undefined, name, { duration_ms: ms, finished_at: at });
+        return;
+      }
+    }
     await finish(accountId, open.id, "played", null, 200, undefined, name, { duration_ms: ms, finished_at: at });
   }
 

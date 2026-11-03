@@ -410,6 +410,13 @@ describe("talk-back", () => {
     expect(plane.talkStopped.length).toBe(stops);
     const after = (await call(owner, "GET", `/v1/speak-messages?source=${ipcam}`)).json().data as { kind: string; status: string }[];
     expect(after.filter((m) => m.kind === "person").map((m) => m.status).sort()).toEqual(["failed", "played"]);
+
+    // A press the box never took (offline): nobody heard it, and the box doesn't get it later.
+    await roomEvent(ipcam, "producer.added", { identity, producerId: "p-ip3", kind: "audio", source: "talkback" });
+    await roomEvent(ipcam, "producer.removed", { identity, producerId: "p-ip3", kind: "audio", source: "talkback" });
+    expect((await call(bridge.token, "GET", "/v1/bridge/commands")).json().data).toEqual([]);
+    const missed = (await call(owner, "GET", `/v1/speak-messages?source=${ipcam}`)).json().data as { kind: string; status: string; message: string }[];
+    expect(missed.find((m) => m.kind === "person" && m.status === "offline")).toMatchObject({ message: expect.stringMatching(/nobody heard it/) });
     await clear();
   });
 

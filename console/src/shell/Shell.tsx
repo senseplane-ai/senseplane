@@ -38,6 +38,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     { to: "/watches", label: "Watches", icon: "watch", match: starts("/watches") },
     { to: "/search", label: "Search history", icon: "search", match: starts("/search") },
     { to: "/stories", label: "Stories", icon: "play", match: starts("/stories") },
+    { to: "/workflows", label: "Workflows", icon: "flow", match: starts("/workflows") },
   ];
   const admin: NavItem[] = [
     { to: "/agents", label: "Agents", icon: "agents", match: starts("/agents") },

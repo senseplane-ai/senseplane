@@ -10,4 +10,5 @@ export { WebhooksPage } from "./WebhooksPage";
 export { UsagePage } from "./UsagePage";
 export { SettingsPage } from "./SettingsPage";
 export { StoriesPage } from "./StoriesPage";
+export { WorkflowsPage } from "./WorkflowsPage";
 export type { PageProps as AdminPageProps } from "./kit";

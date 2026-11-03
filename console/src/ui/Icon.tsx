@@ -34,6 +34,7 @@ const paths = {
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   check: <path d="M5 12l5 5L20 7" />,
   arrowLeft: <path d="M19 12H5M11 18l-6-6 6-6" />,
+  flow: <><rect x="3" y="4" width="7" height="5" rx="1" /><rect x="14" y="15" width="7" height="5" rx="1" /><path d="M6.5 9v4a2 2 0 0 0 2 2H14" /></>,
 } satisfies Record<string, ReactNode>;
 
 const filled = {

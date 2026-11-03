@@ -22,7 +22,7 @@ describe("Shell", () => {
     }));
     const nav = screen.getByRole("navigation", { name: "Console" });
     const labels = within(nav).getAllByRole("link").map((a) => a.textContent);
-    expect(labels).toEqual(["Ask", "Cameras1/2", "Devices", "Live view", "Events4", "Watches", "Search history", "Stories", "Agents", "Webhooks", "Usage", "Settings"]);
+    expect(labels).toEqual(["Ask", "Cameras1/2", "Devices", "Live view", "Events4", "Watches", "Search history", "Stories", "Workflows", "Agents", "Webhooks", "Usage", "Settings"]);
     expect(within(nav).getByRole("link", { name: /Ask/ })).toHaveAttribute("aria-current", "page");
     expect(screen.getByLabelText("1 of 2 online")).toBeInTheDocument();
     expect(screen.getByLabelText("4 new")).toBeInTheDocument();

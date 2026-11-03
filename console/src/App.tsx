@@ -32,6 +32,7 @@ const ADMIN_ROUTES = {
   "/watches": Admin.WatchesPage,
   "/search": Admin.SearchPage,
   "/stories": Admin.StoriesPage,
+  "/workflows": Admin.WorkflowsPage,
   "/agents": Admin.AgentsPage,
   "/webhooks": Admin.WebhooksPage,
   "/usage": Admin.UsagePage,

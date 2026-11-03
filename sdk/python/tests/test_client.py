@@ -153,7 +153,7 @@ def test_idempotency_keys_only_where_the_api_takes_them() -> None:
     with pytest.raises(ValueError, match="idempotency"):
         client._transport.request("askSource", path={"id": "src_1"}, body={}, idempotency_key="k")
     idempotent = sorted(op for op, o in OPERATIONS.items() if o.idempotent)
-    assert idempotent == ["createClip", "createGrant", "createSource", "createWatch", "createWebhook"]
+    assert idempotent == ["createClip", "createFollow", "createGrant", "createSource", "createStory", "createWatch", "createWebhook"]
 
 
 def test_retries_safe_requests_with_backoff(no_sleep: list[float]) -> None:

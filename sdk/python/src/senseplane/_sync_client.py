@@ -686,6 +686,51 @@ class Clips(_Resource):
         return self._t.paginate("listClips", m.ClipsGetResponse, query={"limit": limit})
 
 
+class Stories(_Resource):
+    """One video from many moments across cameras (ADR 0070), rendered in the background: poll `get` until `ready`."""
+
+    def create(self, body: Body = None, /, *, idempotency_key: str | None = None, **fields: Any) -> m.Story:
+        """`create(moments=[{"event": id}, {"source": id, "from": ..., "to": ...}])` or `create(search={"q": "the courier"})`."""
+        data = self._t.request(
+            "createStory", body=body_of(m.StoryCreate, body, fields), idempotency_key=idempotency_key
+        )
+        return parse(m.Story, data)
+
+    def get(self, id: str) -> m.Story:
+        return parse(m.Story, self._t.request("getStory", path={"id": id}))
+
+    def delete(self, id: str) -> None:
+        self._t.request("deleteStory", path={"id": id})
+
+    def list(self, *, limit: int | None = None) -> list[m.Story]:
+        return parse(m.StoriesGetResponse, self._t.request("listStories", query={"limit": limit})).data
+
+    def link(self, id: str, *, expires_in_s: int | None = None) -> m.StoriesIdLinkPostResponse:
+        """A longer-lived signed link to share a ready story (at most 7 days)."""
+        body = {"expires_in_s": expires_in_s} if expires_in_s else {}
+        return parse(m.StoriesIdLinkPostResponse, self._t.request("createStoryLink", path={"id": id}, body=body))
+
+
+class Follows(_Resource):
+    """Following an object or a pet across cameras, never a person (ADR 0070): poll `get` until `done`."""
+
+    def create(self, body: Body = None, /, *, idempotency_key: str | None = None, **fields: Any) -> m.Follow:
+        """`create(reference={"event": id, "box": [x1, y1, x2, y2]}, from_=..., to=...)`."""
+        data = self._t.request(
+            "createFollow", body=body_of(m.FollowCreate, body, fields), idempotency_key=idempotency_key
+        )
+        return parse(m.Follow, data)
+
+    def get(self, id: str) -> m.Follow:
+        return parse(m.Follow, self._t.request("getFollow", path={"id": id}))
+
+    def delete(self, id: str) -> None:
+        self._t.request("deleteFollow", path={"id": id})
+
+    def list(self, *, limit: int | None = None) -> list[m.Follow]:
+        return parse(m.FollowsGetResponse, self._t.request("listFollows", query={"limit": limit})).data
+
+
 class Conversations(_Resource):
     """Ask about what your sources saw and heard (ADR 0041). Answers cite moments as [1], [2], …"""
 
@@ -995,6 +1040,8 @@ class Senseplane:
         self.inbox = Inbox(transport)
         self.events = Events(transport)
         self.clips = Clips(transport)
+        self.stories = Stories(transport)
+        self.follows = Follows(transport)
         self.conversations = Conversations(transport)
         self.memory = Memory(transport)
         self.activity = Activity(transport)

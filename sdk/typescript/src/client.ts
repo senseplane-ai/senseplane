@@ -13,6 +13,8 @@ export type Watch = S["Watch"];
 export type Trigger = S["Trigger"];
 export type Event = S["Event"];
 export type Clip = S["Clip"];
+export type Story = S["Story"];
+export type Follow = S["Follow"];
 export type Grant = S["Grant"];
 export type Agent = S["Agent"];
 export type Webhook = S["Webhook"];
@@ -184,6 +186,25 @@ export class Senseplane {
     get: (id: string) => unwrap(this.raw.GET("/clips/{id}", { params: { path: { id } } })),
     delete: (id: string) => unwrap(this.raw.DELETE("/clips/{id}", { params: { path: { id } } })),
     list: () => paginate<Clip>((cursor) => unwrap(this.raw.GET("/clips", { params: { query: { cursor } } }))),
+  };
+
+  /** One video from many moments across cameras, rendered in the background (ADR 0070): poll `get` until `ready`. */
+  readonly stories = {
+    create: (body: S["StoryCreate"], opts?: CreateOptions) => unwrap(this.raw.POST("/stories", { body, ...idem(opts) })),
+    get: (id: string) => unwrap(this.raw.GET("/stories/{id}", { params: { path: { id } } })),
+    delete: (id: string) => unwrap(this.raw.DELETE("/stories/{id}", { params: { path: { id } } })),
+    list: () => unwrap(this.raw.GET("/stories")).then((r) => r.data as Story[]),
+    /** A longer-lived signed link to share a ready story (at most 7 days). */
+    link: (id: string, expiresInS?: number) =>
+      unwrap(this.raw.POST("/stories/{id}/link", { params: { path: { id } }, body: expiresInS ? { expires_in_s: expiresInS } : {} })),
+  };
+
+  /** Following an object or a pet across cameras, never a person (ADR 0070): poll `get` until `done`. */
+  readonly follows = {
+    create: (body: S["FollowCreate"], opts?: CreateOptions) => unwrap(this.raw.POST("/follows", { body, ...idem(opts) })),
+    get: (id: string) => unwrap(this.raw.GET("/follows/{id}", { params: { path: { id } } })),
+    delete: (id: string) => unwrap(this.raw.DELETE("/follows/{id}", { params: { path: { id } } })),
+    list: () => unwrap(this.raw.GET("/follows")).then((r) => r.data as Follow[]),
   };
 
   /** Ask about what your sources saw and heard (ADR 0041). Answers cite moments as [1], [2], … */

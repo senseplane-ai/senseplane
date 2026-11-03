@@ -10,7 +10,7 @@ import { sql } from "kysely";
 import type { DataAccess } from "./data/access.js";
 import { ApiError } from "./errors.js";
 
-export const IDEMPOTENT_ROUTES = new Set(["POST /v1/sources", "POST /v1/watches", "POST /v1/clips", "POST /v1/webhooks", "POST /v1/grants"]);
+export const IDEMPOTENT_ROUTES = new Set(["POST /v1/sources", "POST /v1/watches", "POST /v1/clips", "POST /v1/webhooks", "POST /v1/grants", "POST /v1/stories", "POST /v1/follows"]);
 
 declare module "fastify" {
   interface FastifyRequest {

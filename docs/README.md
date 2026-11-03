@@ -30,6 +30,9 @@ already have; your agent sees, hears and remembers what happens.
   digest watches, and packs.
 - **[Telegram](telegram.md):** watch alerts in a Telegram chat, and questions
   asked from it.
+- **[Sensors webhook](sensors-webhook.md):** readings from IFTTT, n8n,
+  Zapier, ESPHome, Shelly scripts, Home Assistant and curl, optionally
+  signed.
 
 ## Run it yourself
 

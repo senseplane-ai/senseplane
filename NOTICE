@@ -15,6 +15,8 @@ This product depends on third-party software, including:
 - Prometheus client_golang (Apache License 2.0)
 - Pion WebRTC (MIT License), Copyright (c) 2018 Pion LLC (the bridge's WHIP client)
 - Gorilla WebSocket (BSD 2-Clause License), Copyright (c) 2013 The Gorilla WebSocket Authors (the bridge's Home Assistant client)
+- mqtt-go (Apache License 2.0), Copyright 2019 The mqtt-go authors (the bridge's MQTT client);
+  the bridge's tests run Mochi MQTT (MIT License) as an in-process broker
 - sdp-transform (MIT License), Copyright (c) 2013 Eirik Albrigtsen (WHIP SDP negotiation)
 - ioredis (MIT License), Copyright (c) 2015-2022 Zihua Li (Valkey client)
 - jpeg-js (BSD 3-Clause License), Copyright (c) 2014, Eugene Ware (privacy masks on analysis frames)

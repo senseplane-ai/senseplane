@@ -39,6 +39,11 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--box-name` | `SENSEPLANE_BOX_NAME` | The name a person sees when pairing (default `Home Assistant`) |
 | `--matter-url` | `MATTER_URL` | Read Matter devices through this Matter Server (`ws://localhost:5580/ws`) |
 | `--find-cameras` | `SENSEPLANE_FIND_CAMERAS` | Look for ONVIF cameras on the network to pick in the console (default on; `false` turns it off) |
+| `--mqtt-url` | `MQTT_URL` | Read sensors from, and publish events to, this MQTT broker (`mqtt://`, `mqtts://`, `ws://`, `wss://`); off when empty |
+| `--mqtt-username`, `--mqtt-password` | `MQTT_USERNAME`, `MQTT_PASSWORD` | The broker's credentials |
+| `--mqtt-topic` (repeatable) | `MQTT_TOPICS` (comma-separated) | A plain topic to read, `TOPIC=SENSE[:UNIT][@JSON.PATH]` |
+| `--mqtt-discovery-prefix` | `MQTT_DISCOVERY_PREFIX` | Home Assistant's discovery prefix (default `homeassistant`) |
+| `--mqtt-prefix` | `MQTT_PREFIX` | Where the box publishes its own states (default `senseplane`) |
 
 Passwords in RTSP URLs never appear in logs or in what the bridge reports.
 
@@ -55,6 +60,38 @@ Home Assistant service only for a `device_control` command a person asked for
 action; water heaters and anything heating or cooking are never switched.
 Matter devices are switched the same way, through the Matter Server or the
 built-in controller.
+
+## MQTT
+
+With `--mqtt-url` (or the add-on's `mqtt` option, which uses the Mosquitto
+add-on through the Supervisor), the bridge connects to an MQTT broker
+(ADR 0071; the client is `github.com/at-wat/mqtt-go`, Apache-2.0):
+
+- **In.** It reads Home Assistant MQTT discovery
+  (`homeassistant/<component>/[<node>/]<object>/config`, as ESPHome, Tasmota,
+  Zigbee2MQTT and Shelly send it) for sensors, binary sensors, switches,
+  lights, fans, locks, covers, alarm panels and events, maps their states by
+  the same rules as Home Assistant's entities, and lists them to choose in the
+  console (`mqtt.<component>_<id>`). A `value_template` is read only as a JSON
+  path (`{{ value_json.a.b }}`, with `float`, `int`, `round(n)`, `lower`,
+  `upper`, `trim`); nothing is executed. `--mqtt-topic` adds devices without
+  discovery: `tele/plug/SENSOR=power:watt@ENERGY.Power` (a number in a
+  Senseplane unit), `garage/door=contact` (on/off, open/closed, true/false),
+  `bell/press=doorbell` (an event per message). Only chosen ones are sent. As
+  an add-on, discovered sensors aren't listed unless `mqtt_sensors` is on,
+  since Home Assistant already lists them.
+- **Out.** When **Publish to MQTT** is on for the box in the console (off by
+  default), it long-polls `GET /v1/bridge/outputs` and publishes, retained,
+  in Home Assistant's discovery format: per camera Person, Vehicle and Animal
+  binary sensors (on for a minute after one is seen) and Online; per watch an
+  event entity fired with the event's summary. Topics are named after the box:
+  `homeassistant/binary_sensor/senseplane_<box>_<camera>/person/config`,
+  states under `senseplane/<box>/camera/<camera>/`, and
+  `senseplane/<box>/status` (online, or offline as the will). Turned off, it
+  removes what it published.
+
+It reconnects with backoff (1 s to 1 min) and subscribes and publishes again
+on every connection and when Home Assistant restarts (`homeassistant/status`).
 
 ## Cameras on the network
 

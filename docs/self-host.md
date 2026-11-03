@@ -309,10 +309,22 @@ Go program that runs next to the cameras and connects out to your Senseplane:
 ## Home Assistant and other sensors
 
 Sensor sources take readings pushed with their integration token (`sit_…`):
-from the Home Assistant integration (`integrations/home-assistant`) or any
-script (`POST /v1/sources/{id}/readings`). The token can push readings to its
+from the Home Assistant integration (`integrations/home-assistant`), or from
+IFTTT, n8n, Zapier, ESPHome, Shelly scripts and any script through the
+readings webhook, `POST /v1/integration/readings`, with optional signing
+([recipes](sensors-webhook.md), ADR 0071). The token can push readings to its
 own source and nothing else. Readings follow the same retention days as
 footage (the source's, else the account's).
+
+A box (the bridge, or the Home Assistant add-on) with an MQTT broker
+(`--mqtt-url`, or the add-on's `mqtt` option with the Mosquitto add-on) lists
+the sensors Home Assistant MQTT discovery announces, and plain topics you
+configure, to choose like Home Assistant's. With **Publish to MQTT** turned on
+for the box in the console (off by default), it also publishes each camera's
+person, vehicle and animal sensors, its online state and an event per watch
+in Home Assistant's discovery format. The box fetches these from the API
+(`GET /v1/bridge/outputs`) and connects to the broker; nothing connects to
+the box.
 
 ## TLS and a reverse proxy
 

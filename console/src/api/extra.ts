@@ -122,6 +122,8 @@ export interface Bridge {
   matter?: { connected: boolean; nodes: number } | null;
   /** How many cameras it lists to pick from (ADR 0063); null when it doesn't look. */
   cameras_found?: number | null;
+  /** Whether it publishes this workspace's events to its MQTT broker, for Home Assistant (ADR 0071). */
+  mqtt_publish?: boolean;
 }
 
 /** A camera a box found on its network (ONVIF) or in Home Assistant (ADR 0063). */
@@ -313,6 +315,8 @@ export class ApiExtra {
     pair: (code: string, name?: string) => this.request<{ id: string; name: string }>("POST", "/bridges/pair", { code, ...(name ? { name } : {}) }),
     /** Add a Matter device through the box with the pairing code shared from its own app (ADR 0062). */
     remove: (id: string) => this.request<void>("DELETE", `/bridges/${encodeURIComponent(id)}`),
+    /** Rename a box, or turn publishing to its MQTT broker on or off (ADR 0071). */
+    update: (id: string, body: { name?: string; mqtt_publish?: boolean }) => this.request<Bridge>("PATCH", `/bridges/${encodeURIComponent(id)}`, body),
     addMatter: (id: string, code: string) => this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/matter`, { code }),
     /** Cameras the box found, to pick from (ADR 0063). */
     camerasFound: (id: string) => this.request<{ data: BridgeCameraFound[] }>("GET", `/bridges/${encodeURIComponent(id)}/cameras-found`),

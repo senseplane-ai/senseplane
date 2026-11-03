@@ -406,8 +406,37 @@ export function BoxPage({ id }: { id: string }) {
       {box.matter && <BoxMatter box={box} onAdded={reload} />}
       {box.cameras_found != null && <BoxFound box={box} />}
       <BoxCameras box={box} />
+      <BoxMqtt box={box} />
       <BoxRemove box={box} />
     </div>
+  );
+}
+
+/**
+ * Publishing to MQTT (ADR 0071), off by default: with a broker set on the box, Home Assistant gets each camera's
+ * person, vehicle and animal sensors, its online state and an event per watch, through MQTT discovery.
+ */
+function BoxMqtt({ box }: { box: Bridge }) {
+  const { extra } = useApp();
+  const toast = useToast();
+  const [on, setOn] = useState(!!box.mqtt_publish);
+  const [busy, setBusy] = useState(false);
+  const set = async (v: boolean) => {
+    setBusy(true);
+    try {
+      setOn(!!(await extra.bridges.update(box.id, { mqtt_publish: v })).mqtt_publish);
+      toast(v ? "The box publishes to MQTT." : "The box stopped publishing to MQTT.");
+    } catch (err) {
+      toast(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Publish to MQTT">
+      <Toggle card={false} checked={on} disabled={busy} onChange={(v) => void set(v)} label="Publish this workspace's events to MQTT"
+        hint="For a box with an MQTT broker set (the Home Assistant add-on's MQTT option, or --mqtt-url). Home Assistant then shows each camera's Person, Vehicle and Animal sensors, whether it is online, and an event each time a watch fires. Anyone who can read the broker sees them." />
+    </Card>
   );
 }
 

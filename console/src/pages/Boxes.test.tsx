@@ -73,6 +73,26 @@ it("lists a box's sensors by room and chooses them", async () => {
   await waitFor(() => expect(changes.at(-1)).toEqual({ drop: ["binary_sensor.fridge"] }));
 });
 
+it("turns publishing to MQTT on for a box, off by default", async () => {
+  const patches: unknown[] = [];
+  const f = fakeFetch({
+    "GET /bridges": { data: [BOX] },
+    "GET /bridges/brg_1/entities": { data: [] },
+    "PATCH /bridges/brg_1": async (_u: URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      patches.push(body);
+      return Response.json({ ...BOX, ...body });
+    },
+  });
+  renderWithApp(<BoxPage id="brg_1" />, appData({ fetch: f }));
+  const card = (await screen.findByRole("heading", { name: "Publish to MQTT" })).closest("section")!;
+  const toggle = within(card).getByRole("switch");
+  expect(toggle).toHaveAttribute("aria-checked", "false");
+  fireEvent.click(toggle);
+  await waitFor(() => expect(patches).toEqual([{ mqtt_publish: true }]));
+  await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+});
+
 it("adds an IP camera through the box", async () => {
   let created: unknown;
   const base = fakeFetch({ "GET /bridges": { data: [BOX] }, "GET /bridges/brg_1/entities": { data: [] } });

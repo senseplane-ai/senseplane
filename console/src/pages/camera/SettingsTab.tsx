@@ -8,6 +8,7 @@ import { errorText } from "../../api/extra";
 import { useApp } from "../../shell/AppData";
 import { isVideo } from "../../shell/sources";
 import { Toggle, useToast } from "../../ui";
+import { WebhookSettings } from "./WebhookSettings";
 
 type Retention = "default" | "1" | "7" | "30" | "90" | "fill";
 
@@ -112,6 +113,8 @@ export function SettingsTab({ source }: { source: Source }) {
           <span className="mono cam-res">{res ?? "—"}</span>
         </div>
       )}
+      {/* A box's sensors come through the box; a sensor of its own takes pushes. */}
+      {source.type === "sensor" && !(source as Source & { bridge_id?: string }).bridge_id && <WebhookSettings client={client} source={source} />}
     </div>
   );
 }

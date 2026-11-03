@@ -51,6 +51,7 @@ object BoxHolder {
         b.setSpeaker(PhoneSpeaker(volume = PhoneSpeaker.mediaVolume(context.applicationContext)))
         if (prefs.whipBase.isNotEmpty()) b.setWHIPBase(prefs.whipBase)
         if (prefs.matterAddress.isNotEmpty()) runCatching { b.setMatterAddress(prefs.matterAddress) }
+        b.setMatterStrictRevocation(prefs.matterStrictRevocation)
         box = b
         server = prefs.server
         return b
@@ -84,6 +85,12 @@ object BoxHolder {
     suspend fun sensors(context: Context): List<Sensor> = withContext(Dispatchers.IO) { parseSensors(get(context).sensors()) }
 
     suspend fun choose(context: Context, entityId: String, on: Boolean) = withContext(Dispatchers.IO) { get(context).choose(entityId, on) }
+
+    /** Strict revocation (ADR 0073): kept, and applied to the next Matter device added. */
+    fun setStrictRevocation(context: Context, on: Boolean) {
+        Prefs(context).matterStrictRevocation = on
+        get(context).setMatterStrictRevocation(on)
+    }
 
     /** Adds a Matter device with its pairing code; this can take a minute. */
     suspend fun addMatter(context: Context, code: String): String = withContext(Dispatchers.IO) { get(context).addMatterDevice(code) }

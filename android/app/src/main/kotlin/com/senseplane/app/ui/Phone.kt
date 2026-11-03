@@ -200,6 +200,7 @@ fun SettingsScreen(onBack: () -> Unit, onForgotten: () -> Unit, go: (String) -> 
     var camera by remember { mutableStateOf(prefs.camera) }
     var bridge by remember { mutableStateOf(prefs.bridge) }
     var videoOnMobile by remember { mutableStateOf(prefs.videoOnMobile) }
+    var strictRevocation by remember { mutableStateOf(prefs.matterStrictRevocation) }
     val status by BoxHolder.status.collectAsState()
     fun restart() { BoxHolder.stop(context); BoxHolder.start(context) }
     Screen("Settings", onBack = onBack) {
@@ -215,6 +216,12 @@ fun SettingsScreen(onBack: () -> Unit, onForgotten: () -> Unit, go: (String) -> 
             ToggleRow("Relay cameras and sensors", "IP cameras on this Wi-Fi and Bluetooth sensors.", bridge) { bridge = it; prefs.bridge = it; restart() }
             Divider()
             ToggleRow("Send video on mobile data", "Off: only on Wi-Fi. A camera uses about 20 GB a day.", videoOnMobile) { videoOnMobile = it; prefs.videoOnMobile = it; restart() }
+            Divider()
+            ToggleRow(
+                "Only add Matter devices checked for revocation",
+                "Refuse a new Matter device when its maker's revocation list can't be checked. Off: it is added, and that is noted.",
+                strictRevocation,
+            ) { strictRevocation = it; BoxHolder.setStrictRevocation(context, it) }
         }
         Panel {
             if (status.running || status.pairing) NavRow("Stop Senseplane on this phone", "It stops sending until you start it again") { BoxHolder.stop(context) }

@@ -46,6 +46,11 @@ class Prefs(context: Context) {
         get() = p.getBoolean("video_on_mobile", false)
         set(v) = p.edit().putBoolean("video_on_mobile", v).apply()
 
+    /** Refuse Matter devices whose certificates couldn't be checked for revocation (ADR 0073). */
+    var matterStrictRevocation: Boolean
+        get() = p.getBoolean("matter_strict_revocation", false)
+        set(v) = p.edit().putBoolean("matter_strict_revocation", v).apply()
+
     /** Development only: find every Matter device at this host:port (see Box.setMatterAddress). */
     var matterAddress: String
         get() = p.getString("matter_address", "") ?: ""

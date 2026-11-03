@@ -521,17 +521,23 @@ export function startSpeechWorker(speech: Speech, log: FastifyBaseLogger, interv
   });
 }
 
-/** Speak clips past their camera's retention days (recorded agent audio is personal data, ADR 0069). */
-export async function sweepSpeechClips(data: DataAccess, storage: ObjectStorage, now = new Date()): Promise<number> {
+/**
+ * Clips of what agents and watches said, past retention (recorded agent audio is personal data, ADR 0069):
+ * the camera's retention days, the account's for a camera kept by size, else 7 days; at once for a camera
+ * that no longer exists. Returns how many clips it deleted.
+ */
+export async function sweepSpeechClips(data: DataAccess, storage: ObjectStorage): Promise<number> {
   let deleted = 0;
-  for (const t of await data.retentionTargets()) {
-    const cutoff = new Date(now.getTime() - t.retention_days * 86400_000);
-    const rows = await data.withAccount(t.account_id, (s) => s.db.selectFrom("speak_messages").select(["id", "clip_key"]).where("source_id", "=", t.source_id)
-      .where("clip_key", "is not", null).where("created_at", "<", cutoff).limit(500).execute());
-    if (!rows.length) continue;
-    await storage.deleteMany(rows.map((r) => r.clip_key!));
-    await data.withAccount(t.account_id, (s) => s.db.updateTable("speak_messages").set({ clip_key: null, clip_bytes: null }).where("id", "in", rows.map((r) => r.id)).execute());
+  for (;;) {
+    const rows = (await sql<{ id: string; account_id: string; clip_key: string }>`select * from speak_clips_due(${500})`.execute(data.db())).rows;
+    if (!rows.length) return deleted;
+    await storage.deleteMany(rows.map((r) => r.clip_key));
+    const byAccount = new Map<string, string[]>();
+    for (const r of rows) byAccount.set(r.account_id, [...(byAccount.get(r.account_id) ?? []), r.id]);
+    for (const [accountId, ids] of byAccount) {
+      await data.withAccount(accountId, (s) => s.db.updateTable("speak_messages").set({ clip_key: null, clip_bytes: null }).where("id", "in", ids).execute());
+    }
     deleted += rows.length;
+    if (rows.length < 500) return deleted;
   }
-  return deleted;
 }

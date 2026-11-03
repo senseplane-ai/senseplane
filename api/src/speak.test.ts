@@ -14,7 +14,7 @@ import { coversSense } from "./access.js";
 import { type ApiBus, createApi, handleBrainEvent, type SenseplaneApi } from "./index.js";
 import { createPasswordUser } from "./routes/auth.js";
 import { requiredRole } from "./roles.js";
-import { MAX_SPEAK_MS, SPEAK_PER_MINUTE, chime, durationMs, encodeWav, parseWav, withChime } from "./speak.js";
+import { MAX_SPEAK_MS, SPEAK_PER_MINUTE, chime, durationMs, encodeWav, parseWav, sweepSpeechClips, withChime } from "./speak.js";
 import type { ObjectStorage } from "./storage.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
@@ -432,6 +432,44 @@ describe("talk-back", () => {
     expect(plane.spoken.length).toBe(before);
     said = (await call(owner, "GET", `/v1/speak-messages?source=${phone}`)).json().data[0];
     expect(said).toMatchObject({ status: "refused", requested_by: { kind: "agent", id: agents.Concierge!.id } });
+  });
+
+  it("deletes clips after the camera's retention, the account's for fill mode, 7 days without any, and at once for a camera that's gone", async () => {
+    const day = 86400_000;
+    const mk = async (name: string, set: { retention_days?: number | null; retention_mode?: "days" | "fill" | null }) => {
+      const id = (await call(owner, "POST", "/v1/sources", { name, type: "browser" })).json().id as string;
+      await api.data.withAccount(acc, (s) => s.db.updateTable("sources").set(set).where("id", "=", id).execute());
+      return id;
+    };
+    const days3 = await mk("Three days", { retention_days: 3, retention_mode: "days" });
+    const fill = await mk("By size", { retention_mode: "fill", retention_days: 2 });
+    const plain = await mk("No recording", { retention_days: null, retention_mode: null });
+    await api.data.withAccount(acc, (s) => s.db.updateTable("accounts").set({ retention_days: 10, retention_mode: "days" }).execute());
+    const clip = async (sourceId: string, ageDays: number) => {
+      const id = `spk_retention_${sourceId.slice(-6)}_${ageDays}`;
+      const key = `speak/${acc}/${sourceId}/${id}.wav`;
+      objects.set(key, Buffer.from("wav"));
+      await api.data.withAccount(acc, (s) => s.db.insertInto("speak_messages").values({
+        id, account_id: acc, source_id: sourceId, kind: "agent", actor: "owner:x", actor_kind: "account_key", via: "api", text: "Hi",
+        status: "played", clip_key: key, clip_bytes: 3, created_at: new Date(Date.now() - ageDays * day),
+      }).execute());
+      return key;
+    };
+    const due = [await clip(days3, 4), await clip(fill, 11), await clip(plain, 11), await clip("src_gone_camera000000000000", 0.01)];
+    const kept = [await clip(days3, 2), await clip(fill, 9), await clip(plain, 9)];
+    expect(await sweepSpeechClips(api.data, storage)).toBe(due.length);
+    for (const k of due) expect(objects.has(k)).toBe(false);
+    for (const k of kept) expect(objects.has(k)).toBe(true);
+    const keys = (await api.data.withAccount(acc, (s) => s.db.selectFrom("speak_messages").select("clip_key").where("id", "like", "spk_retention_%").execute())).map((r) => r.clip_key);
+    expect(keys.filter(Boolean).sort()).toEqual([...kept].sort());
+    // No days anywhere: 7.
+    await api.data.withAccount(acc, (s) => s.db.updateTable("accounts").set({ retention_days: null }).execute());
+    const old = await clip(plain, 8);
+    const recent = await clip(plain, 6);
+    await sweepSpeechClips(api.data, storage);
+    expect(objects.has(old)).toBe(false);
+    expect(objects.has(recent)).toBe(true);
+    await api.data.withAccount(acc, (s) => s.db.updateTable("accounts").set({ retention_days: 7 }).execute());
   });
 
   it("puts every use in the audit log: who, the camera, how long, and the text", async () => {

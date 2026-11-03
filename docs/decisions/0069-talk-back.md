@@ -65,9 +65,13 @@ speaker, a reference sample or anything like voice cloning is refused, so an
 agent can't sound like a person it chose. Before the speech the API puts a
 short two-note chime and a pause, so people hear that a machine is about to
 talk. The clip as played (chime and speech, 16-bit WAV) is stored under
-`speak/`, sealed with the account's key like snapshots (ADR 0066), deleted
-after the camera's retention days (in days mode) and with the account, and linked from
-`GET /v1/speak-messages`, so a person can hear exactly what was said.
+`speak/`, sealed with the account's key like snapshots (ADR 0066), and linked
+from `GET /v1/speak-messages`, so a person can hear exactly what was said.
+The retention sweep deletes clips straight from `speak_messages` (migration
+0044): after the camera's retention days, whether or not it records footage
+or sound; for a camera kept by size (fill mode), after the account's days; with
+no days set anywhere, after 7 days. A camera that no longer exists takes its
+clips at the next sweep, and an account's go with it.
 
 **Limits.**
 - 30 seconds a message, chime included (400 `message_too_long`), and at

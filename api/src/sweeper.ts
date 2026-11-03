@@ -56,7 +56,7 @@ export async function sweepOnce(data: DataAccess, storage: ObjectStorage, now = 
   }
   await sweepFill(data, storage, result, storageCap);
   result.readings = await sweepReadings(data, now);
-  result.speech = await sweepSpeechClips(data, storage, now);
+  result.speech = await sweepSpeechClips(data, storage);
   return result;
 }
 

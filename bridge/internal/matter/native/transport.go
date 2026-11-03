@@ -469,7 +469,7 @@ func (e *Exchange) send(protocol uint16, opcode byte, payload []byte, reliable b
 		return err
 	}
 	if !reliable {
-		_, err := e.s.t.conn.WriteToUDP(packet, e.s.peer)
+		_, err := e.s.t.conn.WriteToUDP(packet, e.s.peerAddr())
 		return err
 	}
 	o := &outstanding{counter: counter, acked: make(chan struct{})}
@@ -477,7 +477,7 @@ func (e *Exchange) send(protocol uint16, opcode byte, payload []byte, reliable b
 	e.waiting = o
 	e.mu.Unlock()
 	for attempt := 0; attempt <= maxRetransmits; attempt++ {
-		if _, err := e.s.t.conn.WriteToUDP(packet, e.s.peer); err != nil {
+		if _, err := e.s.t.conn.WriteToUDP(packet, e.s.peerAddr()); err != nil {
 			return err
 		}
 		timer := time.NewTimer(e.s.retransmitTimeout(attempt + 1))
@@ -598,6 +598,13 @@ func (e *Exchange) flushAck() {
 	e.s.sendAck(e.id, e.initiator, ack)
 }
 
+// peerAddr is where the device is now: receive moves it when the device changes address.
+func (s *Session) peerAddr() *net.UDPAddr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peer
+}
+
 func (s *Session) sendAck(exchange uint16, initiator bool, counter uint32) {
 	p := protoHeader{flags: exAck, opcode: opAck, exchange: exchange, protocol: protoSecureChannel, ack: counter}
 	if initiator {
@@ -605,7 +612,7 @@ func (s *Session) sendAck(exchange uint16, initiator bool, counter uint32) {
 	}
 	packet, _, err := s.seal(p.encode(), nil)
 	if err == nil {
-		_, _ = s.t.conn.WriteToUDP(packet, s.peer)
+		_, _ = s.t.conn.WriteToUDP(packet, s.peerAddr())
 	}
 }
 

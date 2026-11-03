@@ -498,6 +498,9 @@ export interface StoriesTable {
   duration_ms: number | null;
   bytes: ColumnType<string, number | string | bigint | undefined, number | string | bigint>;
   has_audio: ColumnType<boolean, boolean | undefined, boolean>;
+  captions_key: string | null;
+  parts: ColumnType<{ pieces: number[]; duration_ms: number; bytes: number; key: string; has_audio: boolean }[] | null, string | null | undefined, string | null>;
+  note: string | null;
   due_at: Nullable<Date>;
   claimed_until: Nullable<Date>;
   claim_token: string | null;

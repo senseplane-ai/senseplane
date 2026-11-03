@@ -1,24 +1,22 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// ffmpeg in the API (ADR 0070): stories are rendered and frames for object
-// following are read from recordings by a background job. The API image
-// carries an LGPL build with OpenH264 (BSD) as its H.264 encoder; a local
-// ffmpeg works too, and the encoder is whichever H.264 encoder it has.
+// ffmpeg in the API (ADR 0070): stories are made from recordings and frames for
+// object following are read from them by a background job. Nothing is ever
+// encoded to H.264: the API image's LGPL ffmpeg has no H.264 encoder, stories
+// copy the recorded video and carry their labels as subtitles.
 //
 // Decrypted footage reaches ffmpeg on its standard input, never as a file;
 // what ffmpeg writes (a story's parts) goes to the work dir (API_WORK_DIR,
 // a tmpfs is best), swept of leftovers when the API starts. ffmpeg runs with
 // few threads (FFMPEG_THREADS, default 2) and a lower priority (FFMPEG_NICE,
 // default 10), so a render doesn't starve the requests it shares a host with.
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
-const run = promisify(execFile);
 
 export const ffmpegPath = () => process.env.FFMPEG_PATH ?? "ffmpeg";
 
@@ -42,29 +40,6 @@ export async function sweepWorkDirs(olderThanMs = 20 * 60_000, dir = workDir()):
     n++;
   }
   return n;
-}
-
-/** Encoders in order of preference: OpenH264 first (what the image ships), then what a local build may have. */
-const ENCODERS: Record<string, string[]> = {
-  libopenh264: ["-c:v", "libopenh264", "-b:v", "2500k", "-maxrate", "3000k", "-g", "50", "-allow_skip_frames", "0"],
-  libx264: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", "50", "-profile:v", "main"],
-  h264_videotoolbox: ["-c:v", "h264_videotoolbox", "-b:v", "2500k", "-g", "50"],
-};
-
-let encoder: Promise<string[]> | undefined;
-
-/** The H.264 encoder arguments to use (STORY_H264_ENCODER picks one by name); throws when ffmpeg has none. */
-export function h264Encoder(): Promise<string[]> {
-  encoder ??= (async () => {
-    const { stdout } = await run(ffmpegPath(), ["-hide_banner", "-encoders"], { encoding: "utf8", maxBuffer: 4 << 20 });
-    const have = new Set([...stdout.matchAll(/^\s*V\S*\s+(\S+)/gm)].map((m) => m[1]!));
-    const wanted = process.env.STORY_H264_ENCODER;
-    const name = wanted ? (have.has(wanted) ? wanted : undefined) : Object.keys(ENCODERS).find((e) => have.has(e));
-    if (!name) throw new Error(wanted ? `ffmpeg has no ${wanted} encoder` : "ffmpeg has no H.264 encoder (libopenh264, libx264 or h264_videotoolbox)");
-    return ENCODERS[name] ?? ["-c:v", name, "-b:v", "2500k", "-g", "50"];
-  })();
-  encoder.catch(() => (encoder = undefined));
-  return encoder;
 }
 
 const NICE = ["/usr/bin/nice", "/bin/nice"].find((p) => existsSync(p));
@@ -105,8 +80,18 @@ export async function ffmpeg(args: string[], o: FfmpegOptions | number = {}): Pr
   const threads = process.env.FFMPEG_THREADS ?? "2";
   const full = ["-hide_banner", "-nostdin", "-v", "error", "-filter_threads", "1", ...args.slice(0, -1), "-threads", threads, args.at(-1)!];
   if (opts.input) full.splice(full.indexOf("-nostdin"), 1);
+  return tool("ffmpeg", ffmpegPath(), full, opts);
+}
+
+/** ffprobe beside the ffmpeg in use (FFPROBE_PATH overrides), with the same kill rules; returns its standard output. */
+export async function ffprobe(args: string[], o: FfmpegOptions = {}): Promise<Buffer> {
+  const path = process.env.FFPROBE_PATH ?? (process.env.FFMPEG_PATH ? process.env.FFMPEG_PATH.replace(/ffmpeg$/, "ffprobe") : "ffprobe");
+  return tool("ffprobe", path, ["-hide_banner", "-v", "error", ...args], o);
+}
+
+function tool(name: string, bin: string, full: string[], opts: FfmpegOptions): Promise<Buffer> {
   const nice = process.env.FFMPEG_NICE ?? "10";
-  const [cmd, argv] = NICE && nice !== "0" ? [NICE, ["-n", nice, ffmpegPath(), ...full]] : [ffmpegPath(), full];
+  const [cmd, argv] = NICE && nice !== "0" ? [NICE, ["-n", nice, bin, ...full]] : [bin, full];
   return new Promise<Buffer>((resolve, reject) => {
     const child = spawn(cmd, argv, { stdio: [opts.input ? "pipe" : "ignore", "pipe", "pipe"], detached: false });
     children.add(child);
@@ -132,7 +117,7 @@ export async function ffmpeg(args: string[], o: FfmpegOptions | number = {}): Pr
       clearTimeout(timer);
       opts.signal?.removeEventListener("abort", onAbort);
       if (code === 0 && !why) return resolve(Buffer.concat(out));
-      reject(new Error(`ffmpeg: ${why ?? (err.trim().split("\n").slice(-3).join(" ").slice(0, 400) || `exit ${code}`)}`));
+      reject(new Error(`${name}: ${why ?? (err.trim().split("\n").slice(-3).join(" ").slice(0, 400) || `exit ${code}`)}`));
     });
     if (opts.input && child.stdin) {
       const stdin = child.stdin;

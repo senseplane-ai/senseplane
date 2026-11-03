@@ -12,12 +12,12 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { audioTrackIds } from "./fmp4.js";
 import { createApi, type SenseplaneApi, sweepOnce } from "./index.js";
 import { handleMediaEvent } from "./indexer.js";
-import { createKeyRing, encryptSegment, envKeyWrapper, segmentIV, segmentKey } from "./keys.js";
+import { createKeyRing, decryptSegment, encryptSegment, envKeyWrapper, segmentIV, segmentKey } from "./keys.js";
 import { renderStory } from "./stories.js";
 import { claim } from "./claims.js";
 import { hashApiKey } from "./data/access.js";
@@ -49,7 +49,7 @@ function cutSegments(file: string) {
 
 /** One frame of a playlist at `t` seconds, as 320×180 RGB. */
 async function frameAt(url: string, t: number): Promise<Buffer> {
-  const { stdout } = await run("ffmpeg", ["-v", "error", "-allowed_extensions", "ALL", "-ss", String(t), "-i", url, "-frames:v", "1", "-vf", "scale=320:180",
+  const { stdout } = await run("ffmpeg", ["-v", "error", "-ss", String(t), "-i", url, "-frames:v", "1", "-vf", "scale=320:180",
     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { encoding: "buffer", timeout: 60_000, maxBuffer: 1 << 22 });
   return stdout;
 }
@@ -65,13 +65,67 @@ function region(f: Buffer, x0: number, y0: number, x1: number, y1: number) {
   return { bright: v.filter((x) => x > 170).length, median: v[Math.floor(v.length / 2)]!, spread: v[Math.floor(v.length * 0.95)]! - v[Math.floor(v.length * 0.05)]! };
 }
 
-/** Seconds decoded without an error, and the stream types, of a playlist URL. */
-async function decode(url: string): Promise<{ seconds: number; streams: string[] }> {
-  const { stdout } = await run("ffmpeg", ["-v", "error", "-xerror", "-allowed_extensions", "ALL", "-i", url, "-f", "null", "-", "-progress", "pipe:1"], { encoding: "utf8", timeout: 120_000 });
-  const t = [...stdout.matchAll(/out_time_ms=(\d+)/g)].at(-1);
-  const probe = JSON.parse((await run("ffprobe", ["-v", "error", "-allowed_extensions", "ALL", "-show_streams", "-of", "json", url], { encoding: "utf8", timeout: 60_000 })).stdout);
-  return { seconds: t ? Number(t[1]) / 1e6 : 0, streams: probe.streams.map((s: { codec_type: string }) => s.codec_type) };
+/**
+ * A story playlist fetched as a player does it (keys, IVs, inits) and cut into its blocks: the segments under one
+ * EXT-X-MAP, each written as one fMP4 file. Pieces from different cameras are separate blocks (a browser player
+ * resets at each new init; ffmpeg's HLS reader doesn't, so each block is checked on its own).
+ */
+async function blocks(api: SenseplaneApi, url: string): Promise<string[]> {
+  const path = new URL(url).pathname;
+  const dir = path.replace(/index\.m3u8$/, "");
+  const list = (await api.public.inject(path)).body.split("\n");
+  const get = async (rel: string) => (await api.public.inject(dir + rel)).rawPayload;
+  const out = mkdtempSync(join(tmpdir(), "sp-story-blocks-"));
+  const files: string[] = [];
+  let parts: Buffer[] = [];
+  let key: { uri: string; iv: Buffer } | undefined;
+  const keys = new Map<string, Buffer>();
+  const flush = () => {
+    if (parts.length > 1) {
+      const f = join(out, `b${files.length}.mp4`);
+      writeFileSync(f, Buffer.concat(parts));
+      files.push(f);
+    }
+    parts = [];
+  };
+  for (const line of list) {
+    const map = line.match(/^#EXT-X-MAP:URI="([^"]+)"/);
+    if (map) {
+      flush();
+      parts.push(await get(map[1]!));
+      continue;
+    }
+    const k = line.match(/^#EXT-X-KEY:METHOD=AES-128,URI="([^"]+)",IV=0x([0-9a-f]+)/);
+    if (k) key = { uri: k[1]!, iv: Buffer.from(k[2]!, "hex") };
+    else if (line.startsWith("#EXT-X-KEY:METHOD=NONE")) key = undefined;
+    if (line.startsWith("s/")) {
+      let body = await get(line);
+      if (key) {
+        if (!keys.has(key.uri)) keys.set(key.uri, await get(key.uri));
+        body = decryptSegment(keys.get(key.uri)!, key.iv, body);
+      }
+      parts.push(body);
+    }
+  }
+  flush();
+  return files;
 }
+
+/** Seconds decoded without an error, and the stream types, of a story's playlist (block by block). */
+async function decode(url: string): Promise<{ seconds: number; streams: string[] }> {
+  let seconds = 0;
+  const streams = new Set<string>();
+  for (const f of await blocks(apiRef(), url)) {
+    const { stdout } = await run("ffmpeg", ["-v", "error", "-xerror", "-i", f, "-f", "null", "-", "-progress", "pipe:1"], { encoding: "utf8", timeout: 120_000 });
+    const t = [...stdout.matchAll(/out_time_ms=(\d+)/g)].at(-1);
+    seconds += t ? Number(t[1]) / 1e6 : 0;
+    const probe = JSON.parse((await run("ffprobe", ["-v", "error", "-show_streams", "-of", "json", f], { encoding: "utf8", timeout: 60_000 })).stdout);
+    for (const s of probe.streams as { codec_type: string }[]) streams.add(s.codec_type);
+  }
+  return { seconds, streams: [...streams] };
+}
+let currentApi: SenseplaneApi | undefined;
+const apiRef = () => currentApi!;
 
 describe("multi-camera stories", () => {
   let api: SenseplaneApi;
@@ -114,6 +168,7 @@ describe("multi-camera stories", () => {
       media: { async createIngestSession() { return { id: "s", publish_url: "ws://m/" }; } },
     });
     origin = await api.public.listen({ port: 0, host: "127.0.0.1" });
+    currentApi = api;
     acc = (await api.data.accounts.create("Stories")).id;
     owner = (await api.data.withAccount(acc, (s) => s.apiKeys.create("owner"))).key;
     const dk = await ring().current(acc);
@@ -144,9 +199,9 @@ describe("multi-camera stories", () => {
     await drop?.();
   });
 
-  let story: { id: string; playback_url: string; duration_ms: number; pieces: { source_id: string; offset_ms: number; recorded_ms: number }[] };
+  let story: { id: string; playback_url: string; captions_url: string; note: string; parts: { download_url: string }[]; duration_ms: number; pieces: { source_id: string; offset_ms: number; recorded_ms: number }[] };
 
-  it("puts three cameras in time order, labelled, with a card for the long gap, and it plays", async () => {
+  it("puts three cameras in time order without re-encoding, captioned with camera and time, and it plays", async () => {
     const created = await call(owner, "POST", "/v1/stories", { title: "How the cat got out", moments: moments() });
     expect(created.statusCode).toBe(202);
     const queued = created.json();
@@ -157,36 +212,60 @@ describe("multi-camera stories", () => {
 
     story = await render(queued.id);
     expect(story).toMatchObject({ status: "ready", has_audio: true, mode: "labelled" });
-    // 3 × 6 s of video and a 2 s card.
+    // Whole recorded segments (cuts on keyframes): each 6 s piece is the 8 s of segments it touches.
     expect(story.duration_ms).toBeGreaterThan(18_000);
-    expect(story.duration_ms).toBeLessThan(22_500);
+    expect(story.duration_ms).toBeLessThan(26_000);
     const offsets = story.pieces.map((p) => p.offset_ms);
     expect(offsets).toEqual([...offsets].sort((a, b) => a - b));
     for (const p of story.pieces) expect(p.recorded_ms).toBeGreaterThan(5000);
+
+    // Not re-encoded: each story segment is a recorded segment, byte for byte (under another key).
+    const dk = await ring().current(acc);
+    const storySegs = await api.data.withAccount(acc, (s) => s.db.selectFrom("story_segments").selectAll().where("story_id", "=", story.id).orderBy("seq").execute());
+    const raw = await api.data.withAccount(acc, (s) => s.db.selectFrom("segments").selectAll().where("source_id", "=", cams.hall!).orderBy("start_at").execute());
+    const plain = async (key: string, k: Buffer, iv: Buffer) => decryptSegment(k, iv, Buffer.from(await (await s3.send(new GetObjectCommand({ Bucket: "senseplane", Key: key }))).Body!.transformToByteArray()));
+    for (let i = 0; i < 3; i++) {
+      const ours = await plain(storySegs[i]!.key, segmentKey(dk.key, story.id), storySegs[i]!.enc_iv!);
+      const theirs = await plain(raw[i]!.key, segmentKey(dk.key, cams.hall!), raw[i]!.enc_iv!);
+      expect(ours.equals(theirs)).toBe(true);
+    }
 
     const url = origin + new URL(story.playback_url).pathname;
     const { seconds, streams } = await decode(url);
     expect(seconds).toBeGreaterThan(18);
     expect(streams).toEqual(expect.arrayContaining(["video", "audio"]));
+    // One block per camera, in order: the colour bars, the 4:3 dog, the dark nursery.
+    const parts = await blocks(api, url);
+    expect(parts).toHaveLength(3);
+    expect(region(await frameAt(parts[0]!, 3), 0, 60, 320, 140).spread).toBeGreaterThan(60);
+    expect(JSON.parse((await run("ffprobe", ["-v", "error", "-show_streams", "-of", "json", parts[1]!], { encoding: "utf8" })).stdout).streams[0].height).toBe(480);
+    expect(region(await frameAt(parts[2]!, 3), 0, 20, 320, 160).median).toBeLessThan(60);
 
-    // The pictures are the cameras in order: the test pattern, the 4:3 dog (black bars at the sides), the card, the dark nursery.
-    const [hall, kitchen, nursery] = story.pieces;
-    const fHall = await frameAt(url, (hall!.offset_ms + 3000) / 1000);
-    const fKitchen = await frameAt(url, (kitchen!.offset_ms + 3000) / 1000);
-    const fCard = await frameAt(url, (nursery!.offset_ms - 1000) / 1000);
-    const fNursery = await frameAt(url, (nursery!.offset_ms + 3000) / 1000);
-    expect(region(fHall, 0, 60, 320, 140).spread).toBeGreaterThan(60); // colour bars across the frame
-    expect(region(fHall, 0, 20, 30, 150).median).toBeGreaterThan(30); // ... right to the edge
-    expect(region(fKitchen, 0, 20, 30, 150).median).toBeLessThan(20); // pillarbox
-    expect(region(fKitchen, 0, 20, 30, 150).spread).toBeLessThan(20);
-    expect(region(fCard, 100, 60, 220, 100).bright).toBeGreaterThan(30); // "+5 min"
-    expect(region(fCard, 0, 172, 320, 180).bright).toBe(0); // a card has no caption bar
-    // Every piece has its caption bar: dark, with lettering in it.
-    for (const f of [fHall, fKitchen, fNursery]) {
-      const bar = region(f, 0, 172, 320, 180);
-      expect(bar.median).toBeLessThan(80);
-      expect(bar.bright).toBeGreaterThan(15);
-    }
+    // The captions: camera and time per piece, in order, and the long gap said at the start of the next.
+    const vtt = (await api.public.inject(new URL(story.captions_url).pathname)).body;
+    expect(vtt.startsWith("WEBVTT")).toBe(true);
+    const lines = vtt.split("\n").filter((l) => l.includes(" · "));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^Hall · \d+ \w{3} \d\d:\d\d:\d\d$/);
+    expect(lines[1]).toMatch(/^Kitchen · /);
+    expect(lines[2]).toMatch(/^\+5 min · Nursery · /);
+
+    // Three cameras that record differently (4:3, sound): three MP4 parts, each with its subtitle track, said plainly.
+    expect(story.parts).toHaveLength(3);
+    expect(story.note).toContain("3 MP4 parts");
+    const part = (await api.public.inject(new URL(story.parts[0]!.download_url).pathname)).rawPayload;
+    const dir = mkdtempSync(join(tmpdir(), "sp-story-part-"));
+    writeFileSync(join(dir, "part.mp4"), part);
+    const probe = JSON.parse((await run("ffprobe", ["-v", "error", "-show_streams", "-of", "json", join(dir, "part.mp4")], { encoding: "utf8" })).stdout);
+    expect(probe.streams.map((s: { codec_type: string; codec_name: string }) => `${s.codec_type}:${s.codec_name}`)).toEqual(["video:h264", "subtitle:mov_text"]);
+    // The part's pictures are the recording's, frame for frame (a re-encode would change them).
+    const src = cutSegments("testsrc-h264-640x360-20s.mp4");
+    writeFileSync(join(dir, "src.mp4"), Buffer.concat([readFileSync(join(src.dir, "init.mp4")), ...src.segs.map((f) => readFileSync(join(src.dir, f)))]));
+    const md5s = async (f: string) => (await run("ffmpeg", ["-v", "error", "-i", f, "-map", "0:v", "-f", "framemd5", "-"], { encoding: "utf8", maxBuffer: 1 << 24 })).stdout
+      .split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split(",").at(-1)!.trim());
+    expect(await md5s(join(dir, "part.mp4"))).toEqual(await md5s(join(dir, "src.mp4")));
+    const subs = (await run("ffmpeg", ["-v", "error", "-i", join(dir, "part.mp4"), "-map", "0:s", "-f", "webvtt", "-"], { encoding: "utf8" })).stdout;
+    expect(subs).toContain("Hall · ");
   }, 180_000);
 
   it("is stored encrypted, survives deleting the raw recordings, and its shared link plays without a key", async () => {
@@ -235,7 +314,12 @@ describe("multi-camera stories", () => {
     expect(list).not.toContain("#EXT-X-KEY");
     const init = (await api.public.inject(p.replace(/index\.m3u8$/, "") + list.match(/#EXT-X-MAP:URI="([^"]+)"/)![1])).rawPayload;
     expect(audioTrackIds(init).size).toBe(0);
+    for (const m of list.matchAll(/#EXT-X-MAP:URI="([^"]+)"/g)) expect(audioTrackIds((await api.public.inject(p.replace(/index\.m3u8$/, "") + m[1])).rawPayload).size).toBe(0);
     expect((await decode(origin + p)).streams).toEqual(["video"]);
+    // The nursery's MP4 part has its sound in it: not for this agent. The silent ones are.
+    const nursery = own.parts.findIndex((x: { has_audio: boolean }) => x.has_audio);
+    expect((await api.public.inject(new URL(own.parts[nursery].download_url).pathname)).statusCode).toBe(403);
+    expect((await api.public.inject(new URL(own.parts[0].download_url).pathname)).statusCode).toBe(200);
   }, 120_000);
 
   it("renders an agent's own story without the sound it may not hear", async () => {
@@ -385,7 +469,7 @@ describe("multi-camera stories", () => {
     const seg = await api.data.withAccount(acc, (s) => s.db.selectFrom("segments").selectAll().where("source_id", "=", src).orderBy("start_at").execute());
     const from = new Date(seg[0]!.start_at).getTime();
     const id = (await call(owner, "POST", "/v1/stories", { moments: [{ source: src, from: new Date(from).toISOString(), to: new Date(from + 5000).toISOString() }] })).json().id;
-    await renderStory(deps(), acc, id, undefined, undefined, { deadlineMs: 300 });
+    await renderStory(deps(), acc, id, undefined, undefined, { deadlineMs: 1 });
     expect(runningFfmpeg()).toBe(0);
     const row = await api.data.withAccount(acc, (s) => s.db.selectFrom("stories").selectAll().where("id", "=", id).executeTakeFirstOrThrow());
     expect(row).toMatchObject({ status: "queued", claim_token: null });

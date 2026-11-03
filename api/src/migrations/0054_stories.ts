@@ -23,6 +23,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("duration_ms", "integer")
     .addColumn("bytes", "bigint", (c) => c.notNull().defaultTo(0))
     .addColumn("has_audio", "boolean", (c) => c.notNull().defaultTo(false))
+    // A labelled story's captions (WebVTT) and its MP4 parts (pieces that join without re-encoding), sealed (ADR 0066).
+    .addColumn("captions_key", "text")
+    .addColumn("parts", "jsonb")
+    .addColumn("note", "text")
     .addColumn("due_at", "timestamptz", (c) => c.defaultTo(sql`now()`))
     .addColumn("claimed_until", "timestamptz")
     .addColumn("claim_token", "text")

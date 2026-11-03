@@ -9,7 +9,7 @@ import type { AccountScope, DataAccess } from "../data/access.js";
 import { newId } from "../data/ids.js";
 import type { ClipsTable } from "../data/schema.js";
 import { ApiError } from "../errors.js";
-import { type KeyRing, decryptSegment, segmentKey } from "../keys.js";
+import { type KeyRing, decryptSegment, openObject, segmentKey } from "../keys.js";
 import { type KeyRefSealer, type MediaClaims, type PlaybackScope, type PlaybackSigner, PlaybackTokenError, buildPlaylist } from "../playback.js";
 import type { ObjectStorage } from "../storage.js";
 import { audioTrackIds, stripAudioInit, stripTracksFromSegment } from "../fmp4.js";
@@ -354,6 +354,34 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     if (!sourceId) throw new ApiError(404, "not_found", "no such key");
     const key = await sourceKey(scope.accountId, sourceId, version);
     return reply.header("content-type", "application/octet-stream").header("cache-control", "private, no-store").send(key);
+  });
+
+  // A labelled story's captions and its MP4 parts (ADR 0070), sealed at rest, opened on the way out.
+  const storyRow = async (scope: PlaybackScope) => {
+    if (scope.kind !== "story") throw new ApiError(404, "not_found", "not a story link");
+    const row = await deps.data.withAccount(scope.accountId, (s) => s.db.selectFrom("stories").select(["captions_key", "parts"]).where("id", "=", scope.storyId).executeTakeFirst());
+    if (!row) throw new ApiError(404, "not_found", "story not found");
+    return row;
+  };
+  const opened = async (accountId: string, key: string) => {
+    if (!deps.keys) throw new ApiError(503, "service_unavailable", "keys are not available");
+    return openObject(deps.keys, accountId, await readAll((await deps.storage.get(key)).body));
+  };
+  app.get<{ Params: { token: string } }>("/playback/:token/captions.vtt", async (req, reply) => {
+    const { scope } = await authorizeVideo(req.params.token);
+    const row = await storyRow(scope);
+    if (!row.captions_key) throw new ApiError(404, "not_found", "this story has no captions");
+    return reply.header("content-type", "text/vtt; charset=utf-8").header("cache-control", "private, max-age=300").send(await opened(scope.accountId, row.captions_key));
+  });
+  app.get<{ Params: { token: string; n: string } }>("/playback/:token/part/:n", async (req, reply) => {
+    const { scope, stripAudio } = await authorizeVideo(req.params.token);
+    const part = (await storyRow(scope)).parts?.[Number(req.params.n.replace(/\.mp4$/, ""))];
+    if (!part) throw new ApiError(404, "not_found", "no such part");
+    // A part is one file with its sound in it: not for a viewer who may not hear it.
+    if (part.has_audio && stripAudio) throw new ApiError(403, "forbidden_sense", "this part has sound from a camera this agent may not hear; play the story instead");
+    const body = await opened(scope.accountId, part.key);
+    return reply.header("content-type", "video/mp4").header("cache-control", "private, no-store")
+      .header("content-disposition", `attachment; filename="senseplane-story-part-${Number(req.params.n.replace(/\.mp4$/, "")) + 1}.mp4"`).send(body);
   });
 
   // Signed media objects (event snapshots) and a source's latest snapshot.

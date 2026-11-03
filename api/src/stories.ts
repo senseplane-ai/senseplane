@@ -3,12 +3,13 @@
 
 // Multi-camera stories (ADR 0070). A story is many moments (events, time
 // ranges on cameras, or what a search finds) put in time order and made into
-// one video, each piece labelled with its camera and time and long gaps
-// replaced by a short "+3 min" card. A background job (ADR 0058) renders it
-// with ffmpeg into HLS under stories/{account}/{story}/, encrypted with a key
-// of the story's own (ADR 0066), so it outlives the raw recordings like a
-// saved clip. Fast mode copies the recorded segments untouched instead: no
-// labels, no cards, no re-encoding.
+// one video. Nothing is re-encoded: each piece is its recorded segments,
+// copied (and encrypted again with a key of the story's own, ADR 0066) under
+// stories/{account}/{story}/, so it outlives the raw recordings like a saved
+// clip. A labelled story (the default) also gets captions with each piece's
+// camera and time, and a long gap said in the next caption: a WebVTT track
+// for the player and a subtitle track in each downloadable MP4 part. Fast
+// mode is the copy alone. A background job (ADR 0058) makes it.
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -16,16 +17,15 @@ import type { FastifyBaseLogger, FastifyRequest } from "fastify";
 import { type Selectable, sql } from "kysely";
 import { grantFilter, requireRange, sensesForRange } from "./access.js";
 import { blurredOnly } from "./blur.js";
-import { captionBar, gapCard, gapText } from "./caption.js";
 import type { DataAccess } from "./data/access.js";
 import { newId } from "./data/ids.js";
 import type { Database, StoriesTable, StoryPiecesTable } from "./data/schema.js";
 import { ApiError } from "./errors.js";
 import { type Claimed, LEASE_S, MAX_ATTEMPTS, claim, hold } from "./claims.js";
-import { ffmpeg, h264Encoder, workDir } from "./ffmpeg.js";
+import { ffmpeg, ffprobe, workDir } from "./ffmpeg.js";
 import type { ApiBus } from "./indexer.js";
 import { startClaimLoop } from "./jobs.js";
-import { type KeyRing, encryptSegment, segmentIV, segmentKey } from "./keys.js";
+import { type KeyRing, encryptSegment, sealObject, segmentIV, segmentKey } from "./keys.js";
 import { type Run, runBytes, runsOf, segmentDecrypter } from "./recordings.js";
 import { wall } from "./local-time.js";
 import { segmentsIn } from "./routes/playback.js";
@@ -37,9 +37,8 @@ export const STORY_LIMITS = {
   /** Recorded video in the story (gap cards come on top). */
   totalMs: 10 * 60_000,
   pieceMs: 3 * 60_000,
-  /** A gap longer than this between two pieces becomes a card. */
-  gapCardAfterMs: 60_000,
-  gapCardMs: 2000,
+  /** A gap longer than this between two pieces is said in the next piece's caption ("+5 min · Kitchen"). */
+  gapNoteAfterMs: 60_000,
 } as const;
 /** An event's piece: a little before it, and a little after it ended. */
 const EVENT_BEFORE_MS = 3000;
@@ -48,9 +47,6 @@ const EVENT_AFTER_MS = 5000;
 const MERGE_MS = 2000;
 /** The weakest search match a story takes from a search (memory search scores, MiniLM cosine). */
 const SEARCH_MIN_SCORE = 0.25;
-const WIDTH = 1280;
-const HEIGHT = 720;
-const FPS = 25;
 
 export type StoryRow = Selectable<StoriesTable>;
 export type PieceRow = Selectable<StoryPiecesTable>;
@@ -200,6 +196,8 @@ export async function createStory(
 }
 
 export function toStory(row: StoryRow, pieces: PieceRow[], playback?: { url: string; expiresAt: Date }) {
+  // The captions and parts sit beside the playlist, under the same signed token.
+  const beside = (path: string) => (playback ? playback.url.replace(/index\.m3u8$/, path) : undefined);
   const ordered = [...pieces].sort((a, b) => a.seq - b.seq);
   return {
     id: row.id,
@@ -217,85 +215,88 @@ export function toStory(row: StoryRow, pieces: PieceRow[], playback?: { url: str
         audio: p.audio,
         ...(p.recorded_ms !== null ? { recorded_ms: p.recorded_ms } : {}),
         ...(p.offset_ms !== null ? { offset_ms: p.offset_ms } : {}),
-        ...(gap > STORY_LIMITS.gapCardAfterMs ? { gap_before_ms: gap } : {}),
+        ...(gap > STORY_LIMITS.gapNoteAfterMs ? { gap_before_ms: gap } : {}),
       };
     }),
     ...(row.duration_ms !== null ? { duration_ms: row.duration_ms } : {}),
     bytes: Number(row.bytes),
     has_audio: row.has_audio,
     ...(playback ? { playback_url: playback.url, playback_expires_at: playback.expiresAt.toISOString() } : {}),
+    ...(playback && row.captions_key ? { captions_url: beside("captions.vtt") } : {}),
+    ...(row.parts?.length ? {
+      parts: row.parts.map((x, n) => ({ pieces: x.pieces, duration_ms: x.duration_ms, bytes: x.bytes, has_audio: x.has_audio, ...(playback ? { download_url: beside(`part/${n}.mp4`) } : {}) })),
+    } : {}),
+    ...(row.note ? { note: row.note } : {}),
     created_at: new Date(row.created_at).toISOString(),
     ...(row.ready_at ? { ready_at: new Date(row.ready_at).toISOString() } : {}),
   };
 }
 
-// --- rendering ------------------------------------------------------------------
+// --- making the video ---------------------------------------------------------------
+//
+// Nothing is re-encoded (ADR 0070): the image ships no H.264 encoder. Every piece is the recorded segments
+// themselves (whole segments, so cuts fall on keyframes), decrypted and encrypted again under the story's key.
+// The camera and time of each piece are captions: a WebVTT track the player shows, and, in each downloadable
+// MP4, a mov_text subtitle track. Pieces whose video (or sound) can't be joined without re-encoding (another
+// codec or picture size) go in separate MP4 parts; in the browser the story still plays as one.
 
-const s3 = (ms: number) => (ms / 1000).toFixed(3);
+/** "+45 s", "+3 min", "+2 h 10 min" for a gap between pieces. */
+export function gapText(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 90) return `+${s} s`;
+  const min = Math.round(s / 60);
+  if (min < 60) return `+${min} min`;
+  const h = Math.floor(min / 60);
+  const rest = min % 60;
+  if (h >= 48) return `+${Math.round(h / 24)} days`;
+  return rest ? `+${h} h ${rest} min` : `+${h} h`;
+}
 
 function clock(at: number, timeZone: string): string {
   const w = wall(at, timeZone);
-  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const p = (n: number) => String(n).padStart(2, "0");
   return `${w.d} ${months[w.m - 1]} ${p(w.hh)}:${p(w.mm)}:${p(w.ss)}`;
 }
 
-interface Ctx {
-  deps: StoryDeps;
-  accountId: string;
-  sourceId: string;
-  signal: AbortSignal;
-}
+const vttTime = (ms: number) => {
+  const t = Math.max(0, Math.round(ms));
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(Math.floor(t / 3600_000))}:${p(Math.floor(t / 60_000) % 60)}:${p(Math.floor(t / 1000) % 60)}.${p(t % 1000, 3)}`;
+};
 
-/** One rendered stretch: 1280×720, 25 fps, H.264, and AAC stereo when the story has sound. The recording comes in on a pipe. */
-async function renderRun(c: Ctx, run: Run, from: number, to: number, label: string, timeText: string, withAudio: boolean, audio: boolean, out: string) {
-  const bar = captionBar(WIDTH, label, timeText);
-  const barFile = `${out}.bar.rgba`;
-  await writeFile(barFile, bar.data);
-  const offset = Math.max(0, from - run.start);
-  const dur = Math.min(to, run.end) - Math.max(from, run.start);
-  const useAudio = withAudio && audio && run.hasAudio;
-  // A pipe can't be seeked: the piece is cut on the output side (decoded from the run's start, frames before it dropped).
-  const args = ["-y", "-f", "mp4", "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${WIDTH}x${bar.height}`, "-i", barFile];
-  if (withAudio && !useAudio) args.push("-f", "lavfi", "-t", s3(offset + dur), "-i", "anullsrc=r=48000:cl=stereo");
-  const filter = [
-    `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${FPS}[v]`,
-    // Bounded: as many bar frames as the output can use, so no input of this ffmpeg is endless.
-    `[1:v]loop=loop=${Math.ceil(((offset + dur) / 1000) * FPS) + FPS}:size=1:start=0[bar]`,
-    "[v][bar]overlay=0:H-h:shortest=1,format=yuv420p[out]",
-  ];
-  if (useAudio) filter.push("[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a]");
-  args.push("-filter_complex", filter.join(";"), "-map", "[out]");
-  if (withAudio) args.push("-map", useAudio ? "[a]" : "2:a", "-c:a", "aac", "-b:a", "96k");
-  args.push(...(await h264Encoder()), "-pix_fmt", "yuv420p", "-r", String(FPS), "-ss", s3(offset), "-t", s3(dur), out);
-  await ffmpeg(args, { timeoutMs: 10 * 60_000, input: runBytes(c.deps, c.accountId, c.sourceId, run), signal: c.signal });
-  await rm(barFile, { force: true });
-  return dur;
-}
+export interface Cue { from: number; to: number; text: string }
 
-async function renderCard(big: string, small: string, withAudio: boolean, out: string, signal: AbortSignal) {
-  const card = gapCard(WIDTH, HEIGHT, big, small);
-  const file = `${out}.rgba`;
-  await writeFile(file, card.data);
-  const frames = Math.round((STORY_LIMITS.gapCardMs / 1000) * FPS);
-  const args = ["-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${WIDTH}x${HEIGHT}`, "-framerate", String(FPS), "-i", file];
-  if (withAudio) args.push("-f", "lavfi", "-t", s3(STORY_LIMITS.gapCardMs), "-i", "anullsrc=r=48000:cl=stereo");
-  args.push("-filter_complex", `[0:v]loop=loop=${frames - 1}:size=1:start=0,setsar=1,format=yuv420p[out]`, "-map", "[out]");
-  if (withAudio) args.push("-map", "1:a", "-c:a", "aac", "-b:a", "96k");
-  args.push(...(await h264Encoder()), "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", s3(STORY_LIMITS.gapCardMs), out);
-  await ffmpeg(args, { timeoutMs: 60_000, signal });
-  await rm(file, { force: true });
+/** A WebVTT file of cues (times in ms from the start of what it captions). */
+export function webVtt(cues: Cue[]): string {
+  return ["WEBVTT", "", ...cues.flatMap((c, i) => [String(i + 1), `${vttTime(c.from)} --> ${vttTime(c.to)}`, c.text.replace(/-->/g, "→"), ""])].join("\n");
 }
 
 interface StoredSegment { seq: number; piece: number | null; key: string; init_key: string; start_at: Date; duration_ms: number; key_source: string; strip_audio: boolean; enc_version: number | null; enc_iv: Buffer | null }
 
+export interface StoryPart { pieces: number[]; duration_ms: number; bytes: number; key: string; has_audio: boolean }
+
 /** A failure that retrying won't fix. */
 export class StoryError extends Error {}
 
+/** What can be joined without re-encoding: the video codec and picture, and the sound if it is kept. */
+async function joinKey(run: Run, first: Buffer, keepAudio: boolean, signal: AbortSignal): Promise<string> {
+  async function* bytes() {
+    yield run.init;
+    yield first;
+  }
+  const out = await ffprobe(["-show_streams", "-of", "json", "-f", "mp4", "-i", "pipe:0"], { input: bytes(), timeoutMs: 60_000, signal });
+  const streams = (JSON.parse(out.toString()).streams ?? []) as Record<string, unknown>[];
+  const pick = (s: Record<string, unknown> | undefined, keys: string[]) => (s ? keys.map((k) => String(s[k] ?? "")).join("/") : "none");
+  const v = streams.find((s) => s.codec_type === "video");
+  const a = keepAudio ? streams.find((s) => s.codec_type === "audio") : undefined;
+  return `${pick(v, ["codec_name", "profile", "width", "height", "pix_fmt"])}|${pick(a, ["codec_name", "sample_rate", "channels"])}`;
+}
+
 /**
- * Renders (or, in fast mode, copies) a story's segments under this attempt's own prefix; returns what to record.
- * Every segment is encrypted with the story's own key (ADR 0066), so its links never hand out a camera's key,
- * and each attempt's object keys (so IVs) are its own.
+ * Copies a story's segments under this attempt's own prefix, under the story's own key (ADR 0066), so its
+ * links never hand out a camera's key, and each attempt's object keys (so IVs) are its own. A labelled story
+ * also gets its captions and its MP4 parts.
  */
 async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], prefix: string, signal: AbortSignal, log: FastifyBaseLogger | undefined) {
   const accountId = story.account_id;
@@ -304,113 +305,124 @@ async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], 
   const created = new Date(story.created_at).getTime();
   const dk = await deps.keys.current(accountId);
   const storyKey = segmentKey(dk.key, story.id);
-  const seal = async (objectKey: string, plain: Buffer) => {
-    const iv = segmentIV(dk.key, objectKey);
-    const sealed = encryptSegment(storyKey, iv, plain);
-    await deps.storage.put(objectKey, sealed, "video/iso.segment");
-    return { iv, bytes: sealed.length };
-  };
   const stop = () => {
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("stopped");
   };
-
-  if (story.mode === "fast") {
-    // The recordings as they are (no re-encoding), decrypted and encrypted again under the story's key.
-    let offset = 0;
-    let bytes = 0;
-    for (const p of pieces) {
-      const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, p.source_id, new Date(p.from_at).getTime(), new Date(p.to_at).getTime()));
-      recorded.set(p.seq, { recorded_ms: rows.reduce((a, r) => a + r.duration_ms, 0), offset_ms: offset });
-      const decrypt = segmentDecrypter(deps, accountId, p.source_id);
-      const inits = new Map<string, string>();
-      for (const r of rows) {
+  // Every piece's runs (whole recorded segments, one per recorder session) and their first segment, decrypted.
+  type PieceRuns = { p: PieceRow; runs: { run: Run; first: Buffer; seqs: number[] }[] };
+  const all: PieceRuns[] = [];
+  let offset = 0;
+  let bytes = 0;
+  let at = created;
+  for (const p of pieces) {
+    stop();
+    const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, p.source_id, new Date(p.from_at).getTime(), new Date(p.to_at).getTime()));
+    const runs = await runsOf(deps, rows);
+    const decrypt = segmentDecrypter(deps, accountId, p.source_id);
+    const entry: PieceRuns = { p, runs: [] };
+    const startOffset = offset;
+    for (const [i, run] of runs.entries()) {
+      const initKey = `${prefix}init-${p.seq}-${i}.mp4`;
+      await deps.storage.put(initKey, run.init, "video/mp4");
+      const seqs: number[] = [];
+      let first: Buffer | undefined;
+      for (const r of run.rows) {
         stop();
-        if (!inits.has(r.init_key)) {
-          const to = `${prefix}init-${p.seq}-${inits.size}.mp4`;
-          await deps.storage.put(to, await readObject(deps.storage, r.init_key), "video/mp4");
-          inits.set(r.init_key, to);
-        }
+        const plain = await decrypt(r, await readObject(deps.storage, r.key));
+        first ??= plain;
         const seq = segments.length;
         const key = `${prefix}${String(seq).padStart(5, "0")}.m4s`;
-        const { iv, bytes: n } = await seal(key, await decrypt(r, await readObject(deps.storage, r.key)));
-        segments.push({ seq, piece: p.seq, key, init_key: inits.get(r.init_key)!, start_at: new Date(r.start_at), duration_ms: r.duration_ms,
+        const iv = segmentIV(dk.key, key);
+        const sealed = encryptSegment(storyKey, iv, plain);
+        await deps.storage.put(key, sealed, "video/iso.segment");
+        // Contiguous on the story's own clock; a new init (another camera or session) is a discontinuity anyway.
+        segments.push({ seq, piece: p.seq, key, init_key: initKey, start_at: new Date(at), duration_ms: r.duration_ms,
           key_source: story.id, strip_audio: !p.audio, enc_version: dk.version, enc_iv: iv });
+        seqs.push(seq);
+        at += r.duration_ms;
         offset += r.duration_ms;
-        bytes += n;
+        bytes += sealed.length;
       }
+      if (first) entry.runs.push({ run, first, seqs });
     }
-    return { segments, recorded, hasAudio: pieces.some((p) => p.audio), bytes };
+    recorded.set(p.seq, { recorded_ms: offset - startOffset, offset_ms: startOffset });
+    all.push(entry);
   }
+  if (!segments.length) throw new StoryError("nothing was recorded in any of the story's moments");
+  const hasAudio = all.some((x) => x.p.audio && x.runs.some((r) => r.run.hasAudio));
+  if (story.mode === "fast") return { segments, recorded, hasAudio, bytes, parts: [] as StoryPart[], captionsKey: null, note: null };
 
+  // Captions: each piece's camera and when it starts; a long gap is said at the start of the next piece.
+  const tz = (await deps.data.withAccount(accountId, (s) => s.account.get()))?.time_zone ?? "UTC";
+  const cues: Cue[] = [];
+  let prevEnd: number | undefined;
+  for (const x of all) {
+    if (!x.runs.length) continue;
+    const r = recorded.get(x.p.seq)!;
+    const start = x.runs[0]!.run.rows[0] ? new Date(x.runs[0]!.run.rows[0].start_at).getTime() : new Date(x.p.from_at).getTime();
+    const gap = prevEnd !== undefined && start - prevEnd > STORY_LIMITS.gapNoteAfterMs ? `${gapText(start - prevEnd)} · ` : "";
+    cues.push({ from: r.offset_ms, to: r.offset_ms + r.recorded_ms, text: `${gap}${x.p.source_name} · ${clock(start, tz)}` });
+    const last = x.runs.at(-1)!.run;
+    prevEnd = last.end;
+  }
+  const captionsKey = `${prefix}captions.vtt`;
+  await deps.storage.put(captionsKey, await sealObject(deps.keys, accountId, Buffer.from(webVtt(cues))), "text/vtt");
+
+  // MP4 parts: runs that join without re-encoding, in story order; the sound only where the creator may hear it.
+  type Unit = { piece: number; run: Run; seqs: number[]; audio: boolean; key: string };
+  const units: Unit[] = [];
+  for (const x of all) {
+    for (const r of x.runs) {
+      const audio = x.p.audio && r.run.hasAudio;
+      units.push({ piece: x.p.seq, run: r.run, seqs: r.seqs, audio, key: await joinKey(r.run, r.first, audio, signal) });
+    }
+  }
+  const groups: Unit[][] = [];
+  for (const u of units) {
+    const g = groups.at(-1);
+    if (g && g[0]!.key === u.key) g.push(u);
+    else groups.push([u]);
+  }
   const dir = await mkdtemp(join(workDir(), "sp-story-"));
+  const parts: StoryPart[] = [];
   try {
-    const tz = (await deps.data.withAccount(accountId, (s) => s.account.get()))?.time_zone ?? "UTC";
-    // Every piece's runs first (only the inits are read): whether the story has sound depends on all of them.
-    const runs = new Map<number, Run[]>();
-    for (const p of pieces) {
-      const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, p.source_id, new Date(p.from_at).getTime(), new Date(p.to_at).getTime()));
-      runs.set(p.seq, await runsOf(deps, rows));
-    }
-    const withAudio = pieces.some((p) => p.audio && runs.get(p.seq)!.some((r) => r.hasAudio));
-    const parts: string[] = [];
-    let offset = 0;
-    let prevEnd: number | undefined;
-    for (const p of pieces) {
+    for (const [n, g] of groups.entries()) {
       stop();
-      const from = new Date(p.from_at).getTime();
-      const to = new Date(p.to_at).getTime();
-      const pieceRuns = runs.get(p.seq)!.filter((r) => Math.min(to, r.end) - Math.max(from, r.start) >= 200);
-      if (!pieceRuns.length) {
-        recorded.set(p.seq, { recorded_ms: 0, offset_ms: offset });
-        continue;
+      const files: string[] = [];
+      const partCues: Cue[] = [];
+      let t = 0;
+      for (const [i, u] of g.entries()) {
+        const file = join(dir, `part-${n}-${i}.mp4`);
+        // A remux, never an encode: the recorded packets as they are, timestamps from 0.
+        await ffmpeg(["-y", "-f", "mp4", "-i", "pipe:0", "-map", "0:v:0", ...(u.audio ? ["-map", "0:a:0?"] : []), "-c", "copy", "-f", "mp4", file],
+          { timeoutMs: 5 * 60_000, input: runBytes(deps, accountId, all.find((x) => x.p.seq === u.piece)!.p.source_id, u.run), signal });
+        files.push(file);
+        const dur = u.seqs.reduce((a, s) => a + segments[s]!.duration_ms, 0);
+        const cue = cues.find((c) => c.from <= segments[u.seqs[0]!]!.start_at.getTime() - created && segments[u.seqs[0]!]!.start_at.getTime() - created < c.to);
+        if (cue) partCues.push({ from: t, to: t + dur, text: cue.text });
+        t += dur;
       }
-      const shownFrom = Math.max(from, pieceRuns[0]!.start);
-      if (prevEnd !== undefined && shownFrom - prevEnd > STORY_LIMITS.gapCardAfterMs) {
-        const out = join(dir, `card-${p.seq}.mp4`);
-        await renderCard(gapText(shownFrom - prevEnd), `then ${p.source_name}`, withAudio, out, signal);
-        parts.push(out);
-        offset += STORY_LIMITS.gapCardMs;
-      }
-      const startOffset = offset;
-      let shown = 0;
-      for (const [i, run] of pieceRuns.entries()) {
-        const out = join(dir, `piece-${p.seq}-${i}.mp4`);
-        shown += await renderRun({ deps, accountId, sourceId: p.source_id, signal }, run, from, to, p.source_name, clock(Math.max(from, run.start), tz), withAudio, p.audio, out);
-        parts.push(out);
-      }
-      offset += shown;
-      recorded.set(p.seq, { recorded_ms: Math.round(shown), offset_ms: startOffset });
-      prevEnd = Math.min(to, pieceRuns.at(-1)!.end);
+      const list = join(dir, `part-${n}.txt`);
+      await writeFile(list, files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n");
+      const vtt = join(dir, `part-${n}.vtt`);
+      await writeFile(vtt, webVtt(partCues));
+      const out = join(dir, `part-${n}.mp4`);
+      await ffmpeg(["-y", "-f", "concat", "-safe", "0", "-i", list, "-f", "webvtt", "-i", vtt, "-map", "0", "-map", "1:s", "-c", "copy", "-c:s", "mov_text",
+        "-metadata:s:s:0", "language=eng", "-movflags", "+faststart", out], { timeoutMs: 10 * 60_000, signal });
+      const key = `${prefix}part-${n}.mp4`;
+      const sealed = await sealObject(deps.keys, accountId, await readFile(out));
+      await deps.storage.put(key, sealed, "video/mp4");
+      parts.push({ pieces: [...new Set(g.map((u) => u.piece))], duration_ms: t, bytes: sealed.length, key, has_audio: g.some((u) => u.audio) });
+      for (const f of [...files, out]) await rm(f, { force: true });
     }
-    if (!parts.length) throw new StoryError("nothing was recorded in any of the story's moments");
-
-    const list = join(dir, "list.txt");
-    await writeFile(list, parts.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n");
-    const hls = join(dir, "hls");
-    await mkdir(hls);
-    // The parts share one format, so they join without encoding again; cut into ~4 s fMP4 segments like a recording.
-    await ffmpeg(["-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-f", "hls", "-hls_time", "4", "-hls_playlist_type", "vod",
-      "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", join(hls, "seg_%04d.m4s"), "-hls_list_size", "0",
-      join(hls, "index.m3u8")], { timeoutMs: 10 * 60_000, signal });
-    const playlist = await readFile(join(hls, "index.m3u8"), "utf8");
-    const entries = [...playlist.matchAll(/#EXTINF:([\d.]+),\s*\n([^\n#]+)/g)].map((m) => ({ ms: Math.round(Number(m[1]) * 1000), file: m[2]!.trim() }));
-    const initKey = `${prefix}init.mp4`;
-    await deps.storage.put(initKey, await readFile(join(hls, "init.mp4")), "video/mp4");
-    let at = created;
-    let bytes = 0;
-    for (const [seq, e] of entries.entries()) {
-      stop();
-      const objectKey = `${prefix}${String(seq).padStart(5, "0")}.m4s`;
-      const { iv, bytes: n } = await seal(objectKey, await readFile(join(hls, e.file)));
-      bytes += n;
-      segments.push({ seq, piece: null, key: objectKey, init_key: initKey, start_at: new Date(at), duration_ms: e.ms, key_source: story.id, strip_audio: false, enc_version: dk.version, enc_iv: iv });
-      at += e.ms;
-    }
-    log?.info({ story: story.id, parts: parts.length, segments: entries.length }, "story rendered");
-    return { segments, recorded, hasAudio: withAudio, bytes };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+  const note = parts.length > 1
+    ? `The cameras in this story record differently (picture size, codec or sound), so without re-encoding it downloads as ${parts.length} MP4 parts; in the browser it plays as one.`
+    : null;
+  log?.info({ story: story.id, segments: segments.length, parts: parts.length }, "story made");
+  return { segments, recorded, hasAudio, bytes, parts, captionsKey, note };
 }
 
 /** Claims one story for this caller (tests, tools); the worker uses claim() for due ones. */
@@ -445,7 +457,9 @@ export async function renderStory(deps: StoryDeps, accountId: string, storyId: s
     if (!out.segments.length) throw new StoryError("nothing was recorded in any of the story's moments");
     const won = await deps.data.withAccount(accountId, async (s) => {
       const r = await s.db.updateTable("stories").set({
-        status: "ready", error: null, duration_ms: out.segments.reduce((a, x) => a + x.duration_ms, 0), bytes: out.bytes, has_audio: out.hasAudio,
+        status: "ready", error: null, duration_ms: out.segments.reduce((a, x) => a + x.duration_ms, 0),
+        bytes: out.bytes + out.parts.reduce((a, x) => a + x.bytes, 0), has_audio: out.hasAudio,
+        parts: JSON.stringify(out.parts), captions_key: out.captionsKey, note: out.note,
         ready_at: new Date(), due_at: null, claimed_until: null, claim_token: null,
       }).where("id", "=", storyId).where("claim_token", "=", c.token).executeTakeFirst();
       if (!Number(r.numUpdatedRows)) return false;

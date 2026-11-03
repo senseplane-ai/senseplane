@@ -69,9 +69,9 @@ group.
 Answers are worked out exactly as in the console chat, and cite the moments
 they use as buttons. A chat asks as an **agent** of its own, so:
 
-- It can see the cameras the workspace had when it was linked, with what each
-  records. Change that on the **Agents** page, where the chat is listed with
-  the connected apps.
+- It can see the cameras the workspace had when it was linked, and their
+  sensors, but not hear their sound or switch devices: a person gives those
+  on the **Agents** page, where the chat is listed with the connected apps.
 - It can ask questions, but not set watches.
 - Each chat can ask up to 30 questions an hour. Answers use AI checks like any
   other question, and stop with a message when the workspace has used its
@@ -97,12 +97,20 @@ The chat acts as its agent, so it needs two things, both off by default:
 The answer says what the box read back afterwards. "Sent, but Hall light
 still reads off" means the device didn't change.
 
-**Locks, garage doors, gates and alarms** wait for a person to confirm.
-Every linked chat gets the request. Private chats get **Confirm** and
-**Refuse** buttons. Groups don't, because anyone in a group could press
-them, so confirm those requests in the console or the app. A request nobody
-confirms within two minutes is refused. Every request, and what happened
-to it, is in the audit log.
+**Locks, garage doors, gates and alarms** wait for a person to confirm. So
+does a switch or a blind named for a garage door, gate, door or lock.
+
+- When you ask in your own private chat, the chat asks "Are you sure?" with
+  **Confirm** and **Refuse** buttons. It is your request, confirmed by you.
+- When an agent asks, the buttons go to the private chats of people who are
+  members or above in the workspace and whose chat can see the device.
+- Groups, and chats linked by someone who is no longer a member, never get
+  buttons: confirm those requests in the console or the app.
+
+Who may press is checked again when the button is pressed, and a request runs
+once, however many times it is confirmed. A request nobody confirms within
+two minutes is refused. Every request, and what happened to it, is in the
+audit log.
 
 ## Privacy
 

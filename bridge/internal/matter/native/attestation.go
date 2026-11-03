@@ -58,12 +58,18 @@ type Attestation struct {
 	Certified bool   `json:"certified"`
 	// Why it isn't counted as certified (empty when it is).
 	Note string `json:"note,omitempty"`
+	// Revocation is "not revoked", or "not checked: " and why (ADR 0073).
+	Revocation string `json:"revocation,omitempty"`
+
+	dac, pai *x509.Certificate
 }
 
-// Trust is what attestation checks against: the PAAs and the CSA's CD signing keys (by subject key id, hex).
+// Trust is what attestation checks against: the PAAs, the CSA's CD signing
+// keys (by subject key id, hex) and the revocation lists (nil: not checked).
 type Trust struct {
-	PAAs   []*x509.Certificate
-	CDKeys map[string]*ecdsa.PublicKey
+	PAAs       []*x509.Certificate
+	CDKeys     map[string]*ecdsa.PublicKey
+	Revocation Revoker
 }
 
 //go:embed cdcerts/*.der
@@ -191,6 +197,7 @@ func attest(ctx context.Context, s *Session, trust Trust) (Attestation, error) {
 		return a, errNotGenuine{"its intermediate certificate is for another vendor or product"}
 	}
 
+	a.dac, a.pai = dac, pai
 	// Certified? A listed PAA, and a CD the CSA signed for this vendor and product.
 	notes := []string{}
 	if !chainsToPAA(pai, trust.PAAs) {

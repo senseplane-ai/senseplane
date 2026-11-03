@@ -40,6 +40,7 @@ const (
 	cmdAddTrustedRoot       = 0x0B
 	adminVendorID           = 0xFFF1 // a test vendor id: recorded by the device, not checked
 	failSafeSeconds         = 120
+	failSafeBLESeconds      = 300
 	maxOperationalNodeID    = 0xFFFFFFEFFFFFFFFF
 	subscriptionMaxInterval = time.Minute
 )
@@ -130,8 +131,18 @@ type Controller struct {
 	// Trust is what device attestation checks against (default: the CSA's
 	// CD keys, and the PAAs from its ledger, kept in StateDir).
 	Trust func(ctx context.Context) Trust
+	// StrictRevocation refuses a device whose certificates couldn't be
+	// checked against the revocation lists (by default it is added, and
+	// that is recorded with it).
+	StrictRevocation bool
+	// BTP is the Bluetooth transport's timing (zero: the spec's).
+	BTP BTPOptions
+	// JoinWait is how long a device added over Bluetooth has to appear on
+	// the network once it has the credentials (zero: 2 minutes).
+	JoinWait time.Duration
 
 	mu    sync.Mutex
+	rev   *RevocationList
 	f     *fabric
 	t     *Transport
 	added chan uint64
@@ -294,7 +305,7 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 	}
 	defer pase.Close()
 	node := randomNodeID()
-	att, err := c.addToFabric(ctx, pase, f, node)
+	att, err := c.addToFabric(ctx, pase, f, node, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +321,12 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 		}
 		addr = found[0]
 	}
+	return c.complete(ctx, sess, f, node, addr, att)
+}
+
+// complete finishes adding a device over CASE (CommissioningComplete, which
+// also ends the fail-safe), reads it and keeps it. It closes sess.
+func (c *Controller) complete(ctx context.Context, sess *Session, f *fabric, node uint64, addr netip.AddrPort, att Attestation) (map[string]any, error) {
 	res, err := Invoke(ctx, sess, 0, clusterGeneralCommissioning, cmdCommissioningDone, nil)
 	if err != nil {
 		sess.Close()
@@ -341,8 +358,9 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 	}
 	n := matter.Node{NodeID: json.Number(strconv.FormatUint(node, 10)), Available: true, Attributes: attrMap(nil, attrs)}
 	c.log().Info("Matter device added", "node", node, "address", addr.String(), "sensors", len(n.Entities()),
-		"vendor", fmt.Sprintf("%04X", att.VendorID), "product", fmt.Sprintf("%04X", att.ProductID), "certified", att.Certified, "note", att.Note)
-	out := map[string]any{"node_id": strconv.FormatUint(node, 10), "sensors": len(n.Entities()), "certified": att.Certified}
+		"vendor", fmt.Sprintf("%04X", att.VendorID), "product", fmt.Sprintf("%04X", att.ProductID), "certified", att.Certified, "note", att.Note,
+		"revocation", att.Revocation)
+	out := map[string]any{"node_id": strconv.FormatUint(node, 10), "sensors": len(n.Entities()), "certified": att.Certified, "revocation": att.Revocation}
 	if att.Note != "" {
 		out["note"] = att.Note
 	}
@@ -363,28 +381,56 @@ func (c *Controller) trust(ctx context.Context) Trust {
 	if err != nil {
 		c.log().Warn("couldn't get the CSA's list of Matter makers; devices are added as uncertified", "err", err)
 	}
-	return Trust{PAAs: paas, CDKeys: CSACDKeys()}
+	c.mu.Lock()
+	if c.rev == nil {
+		c.rev = &RevocationList{Dir: c.StateDir}
+	}
+	rev := c.rev
+	c.mu.Unlock()
+	return Trust{PAAs: paas, CDKeys: CSACDKeys(), Revocation: rev}
 }
 
 // addToFabric runs the commissioning steps over the PASE session (spec 5.5):
-// arm the fail-safe, check the device's attestation, get its key, give it
-// our root and its certificate.
-func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, node uint64) (Attestation, error) {
-	res, err := Invoke(ctx, s, 0, clusterGeneralCommissioning, cmdArmFailSafe, func(w *TLV) {
-		w.Uint(0, failSafeSeconds)
-		w.Uint(1, 0)
-	})
+// arm the fail-safe, check the device's attestation (and that its
+// certificates aren't revoked), get its key, give it our root and its
+// certificate. A device added over Bluetooth (nw set) also gets its
+// regulatory setting first and joins the network last.
+func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, node uint64, nw *joining) (Attestation, error) {
+	seconds := uint64(failSafeSeconds)
+	if nw != nil {
+		seconds = failSafeBLESeconds // joining the network takes a while
+	}
+	arm := func(seconds uint64) (Elem, error) {
+		return Invoke(ctx, s, 0, clusterGeneralCommissioning, cmdArmFailSafe, func(w *TLV) {
+			w.Uint(0, seconds)
+			w.Uint(1, 0)
+		})
+	}
+	res, err := arm(seconds)
+	if code, _ := res.FieldU(0); err == nil && code == 1 && seconds != failSafeSeconds {
+		res, err = arm(failSafeSeconds) // ValueOutsideRange: the device allows less
+	}
 	if err != nil {
 		return Attestation{}, fmt.Errorf("the device didn't start adding: %w", err)
 	}
 	if code, _ := res.FieldU(0); code != 0 {
-		if code == 1 {
+		if code == 1 || code == 4 { // BusyWithOtherAdmin (4; some devices answer 1)
 			return Attestation{}, errors.New("the device is being added by another app right now; try again in a few minutes")
 		}
 		return Attestation{}, fmt.Errorf("the device didn't start adding (error %d)", code)
 	}
-	att, err := attest(ctx, s, c.trust(ctx))
+	if nw != nil {
+		nw.step(StepChecking)
+		if err := setRegulatory(ctx, s); err != nil {
+			return Attestation{}, err
+		}
+	}
+	trust := c.trust(ctx)
+	att, err := attest(ctx, s, trust)
 	if err != nil {
+		return Attestation{}, err
+	}
+	if err := c.checkRevocation(ctx, &att, trust); err != nil {
 		return Attestation{}, err
 	}
 	nonce := random(32)
@@ -424,6 +470,11 @@ func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, nod
 			return Attestation{}, errors.New("the device has as many controllers as it can take; remove one in its app first")
 		}
 		return Attestation{}, fmt.Errorf("the device refused its certificate (error %d)", code)
+	}
+	if nw != nil {
+		if err := nw.join(ctx, s); err != nil {
+			return Attestation{}, err
+		}
 	}
 	return att, nil
 }

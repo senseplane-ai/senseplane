@@ -18,7 +18,14 @@ type Code struct {
 	Passcode      uint32
 	Discriminator uint16 // 12 bits from a QR code; only the top 4 bits from a manual code
 	Short         bool   // the discriminator is the 4-bit short one (manual codes)
+	// From a QR code only: the product, and how the device can be found
+	// (Discovery: bit 0 SoftAP, 1 Bluetooth LE, 2 on the network).
+	VendorID, ProductID uint16
+	Discovery           uint8
 }
+
+// Bluetooth is whether a QR code says the device can be found over Bluetooth LE (false for manual codes, which don't say).
+func (c Code) Bluetooth() bool { return c.Discovery&0x02 != 0 }
 
 // ShortDiscriminator is the top 4 bits, what a manual code carries.
 func (c Code) ShortDiscriminator() uint16 {
@@ -114,13 +121,13 @@ func parseQR(s string) (Code, error) {
 	if read(3) != 0 {
 		return Code{}, errors.New("that QR code is from a newer Matter version")
 	}
-	read(16) // vendor
-	read(16) // product
-	read(2)  // commissioning flow
-	read(8)  // discovery capabilities
+	vendor := read(16)
+	product := read(16)
+	read(2) // commissioning flow
+	discovery := read(8)
 	disc := read(12)
 	pass := read(27)
-	c := Code{Passcode: uint32(pass), Discriminator: uint16(disc)}
+	c := Code{Passcode: uint32(pass), Discriminator: uint16(disc), VendorID: uint16(vendor), ProductID: uint16(product), Discovery: uint8(discovery)}
 	if !validPasscode(c.Passcode) {
 		return Code{}, errors.New("that QR code's passcode isn't valid")
 	}

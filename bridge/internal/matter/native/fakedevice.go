@@ -64,6 +64,7 @@ type FakeDevice struct {
 	subs      []*fakeSub
 	eventNo   uint64
 	sessions  int
+	fakeNetwork
 }
 
 type fakeSub struct {
@@ -92,7 +93,16 @@ func NewFakeDevice(port int, passcode uint32, discriminator uint16, logf func(st
 }
 
 // Close stops the device.
-func (d *FakeDevice) Close() { d.tr.Close() }
+func (d *FakeDevice) Close() {
+	d.mu.Lock()
+	links := d.ble
+	d.ble = nil
+	d.mu.Unlock()
+	for _, t := range links {
+		t.Close()
+	}
+	d.tr.Close()
+}
 
 // Addr is the device's address on localhost.
 func (d *FakeDevice) Addr() netip.AddrPort {
@@ -178,6 +188,17 @@ func (d *FakeDevice) attributes() map[Path]func(*TLV, int) {
 		{0, 40, 4}: func(w *TLV, tag int) { w.Uint(tag, fakePID) },
 		{0, 40, 3}: str("Fake Plug"),
 		{0, 40, 5}: str("Fake plug"),
+		{0, 48, 3}: func(w *TLV, tag int) { w.Uint(tag, 2) }, // LocationCapability: indoor and outdoor
+		{0, 48, 4}: func(w *TLV, tag int) { // SupportsConcurrentConnection
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			w.Bool(tag, !d.NoConcurrent)
+		},
+		{0, clusterNetworkCommissioning, attrFeatureMap}: func(w *TLV, tag int) {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			w.Uint(tag, d.features())
+		},
 		{1, 29, 0}: devType(266), // on/off plug-in unit
 		{1, 6, 0}: func(w *TLV, tag int) {
 			d.mu.Lock()
@@ -237,7 +258,8 @@ func (d *FakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
 		return
 	}
 	peerID, _ := r.FieldU(2)
-	localID := d.tr.allocID()
+	tr := ex.Session().t // UDP, or BTP when added over Bluetooth
+	localID := tr.allocID()
 	var resp TLV
 	resp.Struct(Anon)
 	resp.Bytes8(1, r.FieldBytes(1))
@@ -276,7 +298,7 @@ func (d *FakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
 		_ = ex.Send(protoSecureChannel, opStatus, statusReport(1, protoSecureChannel, 2))
 		return
 	}
-	s, err := d.tr.Secure(ex.Session().peer, localID, uint16(peerID), keys.r2i, keys.i2r, 0, 0, defaultMRP)
+	s, err := tr.Secure(ex.Session().peer, localID, uint16(peerID), keys.r2i, keys.i2r, 0, 0, defaultMRP)
 	if err != nil {
 		return
 	}
@@ -736,6 +758,11 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 		d.armed, d.done = false, true
 		d.mu.Unlock()
 		_ = invokeResult(ex, path, 5, func(w *TLV) { w.Uint(0, 0) }, -1)
+	case cl == clusterGeneralCommissioning && cmd == cmdSetRegulatoryConfig,
+		cl == clusterNetworkCommissioning && (cmd == cmdAddOrUpdateWiFi || cmd == cmdAddOrUpdateThread || cmd == cmdConnectNetwork):
+		if needArmed() {
+			d.network(ex, path, cl, cmd, fields)
+		}
 	case cl == 6 && ep == 3 && (cmd == 0 || cmd == 1):
 		d.setLight(cmd == 1, 0)
 		_ = invokeResult(ex, path, 0, nil, 0)
@@ -872,10 +899,11 @@ const (
 )
 
 type fakeAttestation struct {
-	paa, pai, dac []byte
-	dacKey        *ecdsa.PrivateKey
-	cdKey         *ecdsa.PrivateKey
-	cdSKID        []byte
+	paa, pai, dac  []byte
+	paaKey, paiKey *ecdsa.PrivateKey
+	dacKey         *ecdsa.PrivateKey
+	cdKey          *ecdsa.PrivateKey
+	cdSKID         []byte
 }
 
 func newFakeAttestation() (fakeAttestation, error) {
@@ -927,7 +955,7 @@ func newFakeAttestation() (fakeAttestation, error) {
 	if err != nil {
 		return a, err
 	}
-	a = fakeAttestation{paa: paa, pai: pai, dac: dac, dacKey: dacKey, cdKey: cdKey, cdSKID: keyID(&cdKey.PublicKey)}
+	a = fakeAttestation{paa: paa, pai: pai, dac: dac, paaKey: paaKey, paiKey: paiKey, dacKey: dacKey, cdKey: cdKey, cdSKID: keyID(&cdKey.PublicKey)}
 	return a, nil
 }
 

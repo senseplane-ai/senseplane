@@ -163,6 +163,74 @@ export interface BridgeCommand {
   finished_at: string | null;
 }
 
+/** What a device reads now (all optional): from the latest readings or the last command. */
+export interface DeviceState {
+  available?: boolean;
+  on?: boolean;
+  /** 0–100. */
+  brightness?: number;
+  open?: boolean;
+  /** Percent open, 0–100. */
+  position?: number;
+  moving?: "opening" | "closing";
+  /** °C. */
+  target_temperature?: number;
+  mode?: string;
+  locked?: boolean;
+  alarm?: string;
+}
+
+export type DeviceAction =
+  | "turn_on" | "turn_off" | "set_brightness" | "open" | "close" | "set_position"
+  | "set_temperature" | "set_mode" | "lock" | "unlock" | "arm_away" | "arm_home" | "disarm";
+
+/** A thing in the home a person may switch: a light, plug, blind, thermostat, lock or alarm. */
+export interface Device {
+  id: string;
+  entity_id: string;
+  name: string;
+  room: string | null;
+  bridge_id: string;
+  source_id: string;
+  type: "light" | "switch" | "fan" | "siren" | "cover" | "garage_door" | "gate" | "climate" | "lock" | "alarm";
+  /** secure: locks, garage doors, gates and alarms; a person confirms each change. */
+  tier: "switch" | "secure";
+  /** An admin marked it controllable (off by default). */
+  controllable: boolean;
+  actions: DeviceAction[];
+  state: DeviceState | null;
+  /** Its box is reporting. */
+  online: boolean;
+  /** The caller may control it now. */
+  can_control: boolean;
+  /** Shown before turning controllable on. */
+  warning: string;
+}
+
+export type DeviceCommandStatus =
+  | "awaiting_confirmation" | "denied" | "expired" | "refused" | "sent"
+  | "done" | "in_progress" | "unchanged" | "offline" | "failed";
+
+/** One request to change a device, and how it went. */
+export interface DeviceCommand {
+  id: string;
+  device_id: string;
+  device_name: string;
+  entity_id: string;
+  action: DeviceAction;
+  value: number | string | null;
+  status: DeviceCommandStatus;
+  /** Plain words: "Hall light is on.", "Sent, but Hall light still reads off." */
+  message: string;
+  state: DeviceState | null;
+  requested_by: { kind: "user" | "account_key" | "agent"; id: string; name: string | null };
+  via: "console" | "app" | "telegram" | "agent" | "api";
+  expires_at: string | null;
+  decided_by: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
 export class ApiExtra {
   constructor(
     private readonly apiUrl: string,
@@ -252,6 +320,21 @@ export class ApiExtra {
     addOnvif: (id: string, body: { camera: string; username: string; password: string; name?: string }) =>
       this.request<BridgeCommand>("POST", `/bridges/${encodeURIComponent(id)}/onvif`, body),
     command: (id: string, cid: string) => this.request<BridgeCommand>("GET", `/bridges/${encodeURIComponent(id)}/commands/${encodeURIComponent(cid)}`),
+  };
+  /** Devices a person may switch (milestone C); a server without them answers 404. */
+  readonly devices = {
+    list: () => this.request<{ data: Device[]; next_cursor: string | null }>("GET", "/devices"),
+    get: (id: string) => this.request<Device>("GET", `/devices/${encodeURIComponent(id)}`),
+    /** Admins and owners: whether people and agents with Control may switch it. */
+    setControllable: (id: string, controllable: boolean) => this.request<Device>("PATCH", `/devices/${encodeURIComponent(id)}`, { controllable }),
+    command: (id: string, body: { action: DeviceAction; value?: number | string; confirm?: boolean }) =>
+      this.request<DeviceCommand>("POST", `/devices/${encodeURIComponent(id)}/commands`, body),
+    commandStatus: (id: string) => this.request<DeviceCommand>("GET", `/device-commands/${encodeURIComponent(id)}`),
+  };
+  /** Requests on locks, garage doors, gates and alarms waiting for a person. */
+  readonly confirmations = {
+    list: () => this.request<{ data: DeviceCommand[] }>("GET", "/confirmations"),
+    decide: (id: string, approve: boolean) => this.request<DeviceCommand>("POST", `/confirmations/${encodeURIComponent(id)}`, { approve }),
   };
   /** Raw events page for counts (the SDK paginates through everything). */
   eventsPage = (q: Record<string, string>) => this.request<{ data: import("senseplane").Event[]; next_cursor: string | null }>("GET", `/events?${new URLSearchParams(q)}`);

@@ -78,7 +78,7 @@ describe("ConnectPage (MCP consent)", () => {
     const allow = await screen.findByRole("button", { name: "Allow" });
     for (const name of ["Look", "Read sensors"]) fireEvent.click(screen.getByRole("button", { name }));
     expect(allow).toBeDisabled();
-    expect(screen.getByText("Pick at least one of Look, Listen or Read sensors.")).toBeInTheDocument();
+    expect(screen.getByText("Pick at least one of Look, Listen, Read sensors or Control devices.")).toBeInTheDocument();
   });
 
   it("pre-fills a reconnecting app's current access", async () => {

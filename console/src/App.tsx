@@ -9,6 +9,7 @@ import { BoxPage, LinkPage } from "./pages/Boxes";
 import { CameraPage } from "./pages/Camera";
 import { CamerasPage } from "./pages/Cameras";
 import { ConnectPage } from "./pages/Connect";
+import { DevicesPage } from "./pages/Devices";
 import { LiveViewPage } from "./pages/LiveView";
 import { NotFoundPage } from "./pages/NotFound";
 import { InvitePage } from "./pages/Invite";
@@ -45,6 +46,7 @@ export function resolveRoute(pathname: string): { page: string; params: Record<s
   if (matchPath("/cameras", pathname)) return { page: "cameras", params: {} };
   m = matchPath("/cameras/:id", pathname);
   if (m) return { page: "camera", params: m };
+  if (matchPath("/devices", pathname)) return { page: "devices", params: {} };
   if (matchPath("/live", pathname)) return { page: "live", params: {} };
   if (matchPath("/link", pathname)) return { page: "link", params: {} };
   m = matchPath("/boxes/:id", pathname);
@@ -67,6 +69,7 @@ function Routes() {
     case "ask": page = <AskPage key="ask" conversationId={route.params.id} />; break;
     case "cameras": page = <CamerasPage />; break;
     case "camera": page = <CameraPage key={route.params.id} id={route.params.id!} />; break;
+    case "devices": page = <DevicesPage />; break;
     case "live": page = <LiveViewPage />; break;
     case "link": page = <LinkPage />; break;
     case "box": page = <BoxPage key={route.params.id} id={route.params.id!} />; break;

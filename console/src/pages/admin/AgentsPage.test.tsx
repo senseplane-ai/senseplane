@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { accessOf, grantBody } from "./AccessPicker";
 import { AgentsPage, mcpUrl } from "./AgentsPage";
 import { SRC, agent, isoAgo, me, page, setup, sources } from "./test-utils";
 
@@ -69,6 +70,27 @@ describe("AgentsPage", () => {
     fireEvent.click(c.getByRole("button", { name: "Save access" }));
     await waitFor(() => expect(api.called("DELETE", "/grants/grt_1")).toHaveLength(1));
     expect(api.called("POST", "/grants")[0]!.body).toEqual({ agent_id: claude.id, source_ids: [SRC.front, SRC.dock], senses: ["video"], abilities: ["watch", "history"] });
+  });
+
+  it("grants Control devices as the control sense, off by default and never implied by Read sensors", async () => {
+    const { props, api } = setup(routes());
+    render(<AgentsPage {...props} />);
+    await screen.findByRole("listitem", { name: "Claude Code" });
+    fireEvent.click(within(card("Claude Code")).getByRole("button", { name: "Edit access for Claude Code" }));
+    const c = within(card("Claude Code"));
+    expect(c.getByRole("button", { name: "Control devices" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(c.getByRole("button", { name: "Read sensors" }));
+    expect(c.queryByText(/still need a person to confirm/)).toBeNull();
+    fireEvent.click(c.getByRole("button", { name: "Control devices" }));
+    expect(c.getByText(/switch the devices an admin marked controllable; locks, garage doors, gates and alarms still need a person to confirm/)).toBeTruthy();
+    fireEvent.click(c.getByRole("button", { name: "Save access" }));
+    await waitFor(() => expect(api.called("POST", "/grants")).toHaveLength(1));
+    expect(api.called("POST", "/grants")[0]!.body.senses).toEqual(["video", "audio", "sensors", "control"]);
+
+    const g = (senses: string[]) => [{ id: "g", agent_id: "a", source_ids: ["s"], senses, abilities: [], created_at: "" }] as never;
+    expect(accessOf(g(["sensors"])).permissions).toEqual(["environment"]);
+    expect(accessOf(g(["control"])).permissions).toEqual(["control"]);
+    expect(grantBody({ sources: ["s"], permissions: ["environment"] }).senses).toEqual(["sensors"]);
   });
 
   it("disconnects an app after confirming", async () => {

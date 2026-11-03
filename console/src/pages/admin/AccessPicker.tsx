@@ -4,18 +4,24 @@
 // What an app or API key may use (ADR 0048): which cameras and sensors, and
 // which permissions. The same picker serves the MCP consent page and the
 // Agents page. Permissions map onto grants: look, listen and read environment
-// are senses (video, audio, and "sensors" for every sensor sense); set watches and see
-// history are the grant's abilities.
+// are senses (video, audio, and "sensors" for every sensor sense); control devices is
+// the sense "control", never implied by "sensors" and off by default; set watches and
+// see history are the grant's abilities.
 import { type Grant, type Source, isSensorSense } from "senseplane";
 import { Chip, MultiChips } from "./kit";
 
-export type Permission = "look" | "listen" | "environment" | "watch" | "history";
+export type Permission = "look" | "listen" | "environment" | "control" | "watch" | "history";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string; senses?: string[]; ability?: "watch" | "history" }[] = [
   { id: "look", label: "Look", hint: "see live pictures and ask about them", senses: ["video"] },
   { id: "listen", label: "Listen", hint: "hear sounds such as crying or alarms (never speech)", senses: ["audio"] },
   // "sensors" covers every sensor sense: temperature, doors, plugs, leaks and any added later (ADR 0060).
   { id: "environment", label: "Read sensors", hint: "temperature, doors and windows, plugs, leaks and other sensors", senses: ["sensors"] },
+  // Switching things is its own sense: off by default and never implied by "Read sensors".
+  {
+    id: "control", label: "Control devices", senses: ["control"],
+    hint: "switch the devices an admin marked controllable; locks, garage doors, gates and alarms still need a person to confirm",
+  },
   { id: "watch", label: "Set watches", hint: "watch for something and report it", ability: "watch" },
   { id: "history", label: "See history and replay", hint: "events, search and recordings older than two hours", ability: "history" },
 ];
@@ -41,11 +47,13 @@ export function grantBody(a: Access): { source_ids: string[]; senses: string[]; 
 /** An agent's current access, read back from its grants (union). */
 export function accessOf(grants: Grant[]): Access {
   const senses = new Set(grants.flatMap((g) => g.senses as string[]));
+  // "control" is a sense, but switching things never reads as "Read sensors".
+  const reads = [...senses].filter((s) => s !== "control" && isSensorSense(s));
   const abilities = new Set(grants.flatMap((g) => (g.abilities as string[] | undefined) ?? ["watch", "history"]));
   return {
     sources: [...new Set(grants.flatMap((g) => g.source_ids))],
     // Older grants name sensor senses one by one (temperature, humidity): they read as "Read sensors" too.
-    permissions: PERMISSIONS.filter((p) => (p.id === "environment" ? [...senses].some(isSensorSense) : p.senses ? p.senses.some((s) => senses.has(s)) : abilities.has(p.ability!))).map((p) => p.id),
+    permissions: PERMISSIONS.filter((p) => (p.id === "environment" ? reads.length > 0 : p.senses ? p.senses.some((s) => senses.has(s)) : abilities.has(p.ability!))).map((p) => p.id),
   };
 }
 
@@ -79,7 +87,7 @@ export function AccessPicker({ sources, value, onChange, disabled, idPrefix = "a
         <ul className="adm-perm-hints">
           {PERMISSIONS.filter((p) => value.permissions.includes(p.id)).map((p) => <li key={p.id}><span>{p.label}:</span> {p.hint}</li>)}
         </ul>
-        {missingSense && <p className="adm-warn-note adm-small" role="status">Pick at least one of Look, Listen or Read sensors.</p>}
+        {missingSense && <p className="adm-warn-note adm-small" role="status">Pick at least one of Look, Listen, Read sensors or Control devices.</p>}
       </fieldset>
     </div>
   );

@@ -6,6 +6,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, navigate, useLocation } from "../router";
 import { Badge, Icon, type IconName, Logo } from "../ui";
+import { ConfirmationsBanner } from "../pages/devices/Confirmations";
 import { useApp } from "./AppData";
 import { isVideo } from "./sources";
 
@@ -31,6 +32,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       to: "/cameras", label: "Cameras", icon: "camera", match: starts("/cameras"),
       extra: sources && cams.length > 0 ? <span className="nav-count" aria-label={`${online} of ${cams.length} online`}>{online}/{cams.length}</span> : null,
     },
+    { to: "/devices", label: "Devices", icon: "device", match: starts("/devices") },
     { to: "/live", label: "Live view", icon: "live", match: starts("/live"), extra: anyLive ? <span className="nav-live-dot" aria-label="Cameras live" /> : null },
     { to: "/events", label: "Events", icon: "events", match: starts("/events"), extra: unreadEvents > 0 ? <Badge label={`${unreadEvents} new`}>{unreadEvents > 99 ? "99+" : unreadEvents}</Badge> : null },
     { to: "/watches", label: "Watches", icon: "watch", match: starts("/watches") },
@@ -119,7 +121,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <aside id="sidebar" className="sidebar" data-open={open || undefined} aria-label="Sidebar">
         <div className="sidebar-inner"><Sidebar onNavigate={() => setOpen(false)} /></div>
       </aside>
-      <main id="main" className="main" tabIndex={-1}>{children}</main>
+      <main id="main" className="main" tabIndex={-1}><ConfirmationsBanner />{children}</main>
     </div>
   );
 }

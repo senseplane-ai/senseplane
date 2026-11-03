@@ -1,0 +1,44 @@
+/* Copyright 2026 The Senseplane Authors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* Devices page (milestone C) and the confirmations banner. */
+.devices-lede { margin: 4px 0 0; max-width: 680px; font-size: 13px; }
+.device-room { display: flex; flex-direction: column; gap: 12px; }
+.device-room-title { font-size: 15px; font-weight: 500; color: var(--soft); }
+.device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.device-card { gap: 12px; }
+.device-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.device-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.device-name { font-size: 15px; font-weight: 500; }
+.device-sub { font-size: 12px; }
+.device-online { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.device-state { margin: 0; font-size: 20px; font-weight: 500; }
+.device-controls { display: flex; flex-direction: column; gap: 10px; }
+.device-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.device-control-label { font-size: 13px; color: var(--soft); }
+.device-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.device-steps button:disabled { opacity: 0.5; cursor: not-allowed; }
+.device-setpoint { display: inline-flex; align-items: center; gap: 8px; }
+.device-setpoint-value { min-width: 64px; text-align: center; }
+.device-mode { width: auto; min-width: 140px; }
+.device-why { margin: 0; font-size: 12px; }
+.device-answer { margin: 0; font-size: 13px; min-height: 0; }
+.device-answer:empty { display: none; }
+.device-answer-ok { color: var(--live); }
+.device-answer-wait { color: var(--soft); }
+.device-answer-warn { color: var(--warn); }
+.device-answer-error { color: var(--danger); }
+
+.confirm-wrap { width: 100%; max-width: 1260px; margin: 0 auto; padding: 16px 40px 0; }
+.confirm-banner { border: 1px solid var(--warn-line); border-radius: var(--r-card); background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.confirm-banner-title { font-size: 13px; font-weight: 500; color: var(--warn); }
+.confirm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.confirm-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.confirm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; }
+.confirm-meta { font-size: 12px; color: var(--muted); }
+.confirm-actions { display: flex; gap: 8px; }
+
+@media (max-width: 760px) {
+  .confirm-wrap { padding: 12px 16px 0; }
+  .device-grid { grid-template-columns: 1fr; }
+}

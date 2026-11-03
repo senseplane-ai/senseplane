@@ -21,7 +21,7 @@ describe("resolveRoute", () => {
     ["/", "ask"], ["/chats/cnv_1", "ask"], ["/cameras", "cameras"], ["/cameras/new", "add-camera"],
     ["/cameras/src_1", "camera"], ["/live", "live"], ["/events", "/events"], ["/watches", "/watches"],
     ["/search", "/search"], ["/agents", "/agents"], ["/webhooks", "/webhooks"], ["/usage", "/usage"],
-    ["/settings", "/settings"], ["/settings/team", "/settings"], ["/link", "link"], ["/boxes/brg_1", "box"], ["/nope", "not-found"],
+    ["/settings", "/settings"], ["/settings/team", "/settings"], ["/devices", "devices"], ["/link", "link"], ["/boxes/brg_1", "box"], ["/nope", "not-found"],
   ])("%s → %s", (path, page) => {
     expect(resolveRoute(path).page).toBe(page);
   });

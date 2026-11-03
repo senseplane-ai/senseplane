@@ -244,6 +244,12 @@ export class DataAccess {
     return rows;
   }
 
+  /** Device commands a box took (or should have) more than `seconds` ago and never reported (ADR 0067). */
+  async stuckDeviceCommands(seconds: number): Promise<{ id: string; account_id: string }[]> {
+    const { rows } = await sql<{ id: string; account_id: string }>`select * from stuck_device_commands(${seconds})`.execute(this.kdb);
+    return rows;
+  }
+
   /** Sensor sources holding readings older than their retention days. */
   async readingsRetentionTargets(): Promise<{ account_id: string; source_id: string; retention_days: number }[]> {
     const { rows } = await sql<{ account_id: string; source_id: string; retention_days: number }>`select * from readings_retention_targets()`.execute(this.kdb);

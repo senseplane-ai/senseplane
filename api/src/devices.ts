@@ -10,6 +10,9 @@
 // anything; routes/devices.ts does, and only for a person or an agent a
 // person granted Control.
 
+import type { AccountScope } from "./data/access.js";
+import { atLeast } from "./roles.js";
+
 export const ACTIONS = [
   "turn_on", "turn_off", "set_brightness", "open", "close", "set_position",
   "set_temperature", "set_mode", "lock", "unlock", "arm_away", "arm_home", "disarm",
@@ -47,6 +50,8 @@ const NEVER_CLASSES = new Set([
 ]);
 /** The same by part of a device class, as the bridge checks it (heat_pump, robotic_vacuum_cleaner, laundry_washer). */
 const NEVER_CLASS_WORDS = /heater|heating|heat_pump|boiler|oven|cook|stove|hob|kettle|fryer|grill|microwave|extractor|washer|dryer|dishwasher|vacuum|mower|pump|valve|evse|charger|medical|oxygen|machine|sauna/;
+/** Names of things that open a home: garage, gate, door, lock. */
+const OPENER_WORDS = /(^|[^a-z])(garage|gates?|doors?|locks?)([^a-z]|$)/i;
 /** Names that say heater, oven or machine: not offered, even on a plain plug. The controllable switch's warning covers the rest. */
 const NEVER_WORDS = /\b(heaters?|heating|radiators?|ovens?|stoves?|cooktops?|hobs?|kettles?|irons?|boilers?|furnaces?|saunas?|grills?|fryers?|toasters?|blankets?|medical|oxygen|ventilators?|insulin|pumps?|saws?|drills?|lathes?|welders?|compressors?|heat lamps?)\b/i;
 
@@ -66,7 +71,10 @@ export function classify(e: DeviceEntity): { type: DeviceType; tier: Tier } {
   if (!type || NEVER_DOMAINS.has(domain) || NEVER_CLASSES.has(dc) || NEVER_CLASS_WORDS.test(dc) || NEVER_WORDS.test(e.name) || NEVER_WORDS.test(e.entity_id.replace(/[._]/g, " "))) {
     return { type: type ?? "switch", tier: "never" };
   }
-  return { type, tier: SECURE.has(type) ? "secure" : "switch" };
+  // A plain switch, relay or cover named for a garage door, gate, door or lock (a Shelly on a garage motor, a
+  // Matter blind that is really a gate) is treated as one: promoted to secure, never demoted.
+  const opens = (type === "cover" && dc === "door") || (type === "switch" || type === "cover") && (OPENER_WORDS.test(e.name) || OPENER_WORDS.test(e.entity_id.replace(/[._]/g, " ")));
+  return { type, tier: SECURE.has(type) || opens ? "secure" : "switch" };
 }
 
 function typeOf(domain: string, sense: string, dc: string): DeviceType | undefined {
@@ -122,14 +130,14 @@ export function checkValue(action: Action, value: unknown): { value: number | st
 export function warningFor(type: DeviceType): string {
   switch (type) {
     case "switch":
-      return "Only make this controllable if nothing that could hurt someone is plugged into it or wired to it: no heaters, irons, cookers, medical devices or machinery.";
+      return "Only make this controllable if nothing that could hurt someone is plugged into it or wired to it: no heaters, irons, cookers, medical devices or machinery. If it opens a garage door, gate or door, name it so (\"Garage door\"): then every request is confirmed by a person.";
     case "light":
     case "fan":
       return "People in your workspace, and agents you give the Control permission, will be able to switch this. Make sure nothing else is wired to it.";
     case "siren":
       return "A siren can frighten people and disturb neighbours. Agents with the Control permission will be able to sound it.";
     case "cover":
-      return "Blinds and covers can trap fingers or pets as they move. Agents with the Control permission will be able to move them.";
+      return "Blinds and covers can trap fingers or pets as they move. Agents with the Control permission will be able to move them. If this opens a door or gate, name it so: then every request is confirmed by a person.";
     case "climate":
       return "Agents with the Control permission can set this between 10 and 28 °C and change its mode.";
     case "lock":
@@ -233,4 +241,22 @@ export function actionText(action: Action, name: string, value: number | string 
     case "arm_home": return `arm ${name} (home)`;
     case "disarm": return `disarm ${name}`;
   }
+}
+
+/**
+ * A Telegram chat that may confirm requests for a device (ADR 0067): a private
+ * chat, still linked, linked by someone who is still a member or above, whose
+ * agent has a grant on the device's source. Returns that person, else undefined.
+ */
+export async function personChat(s: AccountScope, channelId: string, sourceId: string): Promise<{ userId: string; name: string; agentId: string } | undefined> {
+  const ch = await s.db.selectFrom("channels").select(["chat_type", "status", "linked_by", "agent_id"]).where("id", "=", channelId).executeTakeFirst();
+  if (!ch || ch.chat_type !== "private" || ch.status !== "active" || !ch.linked_by) return undefined;
+  const member = await s.db.selectFrom("memberships").select("role").where("user_id", "=", ch.linked_by).where("account_id", "=", s.accountId).executeTakeFirst();
+  if (!member || !atLeast(member.role, "member")) return undefined;
+  const agent = await s.db.selectFrom("agents").select("id").where("id", "=", ch.agent_id).where("revoked_at", "is", null).executeTakeFirst();
+  if (!agent) return undefined;
+  const grants = await s.db.selectFrom("grants").select("source_ids").where("agent_id", "=", ch.agent_id).execute();
+  if (!grants.some((g) => g.source_ids.includes(sourceId))) return undefined;
+  const u = await s.db.selectFrom("users").select(["name", "email"]).where("id", "=", ch.linked_by).executeTakeFirst();
+  return { userId: ch.linked_by, name: u?.name ?? u?.email ?? "someone", agentId: ch.agent_id };
 }

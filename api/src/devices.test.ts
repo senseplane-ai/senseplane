@@ -8,10 +8,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { findDevice, parseControl } from "./channels.js";
-import { classify, checkValue } from "./devices.js";
+import { classify, checkValue, warningFor } from "./devices.js";
 import { createApi, type SenseplaneApi } from "./index.js";
 import { createPasswordUser } from "./routes/auth.js";
-import { CONFIRM_MS, PER_MINUTE, TAKE_MS, WAIT_MS, expireConfirmations } from "./routes/devices.js";
+import { CONFIRM_MS, PER_MINUTE, TAKE_MS, WAIT_MS, expireConfirmations, sweepLostCommands } from "./routes/devices.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
 
@@ -33,6 +33,20 @@ describe("what a device is", () => {
     expect(classify(e("matter.n3_e1_switch", { device_class: "oven" })).tier).toBe("never");
     expect(classify(e("matter.n3_e1_switch", { device_class: "dimmable_light" })).type).toBe("light");
     expect(classify(e("vacuum.robot")).tier).toBe("never");
+    expect(classify(e("matter.n3_e1_switch", { device_class: "robotic_vacuum_cleaner" })).tier).toBe("never");
+  });
+  it("treats anything that opens a home as secure, whatever it is wired as", () => {
+    // A Shelly relay on a garage motor, a Matter blind that is really a gate, a cover Home Assistant calls a door.
+    expect(classify(e("switch.shelly1_relay", { name: "Garage door" })).tier).toBe("secure");
+    expect(classify(e("input_boolean.front_gate")).tier).toBe("secure");
+    expect(classify(e("matter.n7_e1_cover", { sense: "cover", name: "Gate", device_class: "window_covering" }))).toEqual({ type: "cover", tier: "secure" });
+    expect(classify(e("cover.side", { sense: "cover", device_class: "door" })).tier).toBe("secure");
+    expect(classify(e("switch.door_lock_relay")).tier).toBe("secure");
+    // Never demoted, and not every word: a light named for the door stays a light; "Gateway" isn't a gate.
+    expect(classify(e("lock.front", { sense: "lock", name: "Front" })).tier).toBe("secure");
+    expect(classify(e("light.door_light", { name: "Door light" })).tier).toBe("switch");
+    expect(classify(e("switch.gateway_plug", { name: "Gateway" })).tier).toBe("switch");
+    expect(warningFor("switch")).toMatch(/garage door, gate or door/);
   });
   it("clamps a thermostat to 10–28 °C and checks values", () => {
     expect(checkValue("set_temperature", 35)).toEqual({ value: 28, clamped: true });
@@ -112,10 +126,12 @@ describe("control, only when a person asks", () => {
       { entity_id: "light.hall", name: "Hall light", area: "Hall", sense: "switch", kind: "state", controls: ["turn_on", "turn_off", "set_brightness", "explode"] },
       { entity_id: "lock.front_door", name: "Front door", area: "Hall", sense: "lock", kind: "state", controls: ["lock", "unlock"] },
       { entity_id: "fan.hall", name: "Hall fan", area: "Hall", sense: "switch", kind: "state", controls: ["turn_on", "turn_off"] },
+      { entity_id: "light.porch", name: "Porch light", area: "Hall", sense: "switch", kind: "state", controls: ["turn_on", "turn_off"] },
+      { entity_id: "switch.shelly_relay", name: "Garage door", area: "Hall", sense: "switch", kind: "state", controls: ["turn_on", "turn_off"] },
       { entity_id: "switch.plug_2", name: "Space heater", area: "Hall", sense: "switch", kind: "state", controls: ["turn_on", "turn_off"] },
       { entity_id: "binary_sensor.door", name: "Door", area: "Hall", device_class: "door", sense: "contact", kind: "state" },
     ] })).statusCode).toBe(204);
-    const chosen = (await call(owner, "PATCH", `/v1/bridges/${bridge.id}/entities`, { choose: ["light.hall", "lock.front_door", "fan.hall", "switch.plug_2", "binary_sensor.door"] })).json().data;
+    const chosen = (await call(owner, "PATCH", `/v1/bridges/${bridge.id}/entities`, { choose: ["light.hall", "lock.front_door", "fan.hall", "switch.plug_2", "binary_sensor.door", "light.porch", "switch.shelly_relay"] })).json().data;
     hall = chosen[0].source_id;
     await call(bridge.token, "POST", "/v1/bridge/health", { cameras: [], home_assistant: { connected: true, entities: 5, sending: 5 } });
 
@@ -136,7 +152,8 @@ describe("control, only when a person asks", () => {
 
   it("lists what can be switched: chosen entities with actions their type allows, never a heater", async () => {
     const list = (await call(owner, "GET", "/v1/devices")).json().data as { id: string; entity_id: string; actions: string[]; tier: string; controllable: boolean; online: boolean; warning: string }[];
-    expect(list.map((d) => d.entity_id).sort()).toEqual(["fan.hall", "light.hall", "lock.front_door"]);
+    expect(list.map((d) => d.entity_id).sort()).toEqual(["fan.hall", "light.hall", "light.porch", "lock.front_door", "switch.shelly_relay"]);
+    expect(list.find((d) => d.entity_id === "switch.shelly_relay")).toMatchObject({ tier: "secure", type: "switch" });
     for (const d of list) dev[d.entity_id] = d.id;
     const light = list.find((d) => d.entity_id === "light.hall")!;
     expect(light).toMatchObject({ actions: ["turn_on", "turn_off", "set_brightness"], tier: "switch", controllable: false, online: true });
@@ -144,7 +161,7 @@ describe("control, only when a person asks", () => {
     expect(light.warning).toMatch(/wired/);
     // An agent sees the devices of the sources it can see; can_control needs the Control grant.
     const asButler = (await call(agents.Butler!, "GET", "/v1/devices")).json().data;
-    expect(asButler).toHaveLength(3);
+    expect(asButler).toHaveLength(5);
   });
 
   it("refuses a device nobody made controllable, and only admins can make it so", async () => {
@@ -152,7 +169,7 @@ describe("control, only when a person asks", () => {
     expect(r.statusCode).toBe(409);
     expect(r.json().error).toMatchObject({ code: "not_controllable", details: { command: { status: "refused" } } });
     expect((await call(agents.Butler!, "PATCH", `/v1/devices/${dev["light.hall"]}`, { controllable: true })).statusCode).toBe(403);
-    for (const k of ["light.hall", "lock.front_door", "fan.hall"]) {
+    for (const k of ["light.hall", "lock.front_door", "fan.hall", "light.porch", "switch.shelly_relay"]) {
       const p = await call(owner, "PATCH", `/v1/devices/${dev[k]}`, { controllable: true });
       expect(p.statusCode).toBe(200);
       expect(p.json().controllable).toBe(true);
@@ -166,7 +183,9 @@ describe("control, only when a person asks", () => {
     const r = await call(agents.Butler!, "POST", `/v1/devices/${dev["light.hall"]}/commands`, { action: "turn_on" });
     expect(r.statusCode).toBe(200);
     expect(r.json()).toMatchObject({ status: "done", state: { on: true, brightness: 100 }, message: "Hall light is on at 100%.", via: "agent", requested_by: { kind: "agent", name: "Butler" } });
-    expect(handed.at(-1)).toMatchObject({ kind: "device_control", args: { entity_id: "light.hall", action: "turn_on" } });
+    expect(handed.at(-1)).toMatchObject({ kind: "device_control", args: { entity_id: "light.hall", action: "turn_on", run_by: expect.any(String) } });
+    // The box must run it by the take deadline plus a little: after that it refuses.
+    expect(Date.parse(handed.at(-1)!.args.run_by as string) - Date.now()).toBeLessThan(1500 + 5000);
     const dim = await call(agents.Butler!, "POST", `/v1/devices/${dev["light.hall"]}/commands`, { action: "set_brightness", value: 40 });
     expect(dim.json()).toMatchObject({ status: "done", state: { brightness: 40 } });
     expect((await call(owner, "GET", `/v1/devices/${dev["light.hall"]}`)).json().state).toMatchObject({ on: true, brightness: 40 });
@@ -232,6 +251,49 @@ describe("control, only when a person asks", () => {
     expect(handed.filter((h) => h.args.entity_id === "lock.front_door")).toHaveLength(1);
   });
 
+  it("runs an approved request once: a second tap, a refusal after it, or a late approval changes nothing", async () => {
+    const before = handed.filter((h) => h.args.entity_id === "lock.front_door").length;
+    const c = (await call(agents.Butler!, "POST", `/v1/devices/${dev["lock.front_door"]}/commands`, { action: "unlock" })).json();
+    const [a, b] = await Promise.all([
+      call(person, "POST", `/v1/confirmations/${c.id}`, { approve: true }),
+      call(person, "POST", `/v1/confirmations/${c.id}`, { approve: true }),
+    ]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+    expect([a, b].find((r) => r.statusCode === 409)!.json().error.code).toBe("conflict");
+    const refuse = await call(person, "POST", `/v1/confirmations/${c.id}`, { approve: false });
+    expect(refuse.statusCode).toBe(409);
+    const again = await call(person, "POST", `/v1/confirmations/${c.id}`, { approve: true });
+    expect(again.statusCode).toBe(409);
+    expect((await call(owner, "GET", `/v1/device-commands/${c.id}`)).json().status).toBe("done");
+    expect(handed.filter((h) => h.args.entity_id === "lock.front_door").length - before).toBe(1);
+  });
+
+  it("refuses an approval when the agent lost its Control grant while it waited", async () => {
+    const before = handed.length;
+    const lockAgent = (await call(owner, "POST", "/v1/agents", { name: "Locksmith" })).json();
+    const grant = (await call(owner, "POST", "/v1/grants", { agent_id: lockAgent.id, source_ids: [hall], senses: ["control"] })).json();
+    const c = (await call(lockAgent.api_key, "POST", `/v1/devices/${dev["lock.front_door"]}/commands`, { action: "unlock" })).json();
+    expect(c.status).toBe("awaiting_confirmation");
+    expect((await call(owner, "DELETE" as never, `/v1/grants/${grant.id}`)).statusCode).toBe(204);
+    const r = await call(person, "POST", `/v1/confirmations/${c.id}`, { approve: true });
+    expect(r.statusCode).toBe(403);
+    expect(r.json().error.details.command).toMatchObject({ status: "refused", message: expect.stringMatching(/no longer has Control/) });
+    // A revoked agent too.
+    const g2 = (await call(owner, "POST", "/v1/grants", { agent_id: lockAgent.id, source_ids: [hall], senses: ["control"] })).json();
+    expect(g2.id).toBeTruthy();
+    const c2 = (await call(lockAgent.api_key, "POST", `/v1/devices/${dev["lock.front_door"]}/commands`, { action: "lock" })).json();
+    expect((await call(owner, "DELETE" as never, `/v1/agents/${lockAgent.id}`)).statusCode).toBe(204);
+    expect((await call(person, "POST", `/v1/confirmations/${c2.id}`, { approve: true })).statusCode).toBe(403);
+    expect(handed.length).toBe(before);
+  });
+
+  it("a garage door on a plain relay asks for a person like a lock", async () => {
+    const r = await call(agents.Butler!, "POST", `/v1/devices/${dev["switch.shelly_relay"]}/commands`, { action: "turn_on" });
+    expect(r.statusCode).toBe(202);
+    expect(r.json().status).toBe("awaiting_confirmation");
+    expect((await call(person, "POST", `/v1/devices/${dev["switch.shelly_relay"]}/commands`, { action: "turn_on" })).json().error.code).toBe("confirmation_required");
+  });
+
   it("a person's own request for a lock asks them to confirm first", async () => {
     box!.result = () => on({ locked: true });
     const ask = await call(person, "POST", `/v1/devices/${dev["lock.front_door"]}/commands`, { action: "lock" });
@@ -253,6 +315,48 @@ describe("control, only when a person asks", () => {
     await stopBox();
   });
 
+  it("lets at most 10 of 30 requests at once through to the box", async () => {
+    const before = handed.length;
+    startBox(() => on({ on: true }));
+    const answers = await Promise.all(Array.from({ length: 30 }, () => call(owner, "POST", `/v1/devices/${dev["light.porch"]}/commands`, { action: "turn_on" })));
+    await stopBox();
+    const codes = answers.map((r) => r.statusCode);
+    expect(codes.filter((c) => c === 429).length).toBeGreaterThanOrEqual(20);
+    expect(handed.slice(before).filter((h) => h.args.entity_id === "light.porch").length).toBeLessThanOrEqual(PER_MINUTE);
+    const admitted = await api.data.withAccount(acc, (s) => s.db.selectFrom("device_commands").select("id").where("device_id", "=", dev["light.porch"]!).where("status", "!=", "refused").execute());
+    expect(admitted.length).toBe(PER_MINUTE);
+  });
+
+  it("gives up on a command the box took and never reported, so it can't be pending or reported later", async () => {
+    // A box that takes work and goes quiet.
+    const taken: string[] = [];
+    let quiet = true;
+    void (async () => {
+      while (quiet) {
+        const r = await call(bridge.token, "GET", "/v1/bridge/commands?wait=1");
+        for (const c of r.json().data ?? []) taken.push(c.id);
+      }
+    })();
+    const r = await call(owner, "POST", `/v1/devices/${dev["light.hall"]}/commands`, { action: "turn_off" });
+    quiet = false;
+    await settle(1200);
+    expect(r.statusCode).toBe(202);
+    expect(r.json().status).toBe("sent");
+    expect(await sweepLostCommands(api.data, undefined, 60)).toBe(0); // not yet a minute
+    expect(await sweepLostCommands(api.data, undefined, 0)).toBe(1);
+    expect((await call(owner, "GET", `/v1/device-commands/${r.json().id}`)).json()).toMatchObject({ status: "failed", message: expect.stringMatching(/may or may not have run/) });
+    // The box's late report is refused, and nothing is handed out again.
+    expect((await call(bridge.token, "POST", `/v1/bridge/commands/${taken.at(-1)}`, { ok: true, result: { reached: true, changed: true, state: { on: false } } })).statusCode).toBe(404);
+    expect((await call(bridge.token, "GET", "/v1/bridge/commands?wait=0")).json().data).toEqual([]);
+  });
+
+  it("never takes control or sensors as a reading or a source's sense", async () => {
+    expect((await call(bridge.token, "POST", "/v1/bridge/readings", { readings: [{ sense: "control", value: true, device: { id: "light.hall" } }] })).statusCode).toBe(400);
+    expect((await call(owner, "POST", `/v1/sources/${hall}/readings`, { readings: [{ sense: "sensors", value: 1 }] })).statusCode).toBe(400);
+    expect((await call(owner, "POST", "/v1/sources", { name: "X", type: "sensor", senses: ["control"] })).statusCode).toBe(400);
+    expect((await call(bridge.token, "PUT", "/v1/bridge/entities", { entities: [{ entity_id: "light.x", name: "X", sense: "control", kind: "state" }] })).statusCode).toBe(400);
+  });
+
   it("an offline box fails the command within the take time, and never runs it afterwards", async () => {
     const started = Date.now();
     const r = await call(agents.Butler!, "POST", `/v1/devices/${dev["light.hall"]}/commands`, { action: "turn_off" });
@@ -268,7 +372,14 @@ describe("control, only when a person asks", () => {
 
   it("keeps every attempt in the audit log: who asked, through what, the outcome and the state after", async () => {
     await settle();
-    const audit = (await call(owner, "GET", "/v1/audit?limit=100")).json().data as { action: string; actor: string; details?: Record<string, unknown> }[];
+    // Every page of the log (GET /v1/audit shows `details`; the device entries are followed through its pages).
+    const audit: { action: string; actor: string; details?: Record<string, unknown> }[] = [];
+    for (let cursor = ""; ;) {
+      const page = (await call(owner, "GET", `/v1/audit?limit=100${cursor ? `&cursor=${cursor}` : ""}`)).json();
+      audit.push(...page.data);
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
     const actions = new Set(audit.map((a) => a.action));
     for (const a of ["device.command_refused", "device.command_done", "device.command_unchanged", "device.command_failed", "device.command_awaiting_confirmation",
       "device.command_expired", "device.command_denied", "device.command_confirmed", "device.command_offline", "device.made_controllable"]) expect(actions).toContain(a);

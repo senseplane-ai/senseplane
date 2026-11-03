@@ -171,6 +171,9 @@ export interface DeviceCommandsTable {
   message: string | null;
   state_after: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
   bridge_command_id: string | null;
+  /** The agent the request came through, and the Telegram chat when it was one (ADR 0067). */
+  agent_id: ColumnType<string | null, string | null | undefined, string | null>;
+  channel_id: ColumnType<string | null, string | null | undefined, string | null>;
   expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   decided_by: string | null;
   decided_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;

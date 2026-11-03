@@ -22,7 +22,7 @@ import type { AccountScope, DataAccess } from "../data/access.js";
 import { newId } from "../data/ids.js";
 import type { DeviceCommandStatus, DeviceCommandsTable } from "../data/schema.js";
 import {
-  ACTIONS, type Action, type DeviceState, type DeviceType, actionText, actionsOf, checkValue, classify, cleanState, stateFromReading, stateText, warningFor,
+  ACTIONS, type Action, type DeviceState, type DeviceType, actionText, personChat, actionsOf, checkValue, classify, cleanState, stateFromReading, stateText, warningFor,
 } from "../devices.js";
 import { ApiError, type ErrorCode } from "../errors.js";
 import type { AuditLog } from "../module.js";
@@ -52,13 +52,21 @@ export interface Principal {
   via: "console" | "app" | "telegram" | "agent" | "api";
   userId?: string;
   agentId?: string;
+  /** A Telegram chat's agent: the chat, and the person it belongs to when it qualifies (see personChat). */
+  channelId?: string;
+  person?: { userId: string; name: string };
 }
+
+/** Commands a box took (or should have) this long ago with no report are given up as lost. */
+export const LOST_S = 60;
+/** The box refuses a command it gets later than its take deadline plus this (clock skew). */
+export const RUN_BY_GRACE_MS = 5_000;
 
 export interface DeviceDeps {
   data: DataAccess;
   audit?: AuditLog;
   /** Told about a request waiting for a person (Telegram buttons, ADR 0059). */
-  onConfirmation?(accountId: string, command: ReturnType<typeof toCommand>): Promise<void>;
+  onConfirmation?(accountId: string, command: ReturnType<typeof toCommand>, where: { sourceId: string; ownChannelId?: string }): Promise<void>;
   /** Shorter waits in tests. */
   takeMs?: number;
   waitMs?: number;
@@ -133,7 +141,12 @@ async function principalOf(req: FastifyRequest, s: AccountScope): Promise<Princi
   if (!a || a.integrationSource) throw new ApiError(403, "forbidden", "this token can't switch devices");
   if (a.agentId) {
     const agent = await s.db.selectFrom("agents").select(["name", "kind", "client_name"]).where("id", "=", a.agentId).executeTakeFirst();
-    return { kind: "agent", actor: a.actor, id: a.agentId, agentId: a.agentId, name: agent?.client_name ?? agent?.name ?? null, via: agent?.kind === "channel" ? "telegram" : "agent" };
+    const p: Principal = { kind: "agent", actor: a.actor, id: a.agentId, agentId: a.agentId, name: agent?.client_name ?? agent?.name ?? null, via: agent?.kind === "channel" ? "telegram" : "agent" };
+    if (agent?.kind === "channel") {
+      const ch = await s.db.selectFrom("channels").select("id").where("agent_id", "=", a.agentId).where("status", "=", "active").executeTakeFirst();
+      if (ch) p.channelId = ch.id;
+    }
+    return p;
   }
   if (a.userId) {
     const user = await s.db.selectFrom("users").select(["name", "email"]).where("id", "=", a.userId).executeTakeFirst();
@@ -211,7 +224,10 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceDeps) {
     await data.withAccount(accountId, async (s) => {
       await s.db.insertInto("bridge_commands").values({
         id: bcId, account_id: accountId, bridge_id: c.bridge_id, kind: "device_control", created_by: c.actor, expires_at: expires,
-        args_sealed: data.box().encrypt(JSON.stringify({ entity_id: c.entity_id, action: c.action, ...(c.value !== null ? { value: c.value } : {}) })),
+        // run_by: a box that gets this later (a slow network, a clock far off) refuses it rather than run it late.
+        args_sealed: data.box().encrypt(JSON.stringify({
+          entity_id: c.entity_id, action: c.action, ...(c.value !== null ? { value: c.value } : {}), run_by: new Date(expires.getTime() + RUN_BY_GRACE_MS).toISOString(),
+        })),
       }).execute();
       await s.db.updateTable("device_commands").set({ status: "sent", bridge_command_id: bcId, message: "Sent to the box." }).where("id", "=", c.id).execute();
     });
@@ -273,36 +289,54 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceDeps) {
         id: newId("dcm"), account_id: accountId, device_id: d.id, bridge_id: d.bridge_id, entity_id: d.entity_id, device_name: d.name,
         action, value: checked.value, tier, actor: p.actor, actor_kind: p.kind, actor_name: p.name, via: p.via,
         state_after: null, bridge_command_id: null, expires_at: null, decided_by: null, decided_at: null, created_at: new Date(),
+        agent_id: p.agentId ?? null, channel_id: p.channelId ?? null,
       };
       if (!d.controllable) await refuse(accountId, base, 409, "not_controllable", `${cap(d.name)} isn't controllable. An admin can make it controllable on the Devices page.`);
-      if (p.kind === "agent" && !canSense(req, d.source_id!, CONTROL)) {
+      if (req.access?.grants && !canSense(req, d.source_id!, CONTROL)) {
         await refuse(accountId, base, 403, "forbidden_sense", `This agent has no Control permission for ${d.name}. A person can give it one on the Agents page.`);
       }
-      const recent = await data.withAccount(accountId, async (s) => Number((await s.db.selectFrom("device_commands").select((e) => e.fn.countAll().as("n"))
-        .where("device_id", "=", d.id).where("status", "!=", "refused").where("created_at", ">", new Date(Date.now() - 60_000)).executeTakeFirstOrThrow()).n));
-      if (recent >= PER_MINUTE) await refuse(accountId, base, 429, "rate_limited", `${cap(d.name)} has had ${PER_MINUTE} commands in the last minute, the most allowed. Try again shortly.`);
 
       const asked = actionText(action, d.name, checked.value);
       if (tier === "secure" && p.kind === "user" && !req.body.confirm) {
         // A person confirms their own request in the app; nothing is recorded until they do.
         throw new ApiError(409, "confirmation_required", `Confirm to ${asked}.`, { action, device_id: d.id });
       }
-      if (tier === "secure" && p.kind !== "user") {
-        const row = await data.withAccount(accountId, (s) => s.db.insertInto("device_commands").values({
-          ...base, value: checked.value === null ? null : JSON.stringify(checked.value), status: "awaiting_confirmation",
-          expires_at: new Date(Date.now() + confirmMs),
-          message: `Waiting for a person to confirm: ${asked}. They have ${Math.round(confirmMs / 60_000)} minutes.`,
-        }).returningAll().executeTakeFirstOrThrow());
-        await audit(accountId, row, 202);
-        await deps.onConfirmation?.(accountId, toCommand(row)).catch(() => undefined);
-        const out = answer(row);
+      // A person asking in their own Telegram chat: the chat's buttons are their "are you sure", and it is their request.
+      const person = p.channelId && tier === "secure" ? await data.withAccount(accountId, (s) => personChat(s, p.channelId!, d.source_id!)) : undefined;
+      const waits = tier === "secure" && p.kind !== "user";
+      const value = checked.value === null ? null : JSON.stringify(checked.value);
+      const row = waits
+        ? {
+          ...base, value, status: "awaiting_confirmation" as const, expires_at: new Date(Date.now() + confirmMs),
+          ...(person ? { actor: `user:${person.userId}`, actor_kind: "user" as const, actor_name: person.name } : {}),
+          message: person
+            ? `Confirm in this chat to ${asked}, within ${Math.round(confirmMs / 60_000)} minutes.`
+            : `Waiting for a person to confirm: ${asked}. They have ${Math.round(confirmMs / 60_000)} minutes.`,
+        }
+        : { ...base, value, status: "sent" as const, message: checked.clamped ? `Set to ${checked.value} °C, the nearest safe setting.` : null };
+      // Counted and recorded under a lock on the device, so concurrent requests can't all slip under the limit.
+      const admitted = await data.withAccount(accountId, async (s) => {
+        await s.db.selectFrom("bridge_entities").select("id").where("id", "=", d.id).forUpdate().executeTakeFirst();
+        const recent = Number((await s.db.selectFrom("device_commands").select((e) => e.fn.countAll().as("n"))
+          .where("device_id", "=", d.id).where("status", "!=", "refused").where("created_at", ">", new Date(Date.now() - 60_000)).executeTakeFirstOrThrow()).n);
+        if (recent >= PER_MINUTE) {
+          const message = `${cap(d.name)} has had ${PER_MINUTE} commands in the last minute, the most allowed. Try again shortly.`;
+          return { limited: await s.db.insertInto("device_commands").values({ ...row, status: "refused", message, expires_at: null, finished_at: new Date() }).returningAll().executeTakeFirstOrThrow() };
+        }
+        return { row: await s.db.insertInto("device_commands").values(row).returningAll().executeTakeFirstOrThrow() };
+      });
+      if (admitted.limited) {
+        await audit(accountId, admitted.limited, 429);
+        throw new ApiError(429, "rate_limited", admitted.limited.message!, { command: toCommand(admitted.limited) });
+      }
+      const made = admitted.row!;
+      if (waits) {
+        await audit(accountId, made, 202);
+        await deps.onConfirmation?.(accountId, toCommand(made), { sourceId: d.source_id!, ...(person ? { ownChannelId: p.channelId } : {}) }).catch(() => undefined);
+        const out = answer(made);
         return reply.code(out.code).send(out.body);
       }
-      const row = await data.withAccount(accountId, (s) => s.db.insertInto("device_commands").values({
-        ...base, value: checked.value === null ? null : JSON.stringify(checked.value), status: "sent",
-        message: checked.clamped ? `Set to ${checked.value} °C, the nearest safe setting.` : null,
-      }).returningAll().executeTakeFirstOrThrow());
-      const out = answer(await dispatch(accountId, row));
+      const out = answer(await dispatch(accountId, made));
       return reply.code(out.code).send(out.body);
     },
   );
@@ -313,7 +347,7 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceDeps) {
       return s.db.selectFrom("device_commands").selectAll().where("id", "=", req.params.id).executeTakeFirst();
     });
     // An agent sees only its own requests.
-    if (!row || (req.access?.agentId && row.actor !== req.access.actor)) throw new ApiError(404, "not_found", "command not found");
+    if (!row || (req.access?.agentId && row.agent_id !== req.access.agentId)) throw new ApiError(404, "not_found", "command not found");
     return toCommand(row);
   });
 
@@ -355,21 +389,45 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceDeps) {
       await expireOld(s);
       const c = await s.db.selectFrom("device_commands").selectAll().where("id", "=", id).executeTakeFirst();
       if (!c) throw new ApiError(404, "not_found", "confirmation not found");
-      if (c.actor === by.actor) throw new ApiError(403, "forbidden", "A request can't be confirmed by whoever made it.");
-      if (c.status !== "awaiting_confirmation") return c;
+      // An agent or a key can't confirm its own request; a person's own request is theirs to confirm.
+      if (c.actor_kind !== "user" && c.actor === by.actor) throw new ApiError(403, "forbidden", "A request can't be confirmed by whoever made it.");
+      if (c.status === "expired") throw new ApiError(409, "confirmation_expired", c.message ?? "Nobody confirmed in time, so this wasn't done.", { command: toCommand(c) });
+      if (c.status !== "awaiting_confirmation") throw new ApiError(409, "conflict", `This request was already answered (${c.status.replace(/_/g, " ")}).`, { command: toCommand(c) });
       const d = await deviceQuery(s).where("e.id", "=", c.device_id).executeTakeFirst() as DeviceRow | undefined;
-      const still = !!d && d.controllable && isDevice(d);
-      const status: DeviceCommandStatus = !approve ? "denied" : still ? "sent" : "refused";
-      const message = !approve ? `${by.name} said no, so this wasn't done.` : still ? `Confirmed by ${by.name}.` : `${cap(c.device_name)} isn't controllable any more, so this wasn't done.`;
+      const why = !d || !d.controllable || !isDevice(d) ? `${cap(c.device_name)} isn't controllable any more, so this wasn't done.` : await stillAllowed(s, c, d.source_id!);
+      const status: DeviceCommandStatus = !approve ? "denied" : why ? "refused" : "sent";
+      const message = !approve ? `${by.name} said no, so this wasn't done.` : why ?? `Confirmed by ${by.name}.`;
       const done = status !== "sent";
-      return (await s.db.updateTable("device_commands").set({ status, message, decided_by: by.name, decided_at: new Date(), ...(done ? { finished_at: new Date() } : {}) })
-        .where("id", "=", id).where("status", "=", "awaiting_confirmation").returningAll().executeTakeFirst()) ?? c;
+      // Only the call that moves the row on runs it: a second tap, or a refusal after an approval, finds nothing to move.
+      const moved = await s.db.updateTable("device_commands").set({ status, message, decided_by: by.name, decided_at: new Date(), ...(done ? { finished_at: new Date() } : {}) })
+        .where("id", "=", id).where("status", "=", "awaiting_confirmation").returningAll().executeTakeFirst();
+      if (!moved) throw new ApiError(409, "conflict", "This request was already answered.", { command: toCommand(c) });
+      return moved;
     });
-    if (row.decided_at && row.status !== "sent") await audit(accountId, row, 409);
-    if (row.status !== "sent" || !row.decided_at) return row;
+    if (row.status !== "sent") {
+      await audit(accountId, row, 409);
+      return row;
+    }
     await deps.audit?.write({ accountId, actor: by.actor, action: "device.command_confirmed", target: row.device_id, status: 200,
       details: { command: row.id, device: row.device_name, action: row.action, requested_by: row.actor_name, via: row.via, decided_by: by.name } }).catch(() => undefined);
     return dispatch(accountId, row);
+  };
+
+  /** Why a waiting request may no longer run: its agent was revoked or lost Control, or its key was revoked. */
+  const stillAllowed = async (s: AccountScope, c: CommandRow, sourceId: string): Promise<string | undefined> => {
+    if (c.agent_id) {
+      const agent = await s.db.selectFrom("agents").select("id").where("id", "=", c.agent_id).where("revoked_at", "is", null).executeTakeFirst();
+      const now = new Date();
+      const grants = agent ? await s.db.selectFrom("grants").select(["source_ids", "senses", "window_from", "window_to"]).where("agent_id", "=", c.agent_id).execute() : [];
+      const ok = grants.some((g) => g.source_ids.includes(sourceId) && g.senses.includes(CONTROL) && (!g.window_from || g.window_from <= now) && (!g.window_to || g.window_to >= now));
+      if (!ok) return `${c.actor_name ?? "The agent"} no longer has Control permission for ${c.device_name}, so this wasn't done.`;
+    }
+    if (c.actor_kind === "account_key") {
+      const prefix = c.actor.replace(/^owner:/, "");
+      const key = await s.db.selectFrom("api_keys").select("id").where("prefix", "like", `${prefix}%`).where("agent_id", "is", null).where("user_id", "is", null).where("revoked_at", "is", null).executeTakeFirst();
+      if (!key) return "The key that asked for this was revoked, so this wasn't done.";
+    }
+    return undefined;
   };
 
   return { decide };
@@ -410,6 +468,32 @@ export async function finishDeviceCommand(data: DataAccess, accountId: string, b
         by: row.actor_name, via: row.via, outcome: row.status, state_after: row.state_after ?? null, ...(row.decided_by ? { decided_by: row.decided_by } : {}) },
     }).catch(() => undefined);
   }
+}
+
+/**
+ * Gives up on device commands a box took (or should have taken) more than LOST_S ago and never reported:
+ * the request reads failed, and its box command can no longer be handed out or reported. Never sends anything.
+ */
+export async function sweepLostCommands(data: DataAccess, audit?: AuditLog, seconds = LOST_S) {
+  const due = await data.stuckDeviceCommands(seconds);
+  for (const r of due) {
+    const row = await data.withAccount(r.account_id, async (s) => {
+      const c = await s.db.updateTable("device_commands").set({
+        status: "failed", finished_at: new Date(),
+        message: "The box never said what happened, so it may or may not have run. Check the device before asking again.",
+      }).where("id", "=", r.id).where("status", "=", "sent").returningAll().executeTakeFirst();
+      if (c?.bridge_command_id) {
+        await s.db.updateTable("bridge_commands").set({ status: "failed", args_sealed: null, error: "lost: no report from the box", finished_at: new Date() })
+          .where("id", "=", c.bridge_command_id).where("status", "in", ["pending", "taken"]).execute();
+      }
+      return c;
+    });
+    if (row) {
+      await audit?.write({ accountId: r.account_id, actor: row.actor, action: "device.command_failed", target: row.device_id, status: 504,
+        details: { command: row.id, device: row.device_name, action: row.action, by: row.actor_name, via: row.via, outcome: "lost" } }).catch(() => undefined);
+    }
+  }
+  return due.length;
 }
 
 /** Refuses requests nobody confirmed in time, across accounts (the API's periodic loop); it never sends anything. */

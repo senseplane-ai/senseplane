@@ -342,11 +342,11 @@ func (d *FakeDevice) caseResponder(ctx context.Context, ex *Exchange, m Message)
 	d.mu.Unlock()
 	if err != nil && lenient {
 		// gomat's controller certificate is marked as a CA; the reference devices accept it.
-		if pc, perr := parseCert(tbe3.FieldBytes(1)); perr == nil && pc.verifiedBy(rootPub) && pc.fabric == fabricID {
+		if pc, perr := parseCert(tbe3.FieldBytes(1)); perr == nil && d.certBy(pc, rootPub) && pc.fabric == fabricID {
 			peerPub, err = pc.spec.pub, nil
 		}
 	}
-	if err != nil || !verifyRaw(peerPub, tbs(tbe3.FieldBytes(1), nil, s1.FieldBytes(4), ephPub), tbe3.FieldBytes(3)) {
+	if err != nil || !d.verify(peerPub, tbs(tbe3.FieldBytes(1), nil, s1.FieldBytes(4), ephPub), tbe3.FieldBytes(3)) {
 		d.logf("fake device: Sigma3 rejected: %v", err)
 		_ = ex.Send(protoSecureChannel, opStatus, statusReport(1, protoSecureChannel, 2))
 		return
@@ -693,7 +693,7 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 			return
 		}
 		root, err := parseCert(fields.FieldBytes(0))
-		if err != nil || !root.spec.isCA || !root.verifiedBy(root.spec.pub) {
+		if err != nil || !root.spec.isCA || !d.certBy(root, root.spec.pub) {
 			d.logf("fake device: root rejected: %v", err)
 			_ = invokeResult(ex, path, 0, nil, 0x87)
 			return
@@ -712,7 +712,7 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 		noc, err := parseCert(fields.FieldBytes(0))
 		status := uint64(0)
 		switch {
-		case err != nil || rootPub == nil || !noc.verifiedBy(rootPub):
+		case err != nil || rootPub == nil || !d.certBy(noc, rootPub):
 			d.logf("fake device: NOC rejected: %v", err)
 			status = 3 // InvalidNOC
 		case opKey == nil || !noc.spec.pub.Equal(&opKey.PublicKey):
@@ -957,4 +957,25 @@ func (a fakeAttestation) cd(official bool) ([]byte, error) {
 func (d *FakeDevice) Trust() Trust {
 	paa, _ := x509.ParseCertificate(d.att.paa)
 	return Trust{PAAs: []*x509.Certificate{paa}, CDKeys: map[string]*ecdsa.PublicKey{hex.EncodeToString(d.att.cdSKID): &d.att.cdKey.PublicKey}}
+}
+
+// verify checks a signature; a Lenient device also takes gomat's, whose r or
+// s loses a leading zero byte about once in a hundred signatures (63 bytes).
+func (d *FakeDevice) verify(pub *ecdsa.PublicKey, msg, sig []byte) bool {
+	if verifyRaw(pub, msg, sig) {
+		return true
+	}
+	d.mu.Lock()
+	lenient := d.Lenient
+	d.mu.Unlock()
+	if !lenient || len(sig) != 63 {
+		return false
+	}
+	shortR := append([]byte{0}, sig...)
+	shortS := append(append(append([]byte{}, sig[:32]...), 0), sig[32:]...)
+	return verifyRaw(pub, msg, shortR) || verifyRaw(pub, msg, shortS)
+}
+
+func (d *FakeDevice) certBy(c parsedCert, issuer *ecdsa.PublicKey) bool {
+	return d.verify(issuer, c.spec.tbs(), c.sig)
 }

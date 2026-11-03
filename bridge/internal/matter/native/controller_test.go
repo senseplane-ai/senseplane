@@ -198,25 +198,16 @@ func TestAnotherControllersCertificatesAreRefused(t *testing.T) {
 // adding the fake device shows the fake speaks PASE, CASE and the
 // certificates as real devices do, so the tests above mean something.
 func TestAReferenceControllerAddsTheFakeDevice(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := mkdir("pem"); err != nil {
-		t.Fatal(err)
-	}
-	cm := gomat.NewFileCertManager(1)
-	if err := cm.BootstrapCa(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cm.Load(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cm.CreateUser(100); err != nil {
-		t.Fatal(err)
-	}
-	fabric := gomat.NewFabric(1, cm)
 	// gomat doesn't pad r and s in its signatures, so about one in a hundred
-	// is a byte short and (rightly) refused; a fresh one is signed each time.
+	// is a byte short; a Lenient fake device accepts those. A failed attempt
+	// can still leave gomat's own UDP :55555 held, so each attempt also starts
+	// a new fabric after a pause.
 	var err error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < 6; attempt++ {
+		var fabric *gomat.Fabric
+		if fabric, err = referenceFabric(t); err != nil {
+			t.Fatal(err)
+		}
 		dev, derr := NewFakeDevice(5540, 20202021, 3840, t.Logf)
 		if derr != nil {
 			t.Skipf("can't listen on 5540: %v", derr)
@@ -232,8 +223,29 @@ func TestAReferenceControllerAddsTheFakeDevice(t *testing.T) {
 		if ok {
 			return
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatalf("gomat couldn't add the fake device: %v", err)
+}
+
+// referenceFabric is a new gomat fabric (CA and controller 100) in a new
+// directory: gomat keeps its certificates in ./pem.
+func referenceFabric(t *testing.T) (*gomat.Fabric, error) {
+	t.Chdir(t.TempDir())
+	if err := mkdir("pem"); err != nil {
+		return nil, err
+	}
+	cm := gomat.NewFileCertManager(1)
+	if err := cm.BootstrapCa(); err != nil {
+		return nil, err
+	}
+	if err := cm.Load(); err != nil {
+		return nil, err
+	}
+	if err := cm.CreateUser(100); err != nil {
+		return nil, err
+	}
+	return gomat.NewFabric(1, cm), nil
 }
 
 func mkdir(p string) error { return os.Mkdir(p, 0o700) }

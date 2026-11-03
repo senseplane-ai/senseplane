@@ -2,7 +2,7 @@
 
 # MCP tools
 
-Senseplane's MCP server exposes 12 tools (tool spec version 0.4.0).
+Senseplane's MCP server exposes 13 tools (tool spec version 0.5.0).
 Each call runs with the agent's grants: a tool that needs a sense the agent
 isn't granted fails with `forbidden_sense`. See [MCP setup](../mcp-setup.md)
 to connect a client.
@@ -160,3 +160,14 @@ Switch a device, only because the person you are helping asked for it now; never
 | `request` | string | no | Instead of a new command: the id of an earlier request, to see what happened to it |
 
 **Returns:** The request: status (done, in_progress, unchanged, awaiting_confirmation, sent, offline, failed, refused, expired, denied), a message, and the state after.
+
+## `speak`
+
+Say something out loud through a camera's speaker: text to speech, after a short chime, in one plainly synthetic voice. Only when the person you are helping asked you to; begin by saying you are an automated assistant, never pretend to be a person, and don't speak towards a neighbour's property. Needs the Speak permission on the camera and a camera with a speaker (list_senses shows `speaker`). At most 30 seconds and 6 messages a minute per camera; refused while someone else is speaking through it, and a person's push-to-talk cuts you off. Everything said is recorded and in the audit log.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `source` | string | yes | Camera id or name |
+| `text` | string | yes | What to say, in plain words (at most 30 seconds of speech); up to 500 characters |
+
+**Returns:** The message: status (playing, played, sent, refused, offline, late, failed, interrupted), a message when it wasn't said, how long it took to say, and a link to hear the clip.

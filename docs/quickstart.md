@@ -242,10 +242,10 @@ signed snapshot and clip URLs that expire after 15 minutes.
 
 ## 6. Connect your agent
 
-Senseplane's MCP server has 12 tools: `list_senses`, `look`, `listen`,
+Senseplane's MCP server has 13 tools: `list_senses`, `look`, `listen`,
 `read_environment`, `watch_for`, `what_happened`, `measure`,
-`check_history`, `replay`, `stop_watching`, `list_devices` and
-`control_device`. The quickest local setup, for Claude Code:
+`check_history`, `replay`, `stop_watching`, `list_devices`,
+`control_device` and `speak`. The quickest local setup, for Claude Code:
 
 ```sh
 claude mcp add --transport http senseplane http://localhost:58060/mcp

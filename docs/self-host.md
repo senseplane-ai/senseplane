@@ -148,6 +148,8 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `RAW_RETENTION_DAYS` | `7` | Default raw footage retention for new accounts |
 | `RAW_RETENTION_MAX_DAYS` | empty | Optional upper limit for `retention_days`; also adds a storage lifecycle backstop |
 | `RETENTION_SWEEP_SECONDS` | `600` | How often expired footage is deleted |
+| `TTS_BASE_URL` | empty | Text to speech for talk-back (ADR 0069): an OpenAI-compatible speech endpoint, e.g. `http://kokoro:8880/v1` for Kokoro (Apache-2.0) behind Kokoro-FastAPI. The API calls `POST {TTS_BASE_URL}/audio/speech` for WAV. Empty: agents and watches can't speak (push-to-talk still works) |
+| `TTS_API_KEY`, `TTS_MODEL`, `TTS_VOICE` | empty, `kokoro`, `af_heart` | Its bearer key, model and the one synthetic voice every message uses (a voice can't be chosen per message) |
 | `TELEGRAM_BOT_TOKEN` | empty | A bot from @BotFather: alerts and questions in Telegram ([Telegram](telegram.md)) |
 | `TELEGRAM_MODE`, `TELEGRAM_WEBHOOK_SECRET` | `polling`, empty | `webhook`: Telegram posts updates to `API_PUBLIC_URL/telegram/webhook` with this secret, instead of the server polling |
 | `API_WORKERS` | `true` | `false`: this API process only serves requests. Background work (housekeeping, scheduled watches, webhook deliveries, clips) runs in the processes that have it on, each piece in one of them ([ADR 0058](decisions/0058-background-work-in-postgres.md)) |

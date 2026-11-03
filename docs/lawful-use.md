@@ -95,6 +95,36 @@ Senseplane is built for this:
 Only turn on audio recording where nobody's private conversations will be
 captured, or where everyone has agreed.
 
+## Speaking through a camera
+
+A camera with a speaker can talk: a person holding **Hold to talk** in live
+view, or an agent or a watch with the **Speak** permission. A voice coming out
+of a camera can surprise, frighten or mislead people, so:
+
+- **Say it's automated.** When an agent or a watch speaks, start by saying
+  that people are hearing an automated system ("This is an automated message
+  from the home's camera"). The EU AI Act requires that people are told when
+  they interact with an AI system (Article 50), and it's the honest thing to do
+  everywhere. Senseplane plays a short chime before every agent's message and
+  speaks in one plainly synthetic voice; it never imitates a real person and
+  refuses requests to choose or clone a voice. Never instruct an agent to
+  pretend to be you, or anyone else.
+- **Speak only into your own space.** Don't speak towards a neighbour's
+  property, the street or shared areas, and don't use a camera's speaker to
+  harass, threaten or startle anyone. A door camera telling a courier where to
+  leave a parcel is fine; talking at passers-by isn't.
+- **Recorded agent audio is personal data.** Senseplane keeps what an agent
+  or a watch said (the text and the clip) so you can check it, and deletes the
+  clips with the camera's retention. If the camera records sound, its own
+  recording also contains what was said through it. The same retention and
+  rights below apply.
+- **Push-to-talk is live, not recorded by Senseplane**, but the audit log
+  says who talked through which camera and for how long. People near the
+  phone see "Someone is speaking through this phone" while it plays.
+- **Speak** is off by default for every agent and is never included in "Read
+  sensors". Give it only for the cameras where an agent should talk, and only
+  to agents you trust with that.
+
 ## Keep footage only as long as you need it
 
 The GDPR requires deleting personal data once it's no longer needed for its
@@ -141,5 +171,5 @@ monitoring, a data protection impact assessment.
   - § 201 StGB (violation of the privacy of the spoken word): [gesetze-im-internet.de](https://www.gesetze-im-internet.de/stgb/__201.html)
   - § 201a StGB (violation of intimate privacy by taking pictures): [gesetze-im-internet.de](https://www.gesetze-im-internet.de/stgb/__201a.html)
 - **Works Constitution Act,** § 87(1) no. 6 BetrVG: [gesetze-im-internet.de](https://www.gesetze-im-internet.de/betrvg/__87.html)
-- **EU AI Act,** Regulation (EU) 2024/1689, Art. 5(1)(f) (emotion recognition at work): [EUR-Lex](https://eur-lex.europa.eu/eli/reg/2024/1689/oj)
+- **EU AI Act,** Regulation (EU) 2024/1689, Art. 5(1)(f) (emotion recognition at work) and Art. 50(1) (telling people they are interacting with an AI system): [EUR-Lex](https://eur-lex.europa.eu/eli/reg/2024/1689/oj)
 - **UK Information Commissioner's Office,** Domestic CCTV systems: [ico.org.uk](https://ico.org.uk/for-the-public/domestic-cctv-systems/)

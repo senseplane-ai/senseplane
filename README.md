@@ -54,7 +54,7 @@ backups and upgrades: [Run Senseplane on a VM](docs/self-host-vm.md).
 | Media plane | `media/` | TypeScript (mediasoup) | Ingest, continuous recording, playback, analysis feed |
 | Brain | `brain/` | Python | Motion, objects, sounds, episodes, watches, memory |
 | API | `api/` | TypeScript (Fastify) | Public `/v1` REST API, webhooks, auth |
-| MCP server | `mcp/` | TypeScript | 12 tools for agents |
+| MCP server | `mcp/` | TypeScript | 13 tools for agents |
 | SDK | `sdk/typescript/` | TypeScript | `npm i senseplane` |
 | SDK | `sdk/python/` | Python | `pip install senseplane`; agent tools for Claude, OpenAI, LangChain |
 | Console | `console/` | TypeScript (React) | Web UI for sources, playback, watches, chat, access |

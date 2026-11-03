@@ -137,6 +137,21 @@ func Encode(codec string, samples []int16) []byte {
 // ErrNoBackchannel means the camera offers no two-way audio the box can play to.
 var ErrNoBackchannel = errors.New("the camera offers no two-way audio (ONVIF backchannel) in G.711")
 
+// UnsupportedCodecError: the camera's speaker takes a codec the box can't send (G.711 only, for now).
+type UnsupportedCodecError struct{ Codec string }
+
+func (e *UnsupportedCodecError) Error() string {
+	return fmt.Sprintf("the camera's speaker takes %s, and the box can only send G.711 (PCMU or PCMA) to it", e.Codec)
+}
+
+// noTrack is why a camera has no speaker the box can use.
+func (s *session) noTrack() error {
+	if s.other != "" {
+		return &UnsupportedCodecError{Codec: s.other}
+	}
+	return ErrNoBackchannel
+}
+
 // Probe says whether the camera has a speaker the box can play to (checked when it is added).
 func Probe(ctx context.Context, url string) (bool, error) {
 	s, err := open(ctx, url)
@@ -157,7 +172,7 @@ func Play(ctx context.Context, url string, p PCM, ready func() error) (time.Dura
 	}
 	defer s.close()
 	if s.track == nil {
-		return 0, ErrNoBackchannel
+		return 0, s.noTrack()
 	}
 	ch, err := s.setup(ctx)
 	if err != nil {

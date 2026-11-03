@@ -44,6 +44,7 @@ type session struct {
 	id    string // Session
 	auth  func(method, uri string) string
 	track *track
+	other string // a speaker track in a codec the box can't send, when there is no G.711 one
 }
 
 // open connects and DESCRIBEs with the backchannel required.
@@ -88,7 +89,37 @@ func open(ctx context.Context, raw string) (*session, error) {
 		s.base = cb
 	}
 	s.track = speakerTrack(string(body))
+	if s.track == nil {
+		s.other = otherSpeakerCodec(string(body))
+	}
 	return s, nil
+}
+
+// otherSpeakerCodec names the codec of a speaker track the box can't send to (AAC, G.726), or "".
+func otherSpeakerCodec(sdp string) string {
+	audio, sendonly, codec := false, false, ""
+	found := ""
+	flush := func() {
+		if audio && sendonly && codec != "" && found == "" {
+			found = codec
+		}
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(sdp, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "m="):
+			flush()
+			audio, sendonly, codec = strings.HasPrefix(line, "m=audio"), false, ""
+		case line == "a=sendonly":
+			sendonly = true
+		case strings.HasPrefix(line, "a=rtpmap:") && codec == "":
+			if f := strings.Fields(strings.TrimPrefix(line, "a=rtpmap:")); len(f) == 2 {
+				codec = strings.ToUpper(f[1])
+			}
+		}
+	}
+	flush()
+	return found
 }
 
 // speakerTrack finds an audio track the camera marks sendonly, in PCMU or PCMA at 8 kHz (PCMU first).

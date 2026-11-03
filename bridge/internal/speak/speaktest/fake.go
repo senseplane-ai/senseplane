@@ -29,7 +29,8 @@ import (
 type Camera struct {
 	// URL is its RTSP stream URL.
 	URL string
-	// Speaker: whether it offers a backchannel; Codec is PCMU (default) or PCMA.
+	// Speaker: whether it offers a backchannel; Codec is PCMU (default), PCMA, or another (MPEG4-GENERIC
+	// for AAC, G726-32) that the box can't send.
 	Speaker bool
 	Codec   string
 	// Digest: the camera asks for its password with an RTSP Digest challenge, as most do.
@@ -43,6 +44,7 @@ type Camera struct {
 	mu       sync.Mutex
 	payload  []byte
 	packets  []rtp.Header
+	arrived  []time.Time
 	required []string
 	methods  []string
 	conns    int
@@ -73,6 +75,13 @@ func (c *Camera) Packets() []rtp.Header {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]rtp.Header(nil), c.packets...)
+}
+
+// Arrived is when each packet came.
+func (c *Camera) Arrived() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Time(nil), c.arrived...)
 }
 
 // Methods are the RTSP requests it was sent; Required the Require headers of its DESCRIBEs.
@@ -109,14 +118,20 @@ func (c *Camera) serve() {
 }
 
 func (c *Camera) sdp(backchannel bool) string {
-	pt, name := 0, "PCMU"
-	if c.Codec == "PCMA" {
-		pt, name = 8, "PCMA"
+	pt, name := 0, "PCMU/8000"
+	switch c.Codec {
+	case "PCMU", "":
+	case "PCMA":
+		pt, name = 8, "PCMA/8000"
+	case "MPEG4-GENERIC":
+		pt, name = 96, "MPEG4-GENERIC/16000/1"
+	default:
+		pt, name = 97, c.Codec+"/8000"
 	}
 	s := "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Fake camera\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n" +
 		"m=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=control:trackID=0\r\na=recvonly\r\n"
 	if backchannel && c.Speaker {
-		s += fmt.Sprintf("m=audio 0 RTP/AVP %d\r\na=rtpmap:%d %s/8000\r\na=control:trackID=1\r\na=sendonly\r\n", pt, pt, name)
+		s += fmt.Sprintf("m=audio 0 RTP/AVP %d\r\na=rtpmap:%d %s\r\na=control:trackID=1\r\na=sendonly\r\n", pt, pt, name)
 	}
 	return s
 }
@@ -145,6 +160,7 @@ func (c *Camera) handle(conn net.Conn) {
 				c.mu.Lock()
 				c.payload = append(c.payload, p.Payload...)
 				c.packets = append(c.packets, p.Header)
+				c.arrived = append(c.arrived, time.Now())
 				c.mu.Unlock()
 			}
 			continue

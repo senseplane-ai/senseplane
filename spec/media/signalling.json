@@ -770,6 +770,12 @@
           "minimum": 1,
           "maximum": 100000,
           "description": "The minter's ceiling on concurrent viewers for the account; enforced at mint time"
+        },
+        "listenTo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Push-to-talk to a camera behind a box (ADR 0074): the one talkback producer this listener may receive over WHEP; needs canSubscribe. A WHEP request whose token names another producer, or none, gets 404 no_talkback"
         }
       },
       "allOf": [
@@ -805,6 +811,11 @@
                 {
                   "required": [
                     "subscribeKinds"
+                  ]
+                },
+                {
+                  "required": [
+                    "listenTo"
                   ]
                 }
               ]

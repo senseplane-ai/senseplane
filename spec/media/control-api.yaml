@@ -226,6 +226,7 @@ paths:
               properties:
                 reason: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
                 message: {type: string, maxLength: 300}
+                producerId: {type: string, maxLength: 100, description: 'Only this press: 404 when the participant is talking with another track'}
       responses:
         '204': {description: Closed and told}
         '400': {$ref: '#/components/responses/BadRequest'}

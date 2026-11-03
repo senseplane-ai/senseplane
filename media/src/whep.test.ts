@@ -37,12 +37,16 @@ async function room(listener = "cam:speaker") {
   const talker = new Client(media.ws);
   expect((await talker.join(joinToken({ room: roomId, identity: "cam:viewer:lv_sam", grants: talkerGrants(listener) }))).ok).toBe(true);
   const t = (await talker.request("createTransport", { direction: "send" })).data as { transportId: string };
+  let current = "none";
   const press = async (ssrc = 5001) => {
     const r = await talker.request("produce", { transportId: t.transportId, kind: "audio", rtpParameters: opus(ssrc), appData: { source: "talkback" } });
     expect(r.ok).toBe(true);
-    return (r.data as { producerId: string }).producerId;
+    current = (r.data as { producerId: string }).producerId;
+    return current;
   };
-  const listener_ = (identity = "cam:speaker", ttl?: number) => joinToken({ room: roomId, identity, kind: "agent", grants: listenerGrants, ...(ttl ? { ttl } : {}) });
+  // A box's token for one press: the latest, unless another is named.
+  const listener_ = (identity = "cam:speaker", ttl?: number, listenTo?: string) =>
+    joinToken({ room: roomId, identity, kind: "agent", grants: { ...listenerGrants, listenTo: listenTo ?? current }, ...(ttl ? { ttl } : {}) });
   const participants = async () => ((await control(media.base, "GET", `/control/rooms/${roomId}`)).body as { participants: { identity: string }[] }).participants.map((p) => p.identity);
   return { roomId, talker, press, listener: listener_, participants };
 }
@@ -93,6 +97,8 @@ describe("push-to-talk to a box (WHEP)", () => {
     expect((await post(publisher)).status).toBe(403);
     const video = joinToken({ room: r.roomId, identity: "cam:speaker", kind: "agent", grants: { ...listenerGrants, subscribeKinds: ["video"] } });
     expect((await post(video)).status).toBe(403);
+    // A listener's token names the one press it is for.
+    expect((await post(joinToken({ room: r.roomId, identity: "cam:speaker", kind: "agent", grants: listenerGrants }))).status).toBe(403);
     // Another camera's room: its token names that room, where nobody talks.
     const other = await room();
     expect((await post(other.listener())).status).toBe(404);
@@ -110,6 +116,27 @@ describe("push-to-talk to a box (WHEP)", () => {
     expect(await r.talker.waitFor((e) => e.event === "talkbackEnded")).toEqual({ event: "talkbackEnded", producerId, reason: "listener_left" });
     // The slot is free for the next press.
     await r.press(5002);
+    r.talker.close();
+  });
+
+  it("gives a box's token only the press it was issued for: a later press isn't heard on it, nor ended by it", async () => {
+    const r = await room();
+    const first = await r.press(5101);
+    const late = r.listener("cam:speaker", undefined, first); // the box's command for the first press, still on its way
+    await r.talker.request("closeProducer", { producerId: first });
+    const second = await r.press(5102);
+    expect(await (await post(late)).json()).toEqual({ error: "no_talkback" });
+    // Ending by producer: only that press.
+    const path = `/control/rooms/${r.roomId}/participants/${encodeURIComponent("cam:viewer:lv_sam")}/talkback/stop`;
+    expect((await control(media.base, "POST", path, { reason: "speaker_unavailable", producerId: first })).status).toBe(404);
+    // The second press's own token is heard, and its listener leaving ends only it.
+    const token = r.listener();
+    const res = await post(token);
+    expect(res.status).toBe(201);
+    await res.text();
+    expect((await fetch(`${media.base}${res.headers.get("location")}`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
+    expect(await r.talker.waitFor((e) => e.event === "talkbackEnded")).toMatchObject({ producerId: second, reason: "listener_left" });
+    expect(r.talker.events.filter((e) => e.event === "talkbackEnded")).toHaveLength(1);
     r.talker.close();
   });
 

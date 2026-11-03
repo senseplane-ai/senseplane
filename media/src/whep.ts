@@ -18,11 +18,15 @@ import { MediaError, type Participant, type RoomManager } from "./rooms.js";
 import { type JoinDeps, admit } from "./signalling.js";
 
 const MAX_OFFER_BYTES = 64 * 1024;
+/** A listener's ICE consent lapses after this long without checks (Pion sends one every 2 s). */
+export const CONSENT_TIMEOUT_S = 4;
 const fingerprint = (bearer: string) => createHash("sha256").update(bearer).digest();
 
 interface WhepSession {
   id: string;
   bearer: Buffer;
+  /** The press this listener consumes; only it may be ended when the listener goes. */
+  producerId?: string;
   participant?: Participant;
   timer?: NodeJS.Timeout;
   ended: boolean;
@@ -132,9 +136,10 @@ export function registerWhep(app: FastifyInstance, deps: WhepDeps) {
     clearTimeout(s.timer);
     const p = s.participant;
     if (p) {
-      const talker = p.room.talkback?.owner;
-      if (talker && reason !== "talkback_ended" && p.room.talkback?.producerId) {
-        deps.rooms.stopTalkback(p.room.id, talker.identity, reason === "expired" ? "expired" : "listener_left");
+      const t = p.room.talkback;
+      // Only the press this listener had: a newer press (the box's next command) goes on.
+      if (t && s.producerId && t.producerId === s.producerId && reason !== "talkback_ended") {
+        deps.rooms.stopTalkback(p.room.id, t.owner.identity, reason === "expired" ? "expired" : "listener_left", undefined, s.producerId);
       }
       await p.leave(reason);
     }
@@ -165,15 +170,18 @@ export function registerWhep(app: FastifyInstance, deps: WhepDeps) {
       s.participant = participant;
       const g = claims.grants;
       // A listener only: it receives audio and sends nothing.
-      if (g.canPublish || !g.canSubscribe || (g.subscribeKinds && !g.subscribeKinds.includes("audio"))) throw new WhepError(403, "forbidden");
+      if (g.canPublish || !g.canSubscribe || (g.subscribeKinds && !g.subscribeKinds.includes("audio")) || !g.listenTo) throw new WhepError(403, "forbidden");
       const room = participant.room;
       const slot = room.talkback;
-      const found = slot?.producerId ? room.findProducer(slot.producerId) : undefined;
-      // Nobody talking, or a talker who didn't name this listener: the same answer, nothing disclosed.
+      // The one press this token is for, still being held: a token for an earlier press gets nothing.
+      const found = slot?.producerId === g.listenTo ? room.findProducer(g.listenTo) : undefined;
+      // Nobody talking, another press, or a talker who didn't name this listener: the same answer, nothing disclosed.
       if (!slot || !found || !participant.mayReceiveFrom(found.owner)) throw new WhepError(404, "no_talkback");
+      s.producerId = g.listenTo;
       const router = await room.acquireRouter();
       const offer = parseListenOffer(sdp, router.rtpCapabilities);
-      const t = (await deps.rooms.createTransport(participant, "recv")) as { transportId: string; iceParameters: types.IceParameters; iceCandidates: types.IceCandidate[]; dtlsParameters: types.DtlsParameters };
+      // A box that vanishes (unplugged, its network gone) stops answering consent checks: ended within seconds.
+      const t = (await deps.rooms.createTransport(participant, "recv", false, { iceConsentTimeout: CONSENT_TIMEOUT_S })) as { transportId: string; iceParameters: types.IceParameters; iceCandidates: types.IceCandidate[]; dtlsParameters: types.DtlsParameters };
       await deps.rooms.connectTransport(participant, t.transportId, { dtlsParameters: offer.dtls });
       const c = await deps.rooms.consume(participant, t.transportId, found.producer.id, offer.caps);
       const transport = participant.transports.get(t.transportId)!.transport as types.WebRtcTransport;
@@ -181,6 +189,9 @@ export function registerWhep(app: FastifyInstance, deps: WhepDeps) {
       const resume = () => void deps.rooms.resumeConsumer(participant, c.consumerId).catch(() => undefined);
       if (transport.dtlsState === "connected") resume();
       else transport.on("dtlsstatechange", (st) => st === "connected" && resume());
+      transport.on("icestatechange", (st) => {
+        if (st === "disconnected" || st === "closed") void end(s, "listener_left");
+      });
       // The token's lifetime is the most one press may last here.
       s.timer = setTimeout(() => void end(s, "expired"), Math.max(0, claims.exp * 1000 - Date.now()));
       s.timer.unref();

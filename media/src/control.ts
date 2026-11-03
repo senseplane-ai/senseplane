@@ -171,7 +171,10 @@ export function registerControl(app: FastifyInstance, deps: ControlDeps) {
       const b = (req.body ?? {}) as Record<string, unknown>;
       if (typeof b.reason !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(b.reason)) throw new Bad(400, "bad_request", "reason must be a short lower_snake_case word");
       if (b.message !== undefined && (typeof b.message !== "string" || b.message.length > 300)) throw new Bad(400, "bad_request", "message must be at most 300 characters");
-      if (!deps.rooms.stopTalkback(req.params.roomId, req.params.identity, b.reason, b.message as string | undefined)) return reply.code(404).send({ error: "not talking" });
+      if (b.producerId !== undefined && (typeof b.producerId !== "string" || !b.producerId || b.producerId.length > 100)) throw new Bad(400, "bad_request", "producerId must be a producer id");
+      if (!deps.rooms.stopTalkback(req.params.roomId, req.params.identity, b.reason, b.message as string | undefined, b.producerId as string | undefined)) {
+        return reply.code(404).send({ error: "not talking" });
+      }
       return reply.code(204).send();
     });
 

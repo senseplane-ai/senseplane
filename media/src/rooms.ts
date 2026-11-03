@@ -335,7 +335,7 @@ export class RoomManager {
 
   // --- transports, producers, consumers -------------------------------------
 
-  async createTransport(p: Participant, direction: "send" | "recv", sctp = false) {
+  async createTransport(p: Participant, direction: "send" | "recv", sctp = false, opts: { iceConsentTimeout?: number } = {}) {
     if (p.closed) throw new MediaError("unauthorized", "session closed");
     if (direction !== "send" && direction !== "recv") throw new MediaError("bad_request", "direction must be send or recv");
     if (direction === "send" && !p.grants.canPublish) throw new MediaError("forbidden", "this token may not publish");
@@ -363,6 +363,7 @@ export class RoomManager {
         ? { webRtcServer: node.webRtcServer }
         : { listenInfos: [{ protocol: "udp", ip: this.cfg.listenIp, ...(this.cfg.announcedAddress ? { announcedAddress: this.cfg.announcedAddress } : {}) }] }),
       enableUdp: true, enableTcp: true, preferUdp: true, enableSctp: sctp,
+      ...(opts.iceConsentTimeout ? { iceConsentTimeout: opts.iceConsentTimeout } : {}),
     });
     p.transports.set(t.id, { transport: t, direction, kind: "webrtc" });
     t.on("dtlsstatechange", (s) => {
@@ -560,10 +561,12 @@ export class RoomManager {
    * the track is closed and its sender told why, with `message` for a person to read. False when that
    * participant isn't talking.
    */
-  stopTalkback(roomId: string, identity: string, reason: string, message?: string): boolean {
+  stopTalkback(roomId: string, identity: string, reason: string, message?: string, only?: string): boolean {
     const room = this.rooms.get(roomId);
     const t = room?.talkback;
     if (!t || t.owner.identity !== identity || !t.producerId) return false;
+    // Only the press it was about: a newer press by the same person goes on.
+    if (only !== undefined && t.producerId !== only) return false;
     const e = t.owner.producers.get(t.producerId);
     if (!e || e.producer.closed) return false;
     const producerId = t.producerId;

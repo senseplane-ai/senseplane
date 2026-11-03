@@ -68,10 +68,11 @@ Grants (no other keys):
 | `maxResolution` | `720p`, `1080p` | carried for the egress; the node does not act on it |
 | `idleTimeoutSeconds` | integer 1–86400 | carried and echoed; the API runs the timer |
 | `maxLiveViewers`, `maxActiveSources` | integer 1–100000 | carried; the API enforces them at mint time |
+| `listenTo` | string, 1–100 | the one `talkback` producer a box's listener may receive over WHEP (ADR 0074) |
 
 Grant rules: `subscribeExempt` never for `human`; `subscribeExempt` needs
 `maxSubscriptions`; `subscribe`, `subscribeExempt`, `maxSubscriptions` and
-`subscribeKinds` need `canSubscribe`; a non-empty `publishKinds` needs
+`subscribeKinds` and `listenTo` need `canSubscribe`; a non-empty `publishKinds` needs
 `canPublish`.
 
 What Senseplane mints:
@@ -82,6 +83,7 @@ What Senseplane mints:
 | WHIP publisher | `{source_id}:whip` | `ingress` / `webrtc` | as above |
 | the camera's feed | `{source_id}:feed` | `egress` / `pipe` | `canSubscribe`, `subscribeExempt`, `maxSubscriptions: 4`, `subscribeKinds` |
 | live viewer | `{source_id}:viewer:{session_id}` | `human` / `webrtc` | `canSubscribe`, `subscribeKinds: ["video"]` or `["video","audio"]`, `idleTimeoutSeconds`, `maxLiveViewers?`; `jti` = the session id |
+| a box's speaker, for one press | `{source_id}:speaker` | `agent` / `webrtc` | `canSubscribe`, `subscribeKinds: ["audio"]`, `maxSubscriptions: 1`, `listenTo` (the press's producer); `exp` = the press's cap |
 
 An egress's join token carries `transport: "pipe"`: the media plane's own
 egress leg, whatever that is inside the media plane (a pipe transport, a

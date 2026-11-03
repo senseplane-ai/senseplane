@@ -30,6 +30,8 @@ export interface Grants {
   idleTimeoutSeconds?: number;
   maxLiveViewers?: number;
   maxActiveSources?: number;
+  /** The one push-to-talk track a listener may receive (a box's speaker, ADR 0074). */
+  listenTo?: string;
 }
 
 export interface JoinClaims {
@@ -90,7 +92,7 @@ const KINDS = ["human", "agent", "egress", "sip", "ingress"] as const;
 const TRANSPORTS = ["webrtc", "plain", "pipe"] as const;
 const GRANT_KEYS = [
   "canPublish", "canSubscribe", "canPublishData", "subscribe", "visibleTo", "publishKinds", "subscribeExempt", "maxSubscriptions",
-  "subscribeKinds", "maxResolution", "idleTimeoutSeconds", "maxLiveViewers", "maxActiveSources",
+  "subscribeKinds", "maxResolution", "idleTimeoutSeconds", "maxLiveViewers", "maxActiveSources", "listenTo",
 ] as const;
 
 function validRule(r: unknown): boolean {
@@ -119,6 +121,7 @@ function validGrants(g: unknown): g is Grants {
   if (g.idleTimeoutSeconds !== undefined && !isInt(g.idleTimeoutSeconds, 1, 86_400)) return false;
   if (g.maxLiveViewers !== undefined && !isInt(g.maxLiveViewers, 1, 100_000)) return false;
   if (g.maxActiveSources !== undefined && !isInt(g.maxActiveSources, 1, 100_000)) return false;
+  if (g.listenTo !== undefined && !isStr(g.listenTo, 1, 100)) return false;
   return true;
 }
 
@@ -126,7 +129,7 @@ function validGrants(g: unknown): g is Grants {
 export function grantsValidForKind(g: Grants, kind: ParticipantKind): boolean {
   if (kind === "human" && g.subscribeExempt) return false;
   if (g.subscribeExempt && g.maxSubscriptions === undefined) return false;
-  if (!g.canSubscribe && (g.subscribe || g.subscribeExempt || g.maxSubscriptions || g.subscribeKinds)) return false;
+  if (!g.canSubscribe && (g.subscribe || g.subscribeExempt || g.maxSubscriptions || g.subscribeKinds || g.listenTo)) return false;
   if (!g.canPublish && g.publishKinds?.length) return false;
   return true;
 }

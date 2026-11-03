@@ -40,23 +40,27 @@ class Sense2(RootModel[str]):
         ),
     ]
     """
-    One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.
+    One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) and `speak` (talking through the camera's speaker, ADR 0069) are only ever granted by name, like video and audio.
     """
 
 
 class Sense(
     RootModel[
-        Literal['video', 'audio', 'temperature', 'humidity', 'sensors', 'control']
+        Literal[
+            'video', 'audio', 'temperature', 'humidity', 'sensors', 'control', 'speak'
+        ]
         | Sense2
     ]
 ):
     root: Annotated[
-        Literal['video', 'audio', 'temperature', 'humidity', 'sensors', 'control']
+        Literal[
+            'video', 'audio', 'temperature', 'humidity', 'sensors', 'control', 'speak'
+        ]
         | Sense2,
         Field(examples=['video', 'audio', 'temperature', 'humidity'], title='Sense'),
     ]
     """
-    One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.
+    One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) and `speak` (talking through the camera's speaker, ADR 0069) are only ever granted by name, like video and audio.
     """
 
 
@@ -169,6 +173,10 @@ class Source(BaseModel):
     reconnecting: a bridge camera whose bridge is trying to reach it again (ADR 0045). paused: recording and analysis stopped until resumed (POST /v1/sources/{id}/resume).
     """
     record_audio: bool
+    speaker: bool | None = None
+    """
+    The camera can play sound (ADR 0069): a phone always, an IP camera when its box found two-way audio (an ONVIF backchannel). Speak is offered only on cameras with a speaker.
+    """
     zones: list[Zone]
     privacy_masks: list[PrivacyMask]
     ingest: Ingest | None = None
@@ -659,17 +667,21 @@ class Estimate(BaseModel):
 
 class Destination(BaseModel):
     """
-    Where a watch's events go (ADR 0043, 0059): one of the account's webhooks, an agent's inbox, or a linked chat (channel).
+    Where a watch's events go (ADR 0043, 0059): one of the account's webhooks, an agent's inbox, or a linked chat (channel); or `speak`, which says `text` through a camera's speaker when the watch fires (ADR 0069).
     """
 
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
     )
-    type: Literal['webhook', 'agent', 'channel']
+    type: Literal['webhook', 'agent', 'channel', 'speak']
     id: Annotated[str, Field(max_length=64, min_length=1)]
     """
-    A webhook id (whk_…), an agent id (agt_…) or a channel id (chn_…).
+    A webhook id (whk_…), an agent id (agt_…), a channel id (chn_…) or, for speak, the camera's source id (src_…).
+    """
+    text: Annotated[str | None, Field(max_length=500, min_length=1)] = None
+    """
+    speak only: what to say through the camera's speaker, at most 30 seconds of speech. Required for speak.
     """
 
 
@@ -1020,6 +1032,10 @@ class Error2(BaseModel):
         'confirmation_denied',
         'device_offline',
         'device_failed',
+        'no_speaker',
+        'speaker_busy',
+        'message_too_long',
+        'camera_offline',
     ]
     message: str
     request_id: str
@@ -1558,6 +1574,10 @@ class Camera(BaseModel):
     """
     Why
     """
+    speaker: bool | None = None
+    """
+    What the box found about two-way audio when it connected (ADR 0069)
+    """
 
 
 class HomeAssistant(BaseModel):
@@ -1639,7 +1659,7 @@ class BridgeCommand(BaseModel):
     id: str
     kind: str
     """
-    matter_commission, onvif_add_camera, onvif_search or device_control
+    matter_commission, onvif_add_camera, onvif_search, device_control or speak
     """
     status: Literal['pending', 'taken', 'done', 'failed', 'expired']
     """
@@ -2181,6 +2201,10 @@ class LiveViewRequest(BaseModel):
     """
     Also receive the source's audio (default false). Needs an audio grant and a source that records audio.
     """
+    talk: bool | None = None
+    """
+    Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera. People only (member and up) and workspace keys; a phone camera on the capture page. 409 `no_speaker` otherwise.
+    """
 
 
 class LiveViewSession(BaseModel):
@@ -2212,6 +2236,78 @@ class LiveViewSession(BaseModel):
     """
     Whether this session includes audio
     """
+    talk: bool | None = None
+    """
+    Whether this session may talk through the camera (push-to-talk)
+    """
+
+
+class SpeakRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    text: Annotated[str, Field(max_length=500, min_length=1)]
+    """
+    What to say. Tell people they are hearing an automated system (docs/lawful-use.md).
+    """
+
+
+class RequestedBy1(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    kind: str | None = None
+    id: str | None = None
+    name: str | None = None
+
+
+class SpeakMessage(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    """
+    spk_...
+    """
+    source_id: str
+    kind: Literal['agent', 'watch', 'person']
+    """
+    agent: the speak tool or REST; watch: a watch's speak action; person: push-to-talk in live view
+    """
+    text: str | None = None
+    """
+    What was said (agents and watches); null for push-to-talk
+    """
+    status: Literal[
+        'queued',
+        'sent',
+        'playing',
+        'played',
+        'interrupted',
+        'refused',
+        'offline',
+        'late',
+        'failed',
+    ]
+    """
+    `interrupted`: a person's push-to-talk cut it off; `late`: the box got it too late and didn't play it
+    """
+    message: str | None = None
+    duration_ms: int | None = None
+    """
+    Length of the clip with its chime
+    """
+    requested_by: RequestedBy1 | None = None
+    watch_id: str | None = None
+    clip_url: str | None = None
+    """
+    Signed link to the clip as played (WAV)
+    """
+    created_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
 
 
 class AgentCreated(Agent):
@@ -2891,6 +2987,14 @@ class LiveSessionIdKeepalivePostResponse(BaseModel):
     idle_timeout_seconds: int
 
 
+class SpeakMessagesGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[SpeakMessage]
+
+
 class BridgeCamerasPostRequest(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2898,6 +3002,10 @@ class BridgeCamerasPostRequest(BaseModel):
     )
     rtsp_url: Annotated[str, Field(max_length=2048, pattern='^rtsps?://')]
     name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
+    speaker: bool | None = None
+    """
+    The camera has two-way audio the box can play to (an ONVIF backchannel), or is the phone itself (ADR 0069)
+    """
 
 
 class BridgeEntitiesGetResponse(BaseModel):

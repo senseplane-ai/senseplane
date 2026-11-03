@@ -129,6 +129,19 @@ export class Senseplane {
     /** Stops recording and analysis until `resume`; pushes are refused while paused. */
     pause: (id: string) => unwrap(this.raw.POST("/sources/{id}/pause", { params: { path: { id } } })),
     resume: (id: string) => unwrap(this.raw.POST("/sources/{id}/resume", { params: { path: { id } } })),
+    /**
+     * Says `text` through the camera's speaker (ADR 0069): text to speech after a short chime, in the
+     * server's one synthetic voice. Needs a speak grant (agents) and a camera with a speaker; at most
+     * 30 s, 6 a minute per camera, refused while someone else is speaking. Tell people they are
+     * hearing an automated system. Refusals throw a SenseplaneError whose `details.message` is the record.
+     */
+    speak: (id: string, text: string) => unwrap(this.raw.POST("/sources/{id}/speak", { params: { path: { id } }, body: { text } })),
+  };
+
+  /** What was said through cameras (agents, watches and push-to-talk), each with a link to hear the clip. */
+  readonly speakMessages = {
+    list: async (query: { source?: string; limit?: number } = {}) => (await unwrap(this.raw.GET("/speak-messages", { params: { query } }))).data,
+    get: (id: string) => unwrap(this.raw.GET("/speak-messages/{id}", { params: { path: { id } } })),
   };
 
   /** With a sensor integration token as `apiKey`: the source it feeds (then `sources.pushReadings`). */

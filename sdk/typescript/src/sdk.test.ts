@@ -87,6 +87,21 @@ describe("client", () => {
     expect(seen).toEqual(["GET /v1/sources/src_s/webhook", "POST /v1/sources/src_s/webhook/secret", "DELETE /v1/sources/src_s/webhook/secret"]);
   });
 
+  it("speaks through a camera and lists what was said", async () => {
+    const calls: string[] = [];
+    const fakeFetch = async (req: Request) => {
+      const u = new URL(req.url);
+      calls.push(`${req.method} ${u.pathname}${u.search} ${req.method === "POST" ? await req.text() : ""}`.trim());
+      const msg = { id: "spk_1", source_id: "src_1", kind: "agent", text: "Hello", status: "playing", created_at: "2026-11-03T10:00:00Z" };
+      return new Response(JSON.stringify(u.pathname.endsWith("/speak-messages") ? { data: [msg] } : msg), { headers: { "content-type": "application/json" } });
+    };
+    const sp = new Senseplane({ apiKey: "k", baseUrl: "http://x/v1", fetch: fakeFetch as typeof fetch });
+    expect((await sp.sources.speak("src_1", "Hello")).status).toBe("playing");
+    expect((await sp.speakMessages.list({ source: "src_1" }))[0]!.id).toBe("spk_1");
+    expect((await sp.speakMessages.get("spk_1")).text).toBe("Hello");
+    expect(calls).toEqual(['POST /v1/sources/src_1/speak {"text":"Hello"}', "GET /v1/speak-messages?source=src_1", "GET /v1/speak-messages/spk_1"]);
+  });
+
   it("throws a typed error", async () => {
     const fakeFetch = async () =>
       new Response(JSON.stringify({ error: { code: "forbidden_sense", message: "no audio grant", request_id: "r1" } }), {

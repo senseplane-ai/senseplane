@@ -258,6 +258,16 @@ class Sources(_Resource):
         data = self._t.request("startLiveView", path={"id": id}, body=body_of(m.LiveViewRequest, body, fields))
         return parse(m.LiveViewSession, data)
 
+    def speak(self, id: str, text: str) -> m.SpeakMessage:
+        """Says `text` through the camera's speaker (ADR 0069), after a short chime, in the server's one synthetic voice.
+
+        Needs a speak grant (agents) and a camera with a speaker; at most 30 s, 6 a minute per camera,
+        refused while someone else is speaking. Tell people they are hearing an automated system.
+        Refusals raise a SenseplaneError whose `details["message"]` is the record.
+        """
+        data = self._t.request("speak", path={"id": id}, body={"text": text})
+        return parse(m.SpeakMessage, data)
+
     def rotate_ingest_token(self, id: str) -> m.SourcesIdIngestTokenPostResponse:
         """A new WHIP, bridge or sensor integration token (shown once); the old one stops working."""
         data = self._t.request("rotateIngestToken", path={"id": id})
@@ -462,6 +472,22 @@ class Devices(_Resource):
     def request(self, id: str) -> m.DeviceCommand:
         """What happened to a request: poll one that is `sent` or `awaiting_confirmation`."""
         return parse(m.DeviceCommand, self._t.request("getDeviceCommand", path={"id": id}))
+
+
+class SpeakMessages(_Resource):
+    """What was said through cameras (agents, watches and push-to-talk), each with a link to hear the clip."""
+
+    def list(self, *, source: str | None = None, limit: int | None = None) -> list[m.SpeakMessage]:
+        query: dict[str, Any] = {}
+        if source is not None:
+            query["source"] = source
+        if limit is not None:
+            query["limit"] = limit
+        data = self._t.request("listSpeakMessages", query=query)
+        return parse(m.SpeakMessagesGetResponse, data).data
+
+    def get(self, id: str) -> m.SpeakMessage:
+        return parse(m.SpeakMessage, self._t.request("getSpeakMessage", path={"id": id}))
 
 
 class Confirmations(_Resource):
@@ -962,6 +988,7 @@ class Senseplane:
         self.bridges = Bridges(transport)
         self.devices = Devices(transport)
         self.confirmations = Confirmations(transport)
+        self.speak_messages = SpeakMessages(transport)
         self.integration = Integration(transport)
         self.capture = Capture(transport)
         self.watches = Watches(transport)

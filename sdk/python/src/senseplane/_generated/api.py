@@ -31,6 +31,9 @@ OPERATIONS: dict[str, Operation] = {
     "resumeSource": Operation("POST", "/sources/{id}/resume", False),
     "startLiveView": Operation("POST", "/sources/{id}/live", False),
     "keepLiveViewAlive": Operation("POST", "/live/{session_id}/keepalive", False),
+    "speak": Operation("POST", "/sources/{id}/speak", False),
+    "listSpeakMessages": Operation("GET", "/speak-messages", False),
+    "getSpeakMessage": Operation("GET", "/speak-messages/{id}", False),
     "getBridgeConfig": Operation("GET", "/bridge/config", False),
     "claimBridgeCamera": Operation("POST", "/bridge/cameras", False),
     "postBridgeHealth": Operation("POST", "/bridge/health", False),
@@ -172,6 +175,10 @@ ErrorCode = Literal[
     "confirmation_denied",
     "device_offline",
     "device_failed",
+    "no_speaker",
+    "speaker_busy",
+    "message_too_long",
+    "camera_offline",
 ]
 """The API's error codes. Compare `err.code` as a string: new codes may appear."""
 
@@ -182,7 +189,8 @@ KnownSense = Literal[
     "humidity",
     "sensors",
     "control",
+    "speak",
 ]
 """The senses every instance knows. Open set: sources may report others (lowercase words)."""
 
-KNOWN_SENSES: tuple[str, ...] = ("video", "audio", "temperature", "humidity", "sensors", "control")
+KNOWN_SENSES: tuple[str, ...] = ("video", "audio", "temperature", "humidity", "sensors", "control", "speak")

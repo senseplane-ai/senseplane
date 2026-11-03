@@ -263,6 +263,16 @@ class AsyncSources(_Resource):
         data = await self._t.request("startLiveView", path={"id": id}, body=body_of(m.LiveViewRequest, body, fields))
         return parse(m.LiveViewSession, data)
 
+    async def speak(self, id: str, text: str) -> m.SpeakMessage:
+        """Says `text` through the camera's speaker (ADR 0069), after a short chime, in the server's one synthetic voice.
+
+        Needs a speak grant (agents) and a camera with a speaker; at most 30 s, 6 a minute per camera,
+        refused while someone else is speaking. Tell people they are hearing an automated system.
+        Refusals raise a SenseplaneError whose `details["message"]` is the record.
+        """
+        data = await self._t.request("speak", path={"id": id}, body={"text": text})
+        return parse(m.SpeakMessage, data)
+
     async def rotate_ingest_token(self, id: str) -> m.SourcesIdIngestTokenPostResponse:
         """A new WHIP, bridge or sensor integration token (shown once); the old one stops working."""
         data = await self._t.request("rotateIngestToken", path={"id": id})
@@ -464,6 +474,22 @@ class AsyncDevices(_Resource):
     async def request(self, id: str) -> m.DeviceCommand:
         """What happened to a request: poll one that is `sent` or `awaiting_confirmation`."""
         return parse(m.DeviceCommand, await self._t.request("getDeviceCommand", path={"id": id}))
+
+
+class AsyncSpeakMessages(_Resource):
+    """What was said through cameras (agents, watches and push-to-talk), each with a link to hear the clip."""
+
+    async def list(self, *, source: str | None = None, limit: int | None = None) -> list[m.SpeakMessage]:
+        query: dict[str, Any] = {}
+        if source is not None:
+            query["source"] = source
+        if limit is not None:
+            query["limit"] = limit
+        data = await self._t.request("listSpeakMessages", query=query)
+        return parse(m.SpeakMessagesGetResponse, data).data
+
+    async def get(self, id: str) -> m.SpeakMessage:
+        return parse(m.SpeakMessage, await self._t.request("getSpeakMessage", path={"id": id}))
 
 
 class AsyncConfirmations(_Resource):
@@ -968,6 +994,7 @@ class AsyncSenseplane:
         self.bridges = AsyncBridges(transport)
         self.devices = AsyncDevices(transport)
         self.confirmations = AsyncConfirmations(transport)
+        self.speak_messages = AsyncSpeakMessages(transport)
         self.integration = AsyncIntegration(transport)
         self.capture = AsyncCapture(transport)
         self.watches = AsyncWatches(transport)

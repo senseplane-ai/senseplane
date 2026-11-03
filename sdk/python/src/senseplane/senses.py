@@ -31,8 +31,8 @@ def sense_info(sense: str) -> SenseInfo | None:
 
 
 def is_sensor_sense(sense: str) -> bool:
-    """video and audio are camera senses, and control (switching devices, ADR 0067) is a permission; every other sense is a sensor's."""
-    return sense not in ("video", "audio", "control")
+    """video and audio are camera senses, and control (switching devices, ADR 0067) and speak (talking through a camera, ADR 0069) are permissions; every other sense is a sensor's."""
+    return sense not in ("video", "audio", "control", "speak")
 
 
 def sense_name(sense: str) -> str:

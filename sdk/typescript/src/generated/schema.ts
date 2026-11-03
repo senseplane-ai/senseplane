@@ -280,6 +280,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sources/{id}/speak": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say something through a camera's speaker
+         * @description Text to speech, played on the camera (ADR 0069), after a short chime, in a plainly synthetic voice: there is no voice choice and no voice cloning (unknown fields such as `voice` are refused). An agent needs a `speak` grant on the source; `sensors` never implies it. People need member and up. The camera must have a speaker (409 `no_speaker`), a message is at most 30 seconds (400 `message_too_long`), 6 messages a minute per camera (429 `rate_limited`), one speaker at a time: 409 `speaker_busy` while a person is talking through it or another message is playing, and a person's push-to-talk cuts an agent's message off. A camera that isn't connected answers 503 `camera_offline`; a box that doesn't take the message within 10 s never plays it later. The clip is kept (sealed like snapshots) so a person can hear exactly what was said, and every message is in the audit log with who, the camera, the duration and the text.
+         */
+        post: operations["speak"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/speak-messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What was said through cameras, newest first
+         * @description Agent messages, watch messages and people's push-to-talk, each with a link to hear the clip (agents and watches). An agent sees only its own.
+         */
+        get: operations["listSpeakMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/speak-messages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One message said through a camera
+         * @description An agent sees only its own.
+         */
+        get: operations["getSpeakMessage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridge/config": {
         parameters: {
             query?: never;
@@ -2140,6 +2200,8 @@ export interface components {
                 state: "connecting" | "online" | "reconnecting" | "offline";
                 /** @description Why */
                 detail?: string;
+                /** @description What the box found about two-way audio when it connected (ADR 0069) */
+                speaker?: boolean;
             }[];
             /** @description Set by a bridge that reads Home Assistant (ADR 0061) */
             home_assistant?: {
@@ -2164,7 +2226,7 @@ export interface components {
         };
         BridgeCommand: {
             id: string;
-            /** @description matter_commission, onvif_add_camera, onvif_search or device_control */
+            /** @description matter_commission, onvif_add_camera, onvif_search, device_control or speak */
             kind: string;
             /**
              * @description `expired`: not taken in time, so never handed out (device commands)
@@ -2533,6 +2595,8 @@ export interface components {
         LiveViewRequest: {
             /** @description Also receive the source's audio (default false). Needs an audio grant and a source that records audio. */
             audio?: boolean;
+            /** @description Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera. People only (member and up) and workspace keys; a phone camera on the capture page. 409 `no_speaker` otherwise. */
+            talk?: boolean;
         };
         LiveViewSession: {
             /** @description Live session id (lv_...) */
@@ -2553,6 +2617,44 @@ export interface components {
             idle_timeout_seconds: number;
             /** @description Whether this session includes audio */
             audio?: boolean;
+            /** @description Whether this session may talk through the camera (push-to-talk) */
+            talk?: boolean;
+        };
+        SpeakRequest: {
+            /** @description What to say. Tell people they are hearing an automated system (docs/lawful-use.md). */
+            text: string;
+        };
+        SpeakMessage: {
+            /** @description spk_... */
+            id: string;
+            source_id: string;
+            /**
+             * @description agent: the speak tool or REST; watch: a watch's speak action; person: push-to-talk in live view
+             * @enum {string}
+             */
+            kind: "agent" | "watch" | "person";
+            /** @description What was said (agents and watches); null for push-to-talk */
+            text?: string | null;
+            /**
+             * @description `interrupted`: a person's push-to-talk cut it off; `late`: the box got it too late and didn't play it
+             * @enum {string}
+             */
+            status: "queued" | "sent" | "playing" | "played" | "interrupted" | "refused" | "offline" | "late" | "failed";
+            message?: string | null;
+            /** @description Length of the clip with its chime */
+            duration_ms?: number | null;
+            requested_by?: {
+                kind?: string;
+                id?: string;
+                name?: string | null;
+            };
+            watch_id?: string | null;
+            /** @description Signed link to the clip as played (WAV) */
+            clip_url?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            finished_at?: string | null;
         };
         AgentCreated: components["schemas"]["Agent"] & {
             /** @description Shown once. Use it as a Bearer token: REST API, SDK, or SENSEPLANE_API_KEY for the stdio MCP server. */
@@ -2829,7 +2931,7 @@ export interface components {
         error: {
             error: {
                 /** @enum {string} */
-                code: "unauthorized" | "forbidden" | "forbidden_sense" | "not_found" | "validation_failed" | "quota_exceeded" | "allowance_exhausted" | "rate_limited" | "needs_zone" | "unsupported_codec" | "resolution_not_in_plan" | "source_limit_reached" | "not_implemented" | "service_unavailable" | "internal" | "idempotency_key_reused" | "signup_refused" | "forbidden_role" | "invite_invalid" | "conflict" | "feature_not_available" | "limit_reached" | "not_controllable" | "confirmation_required" | "confirmation_expired" | "confirmation_denied" | "device_offline" | "device_failed";
+                code: "unauthorized" | "forbidden" | "forbidden_sense" | "not_found" | "validation_failed" | "quota_exceeded" | "allowance_exhausted" | "rate_limited" | "needs_zone" | "unsupported_codec" | "resolution_not_in_plan" | "source_limit_reached" | "not_implemented" | "service_unavailable" | "internal" | "idempotency_key_reused" | "signup_refused" | "forbidden_role" | "invite_invalid" | "conflict" | "feature_not_available" | "limit_reached" | "not_controllable" | "confirmation_required" | "confirmation_expired" | "confirmation_denied" | "device_offline" | "device_failed" | "no_speaker" | "speaker_busy" | "message_too_long" | "camera_offline";
                 message: string;
                 request_id: string;
                 details?: Record<string, never>;
@@ -2837,13 +2939,13 @@ export interface components {
         };
         /**
          * Sense
-         * @description One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.
+         * @description One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) and `speak` (talking through the camera's speaker, ADR 0069) are only ever granted by name, like video and audio.
          * @example video
          * @example audio
          * @example temperature
          * @example humidity
          */
-        sense: string | ("video" | "audio" | "temperature" | "humidity" | "sensors" | "control");
+        sense: string | ("video" | "audio" | "temperature" | "humidity" | "sensors" | "control" | "speak");
         /** Source */
         source: {
             id: string;
@@ -2863,6 +2965,8 @@ export interface components {
              */
             status: "pending" | "online" | "reconnecting" | "offline" | "paused";
             record_audio: boolean;
+            /** @description The camera can play sound (ADR 0069): a phone always, an IP camera when its box found two-way audio (an ONVIF backchannel). Speak is offered only on cameras with a speaker. */
+            speaker?: boolean;
             zones: {
                 name: string;
                 polygon: number[][];
@@ -3417,13 +3521,15 @@ export interface components {
         };
         /**
          * Destination
-         * @description Where a watch's events go (ADR 0043, 0059): one of the account's webhooks, an agent's inbox, or a linked chat (channel).
+         * @description Where a watch's events go (ADR 0043, 0059): one of the account's webhooks, an agent's inbox, or a linked chat (channel); or `speak`, which says `text` through a camera's speaker when the watch fires (ADR 0069).
          */
         destination: {
             /** @enum {string} */
-            type: "webhook" | "agent" | "channel";
-            /** @description A webhook id (whk_…), an agent id (agt_…) or a channel id (chn_…). */
+            type: "webhook" | "agent" | "channel" | "speak";
+            /** @description A webhook id (whk_…), an agent id (agt_…), a channel id (chn_…) or, for speak, the camera's source id (src_…). */
             id: string;
+            /** @description speak only: what to say through the camera's speaker, at most 30 seconds of speech. Required for speak. */
+            text?: string;
         };
         /**
          * WatchSchedule
@@ -4363,6 +4469,91 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    speak: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpeakRequest"];
+            };
+        };
+        responses: {
+            /** @description Played (or playing) on the camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakMessage"];
+                };
+            };
+            /** @description Sent to the camera's box and not reported yet; poll GET /speak-messages/{id} */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakMessage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSpeakMessages: {
+        parameters: {
+            query?: {
+                source?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SpeakMessage"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSpeakMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakMessage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getBridgeConfig: {
         parameters: {
             query?: never;
@@ -4396,6 +4587,8 @@ export interface operations {
                 "application/json": {
                     rtsp_url: string;
                     name?: string;
+                    /** @description The camera has two-way audio the box can play to (an ONVIF backchannel), or is the phone itself (ADR 0069) */
+                    speaker?: boolean;
                 };
             };
         };

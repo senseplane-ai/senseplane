@@ -139,6 +139,8 @@ export class Room {
   /** identity → removal time (epoch seconds): a token issued before it is refused. */
   readonly evictions = new Map<string, number>();
   router?: types.Router;
+  /** Who holds the room's one push-to-talk slot (taken before producing, so two can't race in). */
+  talkback?: { owner: Participant; producerId?: string };
   private routerPromise?: Promise<types.Router>;
   emptySince: number | null = Date.now();
 
@@ -419,21 +421,36 @@ export class RoomManager {
     const need = requiredPublishKind(source, kind);
     if (p.grants.publishKinds && !p.grants.publishKinds.includes(need)) throw new MediaError("forbidden", `this token may not publish ${need}`);
     // Talk-back (push-to-talk): a microphone sent to the camera's speaker, one person at a time per room.
+    const room0 = p.room;
+    let slot: { owner: Participant; producerId?: string } | undefined;
     if (source === TALKBACK) {
       if (kind !== "audio") throw new MediaError("bad_request", "talkback is audio");
-      const other = [...p.room.participants.values()].find((o) => o !== p && !o.closed && [...o.producers.values()].some((e) => e.source === TALKBACK && !e.producer.closed));
-      if (other) throw new MediaError("speaker_busy", "someone else is talking through this camera");
+      // Reserved now, before any await: two people pressing at once can't both get in, nor one person twice.
+      if (room0.talkback) {
+        throw new MediaError("speaker_busy", room0.talkback.owner === p ? "this session is already talking" : "someone else is talking through this camera");
+      }
+      slot = { owner: p };
+      room0.talkback = slot;
     }
+    const release = () => {
+      if (slot && room0.talkback === slot) room0.talkback = undefined;
+    };
     let producer: types.Producer;
     try {
       producer = await e.transport.produce({ kind, rtpParameters: rtpParameters as types.RtpParameters, appData: source ? { source } : {} });
     } catch (err) {
+      release();
       // The room's codecs refuse it (VP8 in an H.264 room), or the parameters are wrong.
       throw new MediaError("bad_request", (err as Error).message);
     }
     if (p.closed) {
+      release();
       producer.close();
       throw new MediaError("unauthorized", "session closed");
+    }
+    if (slot) {
+      slot.producerId = producer.id;
+      producer.observer.once("close", release);
     }
     p.producers.set(producer.id, { producer, ...(source ? { source } : {}) });
     const room = p.room;

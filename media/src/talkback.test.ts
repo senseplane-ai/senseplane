@@ -93,6 +93,29 @@ describe("talk-back", () => {
     for (const c of [phone, sam.c, kim.c, other]) c.close();
   });
 
+  it("keeps one talkback track when people press at once, and frees the slot when a produce fails", async () => {
+    const { roomId, phone } = await setup();
+    const sam = await talker(roomId, "cam:viewer:lv_sam");
+    const kim = await talker(roomId, "cam:viewer:lv_kim");
+    const both = await Promise.all([
+      sam.c.request("produce", { transportId: sam.t, kind: "audio", rtpParameters: opus(7001), appData: { source: "talkback" } }),
+      kim.c.request("produce", { transportId: kim.t, kind: "audio", rtpParameters: opus(7002), appData: { source: "talkback" } }),
+    ]);
+    expect(both.filter((r) => r.ok)).toHaveLength(1);
+    expect(both.filter((r) => !r.ok)[0]).toMatchObject({ code: "speaker_busy" });
+    const winner = both[0]!.ok ? sam : kim;
+    const won = (both.find((r) => r.ok)!.data as { producerId: string }).producerId;
+    // The same person can't hold two either.
+    expect(await winner.c.request("produce", { transportId: winner.t, kind: "audio", rtpParameters: opus(7003), appData: { source: "talkback" } }))
+      .toMatchObject({ ok: false, code: "speaker_busy" });
+    await winner.c.request("closeProducer", { producerId: won });
+    // A produce that fails gives the slot back.
+    const bad = { codecs: [{ mimeType: "audio/G722", payloadType: 9, clockRate: 8000 }], encodings: [{ ssrc: 7004 }] };
+    expect(await sam.c.request("produce", { transportId: sam.t, kind: "audio", rtpParameters: bad, appData: { source: "talkback" } })).toMatchObject({ ok: false, code: "bad_request" });
+    expect((await kim.c.request("produce", { transportId: kim.t, kind: "audio", rtpParameters: opus(7005), appData: { source: "talkback" } })).ok).toBe(true);
+    for (const c of [phone, sam.c, kim.c]) c.close();
+  });
+
   it("hands the phone an agent's clip to play, and stops it", async () => {
     const { roomId, phone } = await setup();
     const viewer = new Client(media.ws);

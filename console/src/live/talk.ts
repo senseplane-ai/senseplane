@@ -33,6 +33,8 @@ export interface Talk {
   readonly active: boolean;
   /** What the camera says about the press held now: connecting, heard, or ended by the camera's side (ADR 0074). */
   onState?(fn: (s: TalkState) => void): () => void;
+  /** It waits for the camera's word before saying "Talking" (an IP camera behind a box). */
+  readonly confirms?: boolean;
 }
 
 export function createTalk(d: TalkDeps): Talk & { /** The microphone is open (tests). */ readonly micOpen: boolean } {

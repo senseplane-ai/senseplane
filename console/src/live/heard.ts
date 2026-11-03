@@ -5,8 +5,9 @@
 // media plane says `talkbackListening` once the camera's speaker gets the
 // track (the phone playing it, or the box connected to the camera), and
 // `talkbackEnded` when it ended the press itself (the box couldn't reach the
-// speaker, the camera hung up, ten minutes passed). A press nobody hears
-// within a few seconds is ended here: never a microphone open to no one.
+// speaker, the camera hung up, ten minutes passed). For a camera behind a
+// box, a press nobody hears within a few seconds is ended here: never a
+// microphone open to no one. A phone's press is as it always was: no wait.
 
 export type TalkState =
   | { state: "connecting" }
@@ -20,7 +21,7 @@ export function endedText(reason: string, message?: string): string {
     case "no_listener":
       return "The camera's speaker didn't answer, so nobody heard you. Its box may be offline.";
     case "listener_left":
-      return "The camera stopped playing what you said (it hung up, or no sound reached it for a few seconds).";
+      return "The camera stopped getting your audio (its box went away, the camera hung up, or nothing reached it for a few seconds).";
     case "expired":
       return "Push-to-talk stops after 10 minutes. Press again to keep talking.";
     default:
@@ -28,8 +29,9 @@ export function endedText(reason: string, message?: string): string {
   }
 }
 
-export function createHeard(opts: { timeoutMs?: number; onEnd: () => void }) {
+export function createHeard(opts: { timeoutMs?: number; onEnd: () => void; /** Wait for the camera's word (a box); false: a phone. */ confirm?: boolean }) {
   const timeoutMs = opts.timeoutMs ?? 6000;
+  const confirm = opts.confirm !== false;
   const listeners = new Set<(s: TalkState) => void>();
   /** Listening events that came before the press's own reply. */
   const early = new Set<string>();
@@ -53,7 +55,7 @@ export function createHeard(opts: { timeoutMs?: number; onEnd: () => void }) {
     press(producerId: string) {
       clear();
       current = producerId;
-      if (early.delete(producerId)) return emit({ state: "listening" });
+      if (early.delete(producerId) || !confirm) return emit({ state: "listening" });
       emit({ state: "connecting" });
       timer = setTimeout(() => current === producerId && end("no_listener"), timeoutMs);
     },

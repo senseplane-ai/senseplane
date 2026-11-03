@@ -34,20 +34,41 @@ describe("push-to-talk", () => {
   it("says it is connecting until the camera hears it, and why the camera's side ended it", async () => {
     let emit: (s: TalkState) => void = () => undefined;
     const talk = {
-      active: false, start: async () => undefined, stop: async () => undefined,
+      active: false, start: async () => undefined, stop: async () => undefined, confirms: true,
       onState: (fn: (s: TalkState) => void) => {
         emit = fn;
         return () => undefined;
       },
     };
     renderWithApp(<TalkButton talk={talk} name="Gate camera" />, appData({ fetch: fakeFetch({}) }));
+    const status = document.querySelector(".lv-talk-said")!;
     fireEvent.pointerDown(screen.getByRole("button", { name: "Hold to talk through Gate camera" }));
+    act(() => emit({ state: "connecting" }));
     expect(await screen.findByRole("button", { name: "Connecting to Gate camera's speaker; release to stop" })).toHaveTextContent("Connecting to the speaker…");
+    expect(status).toHaveTextContent("Connecting to Gate camera's speaker.");
+    expect(status).toHaveAttribute("aria-live", "polite");
     act(() => emit({ state: "listening" }));
     expect(await screen.findByRole("button", { name: "Talking through Gate camera; release to stop" })).toHaveAttribute("aria-pressed", "true");
+    expect(status).toHaveTextContent("Talking through Gate camera.");
     act(() => emit({ state: "ended", reason: "speaker_unavailable", message: "Gate camera's speaker couldn't be reached: it takes MPEG4-GENERIC." }));
-    expect(await screen.findByText(/it takes MPEG4-GENERIC/)).toBeInTheDocument();
+    expect(status).toHaveTextContent(/it takes MPEG4-GENERIC/);
     expect(screen.getByRole("button", { name: "Hold to talk through Gate camera" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("talks at once through a phone, as before: no connecting step", async () => {
+    let emit: (s: TalkState) => void = () => undefined;
+    const talk = {
+      active: false, start: async () => undefined, stop: async () => undefined, confirms: false,
+      onState: (fn: (s: TalkState) => void) => {
+        emit = fn;
+        return () => undefined;
+      },
+    };
+    renderWithApp(<TalkButton talk={talk} name="Porch phone" />, appData({ fetch: fakeFetch({}) }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Hold to talk through Porch phone" }));
+    expect(await screen.findByRole("button", { name: "Talking through Porch phone; release to stop" })).toHaveTextContent("Talking… release to stop");
+    act(() => emit({ state: "listening" }));
+    expect(document.querySelector(".lv-talk-said")).toHaveTextContent("Talking through Porch phone.");
   });
 
   it("talks only while the button is held", async () => {

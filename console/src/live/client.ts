@@ -34,6 +34,11 @@ export interface OpenLiveOptions {
   audio?: boolean;
   /** Push-to-talk through the camera's speaker (member and up, a camera whose `talk` is true; default false). */
   talk?: boolean;
+  /**
+   * Push-to-talk waits for the camera's word that it hears (an IP camera behind a box, ADR 0074) and ends a
+   * press nobody hears within 6 s. False (a phone): talking at once, as before.
+   */
+  confirmTalk?: boolean;
 }
 
 /** Push-to-talk: hold to send the microphone to the camera's speaker. */
@@ -86,7 +91,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
   let send: Transport | undefined;
   let talkStop: (() => void) | undefined;
   // Whether the camera hears a press; one nobody hears is stopped (heard.ts).
-  const heard = createHeard({ onEnd: () => talkStop?.() });
+  const heard = createHeard({ onEnd: () => talkStop?.(), confirm: opts.confirmTalk === true });
   let device: Device | undefined;
   let closed = false;
   const cleanups: (() => void)[] = [];
@@ -231,6 +236,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     },
     stop: () => machine.stop(),
     onState: (fn) => heard.subscribe(fn),
+    confirms: opts.confirmTalk === true,
   } : undefined;
 
   return {

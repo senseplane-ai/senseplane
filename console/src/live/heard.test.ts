@@ -53,6 +53,18 @@ describe("push-to-talk: is the camera hearing it", () => {
     expect(ended()).toBe(0);
   });
 
+  it("leaves a phone's press as it was: heard at once, never timed out", () => {
+    vi.useFakeTimers();
+    const states: TalkState[] = [];
+    let ended = 0;
+    const h = createHeard({ timeoutMs: 1000, onEnd: () => void ended++, confirm: false });
+    h.subscribe((s) => states.push(s));
+    h.press("p1");
+    vi.advanceTimersByTime(10_000);
+    expect(states).toEqual([{ state: "listening" }]);
+    expect(ended).toBe(0);
+  });
+
   it("ends the press when the camera's side does, with its words, and ignores another press's events", () => {
     const { h, states, ended } = watch();
     h.press("p2");
@@ -62,6 +74,6 @@ describe("push-to-talk: is the camera hearing it", () => {
     expect(ended()).toBe(1);
     expect(states.at(-1)).toEqual({ state: "ended", reason: "speaker_unavailable", message: "The camera's speaker takes AAC." });
     expect(endedText("expired")).toMatch(/10 minutes/);
-    expect(endedText("listener_left")).toMatch(/stopped playing/);
+    expect(endedText("listener_left")).toMatch(/stopped getting your audio/);
   });
 });

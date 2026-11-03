@@ -30,19 +30,28 @@ export function TalkButton({ talk, name }: { talk: Talk; name: string }) {
   const toast = useToast();
   const [on, setOn] = useState(false);
   const [heard, setHeard] = useState(false);
+  // Said to screen readers too: connecting, talking, and why the camera's side ended a press.
+  const [said, setSaid] = useState("");
+  const confirms = !!talk.onState && !!talk.confirms;
   useEffect(() => talk.onState?.((s) => {
-    if (s.state === "listening") setHeard(true);
-    else if (s.state === "connecting") setHeard(false);
-    else {
+    if (s.state === "listening") {
+      setHeard(true);
+      setSaid(`Talking through ${name}.`);
+    } else if (s.state === "connecting") {
+      setHeard(false);
+      setSaid(`Connecting to ${name}'s speaker.`);
+    } else {
       setOn(false);
       setHeard(false);
+      setSaid(s.message);
       toast(s.message, "error");
     }
-  }), [talk, toast]);
+  }), [talk, toast, name]);
   const start = () => {
     if (on) return;
     setOn(true);
-    setHeard(!talk.onState); // no word from the camera's side: as before, talking at once
+    setHeard(!confirms); // a phone: talking at once, as before
+    if (!confirms) setSaid(`Talking through ${name}.`);
     void talk.start().catch((e) => {
       setOn(false);
       toast(e instanceof Error ? e.message : "Couldn't use the microphone.", "error");
@@ -52,10 +61,12 @@ export function TalkButton({ talk, name }: { talk: Talk; name: string }) {
     if (!on) return;
     setOn(false);
     setHeard(false);
+    setSaid("Stopped talking.");
     void talk.stop();
   };
   const label = !on ? "Hold to talk" : heard ? "Talking… release to stop" : "Connecting to the speaker…";
   return (
+    <>
     <button type="button" className={`btn btn-sm lv-talk${on ? " lv-talk-on" : ""}`} aria-pressed={on}
       aria-label={on ? (heard ? `Talking through ${name}; release to stop` : `Connecting to ${name}'s speaker; release to stop`) : `Hold to talk through ${name}`}
       onPointerDown={(e) => { e.preventDefault(); start(); }} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop}
@@ -64,6 +75,8 @@ export function TalkButton({ talk, name }: { talk: Talk; name: string }) {
       onBlur={stop}>
       {label}
     </button>
+    <span className="sr-only lv-talk-said" role="status" aria-live="polite">{said}</span>
+    </>
   );
 }
 

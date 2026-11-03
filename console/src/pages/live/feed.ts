@@ -46,7 +46,8 @@ export function useFeed(src: Source, video: RefObject<HTMLVideoElement | null>, 
     let handle: { close(): void; stats(): Promise<{ latencyMs?: number }> } | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
     el.muted = !audio;
-    openLive({ apiUrl, apiKey, sourceId: src.id, video: el, audio, talk: wantsTalk }).then((h) => {
+    // A camera behind a box says when it hears a press (ADR 0074); a phone plays it at once.
+    openLive({ apiUrl, apiKey, sourceId: src.id, video: el, audio, talk: wantsTalk, confirmTalk: src.type !== "browser" }).then((h) => {
       if (gone) return h.close();
       handle = h;
       setLive(true);

@@ -17,7 +17,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { type Selectable, sql } from "kysely";
 import { type AccountScope, type DataAccess, hashApiKey } from "./data/access.js";
-import { type Action, actionText } from "./devices.js";
+import { type Action, actionText, personChat } from "./devices.js";
 import { newId } from "./data/ids.js";
 import type { ChannelBody, ChannelsTable, EventsTable, StoredMoment } from "./data/schema.js";
 import { ApiError } from "./errors.js";
@@ -41,6 +41,8 @@ const kickSoon = (t: EventTarget) => setTimeout(() => t.dispatchEvent(new Event(
 const sameSecret = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 
 const LINK_TTL_S = 10 * 60;
+/** Never in a chat's first grant: listening and switching devices are given by a person on the Agents page. */
+const LINK_NEVER = new Set(["audio", "control", "sensors"]);
 /** A question more than this after the last one starts a new conversation. */
 const CONVERSATION_IDLE_MS = 30 * 60_000;
 const QUESTIONS_PER_HOUR = 30;
@@ -333,7 +335,7 @@ async function linkChat(deps: ChannelDeps, m: TelegramMessage, code: string, rep
     const sources = await s.sources.list();
     if (sources.length) {
       await insertGrant(s.db, async () => sources, link.account_id, agentId, {
-        source_ids: sources.map((x) => x.id), senses: [...new Set(sources.flatMap((x) => x.senses))], abilities: ["history"],
+        source_ids: sources.map((x) => x.id), senses: [...new Set(sources.flatMap((x) => x.senses))].filter((x) => !LINK_NEVER.has(x)), abilities: ["history"],
       });
     }
     const channel = await s.db.insertInto("channels").values({
@@ -531,15 +533,22 @@ async function deviceButton(deps: ChannelDeps, q: NonNullable<TelegramUpdate["ca
     await ack("Sending…");
     return runControl(deps, await channelRow(deps, current.account_id, current.id), id, arg);
   }
-  // Confirming opens doors: only in a private chat, where the person pressing is the one it was linked for.
+  // Confirming opens doors: only in a private chat linked by someone who is still a member or above, whose
+  // agent can see the device (personChat), checked again now, as the chat or the person may have changed.
   if (q.message?.chat.type !== "private") return void (await ack("Confirm this in Senseplane: in a group, anyone could press the button."));
   for (const c of channels) {
-    const has = await deps.data.withAccount(c.account_id, (s) => s.db.selectFrom("device_commands").select("id").where("id", "=", id).executeTakeFirst());
-    if (!has || !deps.decideConfirmation) continue;
+    const found = await deps.data.withAccount(c.account_id, async (s) => {
+      const cmd = await s.db.selectFrom("device_commands").select(["id", "device_id"]).where("id", "=", id).executeTakeFirst();
+      if (!cmd) return undefined;
+      const dev = await s.db.selectFrom("bridge_entities").select("source_id").where("id", "=", cmd.device_id).executeTakeFirst();
+      return { person: dev?.source_id ? await personChat(s, c.id, dev.source_id) : undefined };
+    });
+    if (!found || !deps.decideConfirmation) continue;
+    if (!found.person) return void (await ack("This chat can't confirm requests. Confirm it in Senseplane."));
     await ack(arg === "y" ? "Confirmed. Sending…" : "Refused.");
-    const name = `${q.from.first_name ?? "someone"} in Telegram`;
+    const name = `${found.person.name} in Telegram`;
     try {
-      const out = await deps.decideConfirmation(c.account_id, id, arg === "y", { actor: `telegram:${q.from.id}`, name });
+      const out = await deps.decideConfirmation(c.account_id, id, arg === "y", { actor: `user:${found.person.userId}`, name });
       await deps.data.withAccount(c.account_id, (s) => queueBody(s, c.id, { text: escapeHtml(out.message || out.status) }));
     } catch (err) {
       await deps.data.withAccount(c.account_id, (s) => queueBody(s, c.id, { text: escapeHtml((err as Error).message) }));
@@ -549,18 +558,25 @@ async function deviceButton(deps: ChannelDeps, q: NonNullable<TelegramUpdate["ca
   await ack("This request isn't waiting any more.");
 }
 
-/** Tells the workspace's chats that a device request waits for a person; private chats get buttons to answer it. */
-export async function notifyConfirmation(deps: ChannelDeps, accountId: string, c: { id: string; device_name: string; action: string; value: number | string | null; requested_by: { name: string | null }; via: string }) {
+/**
+ * Asks in Telegram for a person to confirm a device request. A person's own request (asked in their own
+ * chat) goes back to that chat only, as their "are you sure". Anyone else's goes to the private chats of
+ * people who are members or above and whose chat can see the device; other chats (groups, guests) get nothing.
+ */
+export async function notifyConfirmation(deps: ChannelDeps, accountId: string, c: { id: string; device_name: string; action: string; value: number | string | null; requested_by: { name: string | null }; via: string },
+  where: { sourceId: string; ownChannelId?: string }) {
   if (!deps.bot) return;
-  const by = c.requested_by.name ?? "An agent";
   const what = actionText(c.action as Action, c.device_name, c.value);
+  const buttons = [{ text: "Confirm", data: `cf:${c.id}:y` }, { text: "Refuse", data: `cf:${c.id}:n` }];
   await deps.data.withAccount(accountId, async (s) => {
-    const live = await s.db.selectFrom("channels").select(["id", "chat_type"]).where("status", "=", "active").execute();
+    if (where.ownChannelId) {
+      return queueBody(s, where.ownChannelId, { text: `<b>Are you sure?</b>\nYou asked to ${escapeHtml(what)}.\nIt is refused if you don't confirm within 2 minutes.`, buttons });
+    }
+    const by = c.requested_by.name ?? "An agent";
+    const live = await s.db.selectFrom("channels").select("id").where("status", "=", "active").where("chat_type", "=", "private").execute();
     for (const ch of live) {
-      const text = `<b>Confirm?</b>\n${escapeHtml(by)} asks to ${escapeHtml(what)}.\nIt is refused if nobody confirms within 2 minutes.`;
-      await queueBody(s, ch.id, ch.chat_type === "private"
-        ? { text, buttons: [{ text: "Confirm", data: `cf:${c.id}:y` }, { text: "Refuse", data: `cf:${c.id}:n` }] }
-        : { text: `${text}\nConfirm it in Senseplane.` });
+      if (!(await personChat(s, ch.id, where.sourceId))) continue;
+      await queueBody(s, ch.id, { text: `<b>Confirm?</b>\n${escapeHtml(by)} asks to ${escapeHtml(what)}.\nIt is refused if nobody confirms within 2 minutes.`, buttons });
     }
   });
 }

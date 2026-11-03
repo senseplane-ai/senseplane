@@ -39,7 +39,7 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
 import { markSilentBridges, registerBridgeAdminRoutes, registerBridgeRoutes } from "./routes/bridges.js";
 import { registerPairingRoutes } from "./routes/pairing.js";
-import { expireConfirmations, registerDeviceRoutes } from "./routes/devices.js";
+import { expireConfirmations, registerDeviceRoutes, sweepLostCommands } from "./routes/devices.js";
 import { closeStaleActivities } from "./activity.js";
 import { startScheduledWatches } from "./scheduled-watches.js";
 import { type Job, startJobs } from "./jobs.js";
@@ -489,7 +489,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     ...(mediaDriver?.disconnect ? { disconnect: (id: string) => mediaDriver.disconnect!(id, "removed") } : {}) });
   registerPairingRoutes(app, { data, audit, ...(auth.consoleUrls[0] ? { consoleUrl: auth.consoleUrls[0] } : {}) });
   // Switching devices, only when a person asks (ADR 0067); requests waiting for a person also go to linked chats.
-  const devices = registerDeviceRoutes(app, { data, audit, ...options.deviceTimings, onConfirmation: (accountId, c) => notifyConfirmation(channels, accountId, c) });
+  const devices = registerDeviceRoutes(app, { data, audit, ...options.deviceTimings, onConfirmation: (accountId, c, where) => notifyConfirmation(channels, accountId, c, where) });
   channels.decideConfirmation = devices.decide;
   const stoppers: (() => void | Promise<void>)[] = [];
   if (storage) {
@@ -507,8 +507,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       { name: "demos.sweep", everyS: 30, run: () => sweepDemos({ data, bus, media: mediaControl, storage }, demo, app.log) },
       { name: "watches.expire", everyS: 30, run: () => expireWatches(data, bus) },
       { name: "bridges.silent", everyS: 30, run: () => markSilentBridges(data, app.log) },
-      // Refuses device requests nobody confirmed in two minutes; it never switches anything.
-      { name: "devices.confirmations", everyS: 15, run: () => expireConfirmations(data, audit) },
+      // Refuses device requests nobody confirmed in two minutes, and gives up on ones a box never reported; it never switches anything.
+      { name: "devices.confirmations", everyS: 15, run: async () => (await expireConfirmations(data, audit)) + (await sweepLostCommands(data, audit)) },
       { name: "activities.close_stale", everyS: 30, run: () => closeStaleActivities(data) },
       { name: "accounts.purge", everyS: 30, leaseS: 1800, run: () => purgeDeletedAccounts({ data, bus, storage }, app.log) },
       // Key rotation (ADR 0066): accounts mid-rotation get their footage re-encrypted; old master keys re-wrapped.

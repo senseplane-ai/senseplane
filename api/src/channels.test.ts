@@ -155,7 +155,7 @@ describe("telegram channels", () => {
     expect(agent).toMatchObject({ kind: "channel", name: "Telegram: Ada" });
     const [grant] = await api.data.withAccount(acc, (s) => s.db.selectFrom("grants").selectAll().where("agent_id", "=", ch.agent_id).execute());
     expect(grant!.source_ids).toHaveLength(2);
-    expect(grant!.senses.sort()).toEqual(["audio", "video"]);
+    expect(grant!.senses.sort()).toEqual(["video"]); // never audio or control: a person grants those (ADR 0067)
     expect(grant!.abilities).toEqual(["history"]);
     expect(ch.agent_key).not.toMatch(/^sk_/); // stored encrypted
     await flush();

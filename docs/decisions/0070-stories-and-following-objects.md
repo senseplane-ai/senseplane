@@ -29,28 +29,46 @@ signed playback URL. `GET /v1/stories` lists, `DELETE` deletes,
 day) to send to a person. The console plays it in `play.html#u=…`.
 
 **Limits.** At most 20 pieces, 3 minutes per piece and 10 minutes of
-recorded video in all (gap cards come on top). A story is one sitting's
-watching, and one render's cost.
+recorded video in all. A story is one sitting's watching.
+
+**Nothing is re-encoded.** Each piece is its recorded segments, whole (so
+every cut falls on a keyframe), decrypted and encrypted again under the
+story's key: the pictures are the camera's, frame for frame. Like range
+playback, a piece may begin or end up to one segment (about 6 s) outside its
+range, and so outside a grant's window by that much. The story plays in the
+browser as one HLS playlist, with a discontinuity (and a new init) where the
+camera changes, so cameras with different picture sizes or codecs play one
+after the other.
 
 **Two modes.**
 
-- *Labelled* (default): re-encoded to 1280×720, 25 fps H.264 and, when any
-  piece has sound the caller may hear, AAC stereo (silence for the pieces
-  without). Each piece has a caption bar with the camera's name and the
-  time it starts, in the workspace's time zone. A gap of more than a minute
-  between pieces becomes a 2 s card ("+5 min, then Kitchen"). Different
-  resolutions and aspect ratios are letterboxed into one frame.
-- *Fast*: the recorded segments as they are, like a clip (decrypted and
-  encrypted again under the story's key, never re-encoded), played as one
-  playlist with a discontinuity between pieces. No labels, no cards; ready
-  in seconds. Like range playback, a piece may begin or end up to one
-  segment (about 6 s) outside its range, and so outside a grant's window
-  by that much.
+- *Labelled* (default): the camera's name and the time each piece starts
+  (in the workspace's time zone) are captions, with a gap of more than a
+  minute said at the start of the next one ("+5 min · Kitchen · 3 Nov
+  14:07:40"): a WebVTT track the console's player shows (`captions_url`),
+  and, in each downloadable MP4, a mov_text subtitle track. The MP4s are
+  made by joining the pieces' packets as they are (a remux); pieces whose
+  video (codec or picture size) or kept sound differ can't be joined that
+  way, so they become separate parts (`parts`), and the story says so
+  plainly in `note`. An MP4 part is sealed at rest (ADR 0066) and refused to
+  a viewer who may not hear the sound it carries.
+- *Fast*: the playlist alone: no captions, no downloads.
+
+Pieces without an audio grant are served with their audio track removed
+(ADR 0037) and joined into parts without it.
+
+**Why not burned-in labels.** Burning the labels into the picture means
+encoding H.264, and shipping an H.264 encoder (OpenH264 built by us or
+Debian, or the GPL libx264) carries patent licensing risk for the project
+and for everyone who runs its image; Cisco's licence covers only Cisco's own
+binaries. So the image ships no H.264 encoder at all, and captions are
+subtitles. Burned-in labels may be added later only as an option for a
+self-hoster who supplies their own encoder and takes on its licensing.
 
 **Where it runs.** A background job in the API (ADR 0058): `claim_stories`
 claims one story at a time per process with a 15-minute lease and a claim
-token. The lease is renewed every minute while the render runs, and the
-render stops after 12 minutes, inside its lease. A story is claimed at most
+token. The lease is renewed every minute while the job runs, and the
+job stops after 12 minutes, inside its lease. A story is claimed at most
 three times; then it fails. Only the holder of the current token may write
 the outcome, and each attempt writes its objects under its own prefix
 (`stories/{account}/{story}/{attempt}/`), so a process that lost its claim
@@ -59,23 +77,20 @@ only its own objects: a ready story is never touched by a late attempt, and
 a retried render has fresh IVs. The API reads the segments, decrypts them
 (ADR 0066), and pipes them into ffmpeg a segment at a time: decrypted
 footage never reaches disk and is never held whole in memory. What ffmpeg
-writes (the rendered parts) goes to `API_WORK_DIR` (a tmpfs is best); a
+writes (the remuxed parts) goes to `API_WORK_DIR` (a tmpfs is best); a
 process that dies mid-render leaves its work dir, and the API removes those
 older than 20 minutes when it starts. ffmpeg runs with two threads
 (`FFMPEG_THREADS`) and a lower priority (`FFMPEG_NICE`, `nice -n 10`). The
-media plane already has ffmpeg but is the realtime path and has no H.264
-encoder; a render belongs with the API's other background work. A larger
+media plane already has ffmpeg but is the realtime path; a story belongs
+with the API's other background work. A larger
 deployment runs it on dedicated worker processes (`API_WORKERS=false` on
 the processes that serve requests).
 
-**The API image** now carries an LGPL ffmpeg 8.0 build (no `--enable-gpl`,
-checked at build), with OpenH264 (Cisco, BSD 2-Clause, Debian's package) as
-its H.264 encoder and FFmpeg's own AAC encoder. libx264 is GPL, so it is
-not used; a locally installed ffmpeg is used as it is (`FFMPEG_PATH`), with
-whichever H.264 encoder it has (`STORY_H264_ENCODER` picks one). The labels
-are not drawn with ffmpeg's `drawtext`, which needs FreeType and fontconfig:
-the API draws them itself as raw RGBA frames with a small built-in pixel
-font (`caption.ts`), and ffmpeg overlays them. Letters come out in capitals.
+**The API image** carries an LGPL ffmpeg 8.0 build (no `--enable-gpl`,
+checked at build) with no H.264 encoder (also checked at build): it
+decodes H.264 (for following), copies and remuxes, writes mov_text and
+WebVTT subtitles and JPEG frames. A locally installed ffmpeg is used as it
+is (`FFMPEG_PATH`); stories never ask it to encode video.
 
 **Kept like a clip.** The story's segments live under
 `stories/{account}/{story}/` and outlive raw retention. Every story
@@ -193,12 +208,12 @@ draws a box on its snapshot; the Stories page shows the route.
 
 ## Consequences
 
-- The API image grows by an ffmpeg build and OpenH264, and the
-  brain image by 24 MB of weights. H.264 encoding may need patent licensing
-  in some places; Cisco's licence covers only Cisco's own binaries, which
-  are not used.
-- Renders run one at a time per API process (the 20 s test story renders in about 2 s on a laptop core); follows take
+- The API image grows by an ffmpeg build with no H.264 encoder, and the
+  brain image by 24 MB of weights.
+- Stories carry their labels as subtitles, not in the picture; a story of
+  cameras that record differently downloads as several MP4 parts.
+- Stories are made one at a time per API process (a copy and a remux, no encoding); follows take
   a brain's CPU for about 0.15 s per frame. Both are capped.
-- `follow_object` and `make_story` make 14 MCP tools.
+- `follow_object` and `make_story` make 15 MCP tools, with `speak`.
 - Person following is out of the plan for good: the guard above is where
   that line is held, and it is tested.

@@ -154,7 +154,6 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `TELEGRAM_MODE`, `TELEGRAM_WEBHOOK_SECRET` | `polling`, empty | `webhook`: Telegram posts updates to `API_PUBLIC_URL/telegram/webhook` with this secret, instead of the server polling |
 | `API_WORKERS` | `true` | `false`: this API process only serves requests. Background work (housekeeping, scheduled watches, webhook deliveries, clips, stories, follows) runs in the processes that have it on, each piece in one of them ([ADR 0058](decisions/0058-background-work-in-postgres.md)) |
 | `FFMPEG_PATH` | `ffmpeg` (the image's LGPL build) | The ffmpeg that renders stories and reads frames for following objects ([ADR 0070](decisions/0070-stories-and-following-objects.md)) |
-| `STORY_H264_ENCODER` | the first of `libopenh264`, `libx264`, `h264_videotoolbox` that ffmpeg has | The H.264 encoder for labelled stories |
 | `API_WORK_DIR` | the system temp dir | Where rendering writes its parts (decrypted footage itself is only ever piped). Best a tmpfs; leftovers older than 20 minutes are removed when the API starts |
 | `FFMPEG_THREADS`, `FFMPEG_NICE` | `2`, `10` | Threads per ffmpeg and its `nice` level, so renders don't starve requests. Larger deployments render on dedicated worker processes (`API_WORKERS`) |
 | `QUOTA_MAX_SOURCES` | unlimited | Registered sources per account |

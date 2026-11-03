@@ -174,7 +174,7 @@ Say something out loud through a camera's speaker: text to speech, after a short
 
 ## `make_story`
 
-Make one video from many moments across cameras, in time order: each piece labelled with its camera and time, long gaps shown as a short card. Give moments (events or time ranges) or a search ('the courier'). Waits for it to be ready (up to a minute or two) and returns its playback link. At most 20 pieces and 10 minutes of video; needs video on every camera in it.
+Make one video from many moments across cameras, in time order, never re-encoded: each piece captioned with its camera and time, a long gap said in the next caption. Give moments (events or time ranges) or a search ('the courier'). Waits for it to be ready (up to a minute or two) and returns its playback link, captions and MP4 downloads. At most 20 pieces and 10 minutes of video; needs video on every camera in it.
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
@@ -184,7 +184,7 @@ Make one video from many moments across cameras, in time order: each piece label
 | `to` | string | no | With search: default now |
 | `sources` | array of string | no | With search: only these sources (ids or names) |
 | `title` | string | no | up to 200 characters |
-| `fast` | boolean | no | Copy the recordings untouched (no labels or cards), quicker; default `false` |
+| `fast` | boolean | no | Only the playlist (no captions or MP4 downloads), quicker; default `false` |
 
 **Returns:** The story id, its status, its pieces in order and, once ready, a signed HLS playback URL.
 

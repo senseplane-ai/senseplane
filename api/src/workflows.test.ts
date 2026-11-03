@@ -595,7 +595,12 @@ describe("workflows", () => {
       expect((await hookCall(wf.id, body, sign("whsec_wrong", body))).statusCode).toBe(401);
       expect((await hookCall(wf.id, body, sign(wf.hook_secret, body, Math.floor(Date.now() / 1000) - 600))).statusCode).toBe(401);
       expect((await hookCall(wf.id, JSON.stringify({ door: "back" }), sign(wf.hook_secret, body))).statusCode).toBe(401);
-      expect((await hookCall("wfl_nope", body, sign(wf.hook_secret, body))).statusCode).toBe(404);
+      // An id that doesn't exist answers exactly as a bad signature does.
+      const unknown = await hookCall("wfl_nope", body, sign(wf.hook_secret, body));
+      const wrong = await hookCall(wf.id, body, sign("whsec_wrong", body));
+      expect([unknown.statusCode, wrong.statusCode]).toEqual([401, 401]);
+      expect(unknown.json().error.message).toBe(wrong.json().error.message);
+      expect(unknown.json().error.code).toBe(wrong.json().error.code);
       expect(await runsOf(wf.id)).toHaveLength(0);
       const signature = sign(wf.hook_secret, body);
       const ok = await hookCall(wf.id, body, signature);
@@ -603,7 +608,14 @@ describe("workflows", () => {
       expect(ok.json().run_id).toMatch(/^wfr_/);
       const replay = await hookCall(wf.id, body, signature);
       expect(replay.statusCode).toBe(401);
-      expect(replay.json().error.message).toMatch(/already used/);
+      expect(replay.json().error.message).toBe(wrong.json().error.message);
+      // Failed attempts are counted on the workflow, and audited at most once a minute, without their bodies.
+      const after = (await call(owner, "GET", `/v1/workflows/${wf.id}`)).json();
+      expect(after.hook_failures).toBe(6); // unsigned, wrong, stale, another body, wrong again, replayed; not the unknown id
+      const refusals = ((await call(owner, "GET", "/v1/audit?limit=100")).json().data as { action: string; target: string; details?: Record<string, unknown> }[])
+        .filter((a) => a.action === "workflow.hook_refused" && a.target === wf.id);
+      expect(refusals).toHaveLength(1);
+      expect(JSON.stringify(refusals[0])).not.toContain("front");
       await api.workflows.runDue();
       const run = await runOf(ok.json().run_id);
       expect(run).toMatchObject({ status: "succeeded", trigger: { type: "webhook", input: { door: "front" } } });

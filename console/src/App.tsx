@@ -31,6 +31,7 @@ const ADMIN_ROUTES = {
   "/events": Admin.EventsPage,
   "/watches": Admin.WatchesPage,
   "/search": Admin.SearchPage,
+  "/stories": Admin.StoriesPage,
   "/agents": Admin.AgentsPage,
   "/webhooks": Admin.WebhooksPage,
   "/usage": Admin.UsagePage,

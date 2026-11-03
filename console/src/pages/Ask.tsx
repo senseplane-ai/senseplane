@@ -184,9 +184,10 @@ export function AskPage({ conversationId }: { conversationId?: string }) {
         delta: (t) => patchLast((m) => ({ ...m, content: m.content + t })),
         moment: (x) => patchLast((m) => ({ ...m, moments: [...m.moments, x] })),
         suggestedWatch: (w) => patchLast((m) => ({ ...m, suggested_watch: w })),
+        story: (sid) => patchLast((m) => ({ ...m, story_id: sid })),
         error: (msg) => patchLast((m) => ({ ...m, pending: false, error: msg })),
       }, ctrl.signal);
-      patchLast((m) => (final ? { ...(final as Message), scope } : { ...m, pending: false }));
+      patchLast((m) => (final ? { ...(final as Message), scope, ...(m.story_id ? { story_id: m.story_id } : {}) } : { ...m, pending: false }));
       void refreshConversations();
     } catch (e) {
       if (ctrl.signal.aborted) return;

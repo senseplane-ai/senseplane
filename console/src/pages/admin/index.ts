@@ -9,4 +9,5 @@ export { AgentsPage } from "./AgentsPage";
 export { WebhooksPage } from "./WebhooksPage";
 export { UsagePage } from "./UsagePage";
 export { SettingsPage } from "./SettingsPage";
+export { StoriesPage } from "./StoriesPage";
 export type { PageProps as AdminPageProps } from "./kit";

@@ -37,6 +37,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     { to: "/events", label: "Events", icon: "events", match: starts("/events"), extra: unreadEvents > 0 ? <Badge label={`${unreadEvents} new`}>{unreadEvents > 99 ? "99+" : unreadEvents}</Badge> : null },
     { to: "/watches", label: "Watches", icon: "watch", match: starts("/watches") },
     { to: "/search", label: "Search history", icon: "search", match: starts("/search") },
+    { to: "/stories", label: "Stories", icon: "play", match: starts("/stories") },
   ];
   const admin: NavItem[] = [
     { to: "/agents", label: "Agents", icon: "agents", match: starts("/agents") },

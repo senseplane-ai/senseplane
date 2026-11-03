@@ -163,6 +163,7 @@ export function MessageView({ m, conversationId }: { m: ViewMessage; conversatio
           <div className="moments">{m.moments.map((x, i) => <MomentCard key={`${x.source_id}-${x.at}-${i}`} m={x} index={i} />)}</div>
         )}
         {!m.pending && <AnswerActions m={m} />}
+        {m.story_id && <p className="notice"><Link to={`/stories?id=${m.story_id}`}>Watch the story of these moments</Link> (it plays once it is made, in a minute or so)</p>}
         {!m.pending && m.suggested_watch && <SuggestedWatchCard w={m.suggested_watch} />}
         {!m.pending && !m.error && m.content && <Feedback m={m} conversationId={conversationId} />}
       </div>

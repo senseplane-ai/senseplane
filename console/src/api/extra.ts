@@ -27,6 +27,8 @@ export interface Message {
   content: string;
   moments: Moment[];
   suggested_watch?: SuggestedWatch | null;
+  /** A story the answer made (ADR 0070); only while the answer is on screen, from its `story` event. */
+  story_id?: string;
   /** Assistant messages: the reader's thumbs (null until given). */
   feedback?: Feedback | null;
   created_at: string;
@@ -79,6 +81,7 @@ export interface StreamHandlers {
   delta?: (text: string) => void;
   moment?: (m: Moment) => void;
   suggestedWatch?: (w: SuggestedWatch) => void;
+  story?: (id: string) => void;
   done?: (m: Message) => void;
   error?: (message: string) => void;
 }
@@ -289,6 +292,7 @@ export class ApiExtra {
         else if (event === "delta") on.delta?.(String(d.text ?? ""));
         else if (event === "moment") on.moment?.(d as unknown as Moment);
         else if (event === "suggested_watch") on.suggestedWatch?.(d as unknown as SuggestedWatch);
+        else if (event === "story" && typeof d.id === "string") on.story?.(d.id);
         else if (event === "done") {
           final = (d.message ?? d) as Message;
           on.done?.(final);

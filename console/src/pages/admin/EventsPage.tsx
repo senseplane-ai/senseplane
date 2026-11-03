@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Webhook } from "senseplane";
 import { labelText } from "../../shell/sources";
+import { FollowDialog } from "./StoriesPage";
 import { type EventX, type WatchX, errorText, listEvents, unavailable } from "./api";
 import {
   type PageProps, ErrorNote, Header, HlsVideo, Snapshot, Thumb, Unavailable, can, ctxOf, fmtHm, fmtTime, hostOf,
@@ -49,6 +50,8 @@ export function EventsPage(p: PageProps) {
   const [olderBusy, setOlderBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [selId, setSelId] = useState<string | null>(null);
+  // Events picked for a story (ADR 0070), in the order picked; the story puts them in time order.
+  const [forStory, setForStory] = useState<string[]>([]);
 
   // Context for the detail panel: which watch fired, and where it was sent.
   const ctxData = useLoad(async () => {
@@ -146,6 +149,14 @@ export function EventsPage(p: PageProps) {
         )}
       </div>
 
+      {forStory.length > 0 && (
+        <div className="adm-row" role="status" aria-label="Story picks">
+          <span className="adm-small">{forStory.length} event{forStory.length > 1 ? "s" : ""} picked for a story</span>
+          <button type="button" className="adm-btn adm-btn-primary adm-btn-sm" onClick={() => p.navigate(`/stories?events=${forStory.join(",")}`)}>Make a story</button>
+          <button type="button" className="adm-btn adm-btn-ghost adm-btn-sm" onClick={() => setForStory([])}>Clear</button>
+        </div>
+      )}
+
       {error !== undefined && unavailable(error) ? <Unavailable what="The events feed" /> : (
         <div className="adm-split">
           <section aria-label="Event list" className="adm-card adm-ev-list" aria-busy={loading}>
@@ -176,7 +187,9 @@ export function EventsPage(p: PageProps) {
           </section>
 
           {selected ? (
-            <EventDetail key={selected.id} p={p} summary={selected} camName={camName(selected)} canFeedback={can.feedback(role)} ctxData={ctxData.data} />
+            <EventDetail key={selected.id} p={p} summary={selected} camName={camName(selected)} canFeedback={can.feedback(role)} ctxData={ctxData.data}
+              picked={forStory.includes(selected.id)} canStory={can.clips(role)}
+              onPick={() => setForStory((ids) => (ids.includes(selected.id) ? ids.filter((x) => x !== selected.id) : [...ids, selected.id]))} />
           ) : (
             <section aria-label="Event detail" className="adm-card adm-ev-detail"><p className="adm-empty">Pick an event to see what happened.</p></section>
           )}
@@ -212,7 +225,10 @@ export function sentTo(e: EventX, d: CtxData | undefined): string {
   return hooks.length ? joinAnd(hooks.map(hookName)) : "Nobody";
 }
 
-function EventDetail({ p, summary, camName, canFeedback, ctxData }: { p: PageProps; summary: EventX; camName: string; canFeedback: boolean; ctxData: CtxData | undefined }) {
+function EventDetail({ p, summary, camName, canFeedback, ctxData, picked = false, canStory = false, onPick }: {
+  p: PageProps; summary: EventX; camName: string; canFeedback: boolean; ctxData: CtxData | undefined; picked?: boolean; canStory?: boolean; onPick?: () => void;
+}) {
+  const [following, setFollowing] = useState(false);
   // The list's signed URLs may have expired; fetch the event again for fresh ones.
   const fresh = useLoad(() => p.client.events.get(summary.id) as Promise<EventX>, [summary.id]);
   const e = fresh.data ?? summary;
@@ -266,6 +282,13 @@ function EventDetail({ p, summary, camName, canFeedback, ctxData }: { p: PagePro
           <button type="button" className="adm-btn" aria-pressed={feedback === "not_relevant"} disabled={!canFeedback} onClick={() => void send("not_relevant")}>Not relevant</button>
           {msg && <span role="status" className="adm-small adm-muted">{msg}</span>}
         </div>
+        {canStory && (
+          <div className="adm-row">
+            <button type="button" className="adm-btn" aria-pressed={picked} onClick={onPick}>{picked ? "Picked for a story" : "Add to a story"}</button>
+            {e.media.snapshot_url && <button type="button" className="adm-btn" onClick={() => setFollowing(true)}>Follow this</button>}
+          </div>
+        )}
+        {following && e.media.snapshot_url && <FollowDialog p={p} event={e} snapshotUrl={e.media.snapshot_url} onClose={() => setFollowing(false)} />}
         <ErrorNote error={fresh.error && !unavailable(fresh.error) ? fresh.error : undefined} />
         <details className="adm-details">
           <summary>Event JSON</summary>

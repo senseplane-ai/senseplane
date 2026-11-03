@@ -6,7 +6,7 @@
 // counted under a lock on the workflow's row, so concurrent triggers can't
 // all slip under the run rate; one over it is dropped and counted on the
 // workflow. Kept apart from the engine so events.ts stays light.
-import type { Selectable } from "kysely";
+import { type Selectable, sql } from "kysely";
 import type { AccountScope } from "./data/access.js";
 import { newId } from "./data/ids.js";
 import type { EventsTable, WorkflowRunsTable, WorkflowsTable } from "./data/schema.js";
@@ -32,11 +32,14 @@ export function eventStarts(w: Pick<WorkflowRow, "source_ids" | "definition">, e
 
 export type StartOutcome = { run: WorkflowRunRow } | { dropped: "workflow" | "account" | "disabled" };
 
-/** Queues a run of a workflow, within its run rate. `s` is the caller's transaction. */
-export async function startRun(s: AccountScope, workflowId: string, trigger: WorkflowRunTrigger, eventId: string | null = null, now = new Date()): Promise<StartOutcome> {
+/**
+ * Queues a run of a workflow, within its run rate. `s` is the caller's transaction. Times are the database's
+ * (ADR 0058), so a process whose clock is ahead can't queue a run the claim doesn't see as due yet.
+ */
+export async function startRun(s: AccountScope, workflowId: string, trigger: WorkflowRunTrigger, eventId: string | null = null): Promise<StartOutcome> {
   const w = await s.db.selectFrom("workflows").selectAll().where("id", "=", workflowId).forUpdate().executeTakeFirst();
   if (!w || (!w.enabled && trigger.type !== "manual")) return { dropped: "disabled" };
-  const since = (ms: number) => new Date(now.getTime() - ms);
+  const since = (ms: number) => sql<Date>`now() - make_interval(secs => ${ms / 1000})`;
   const counts = await s.db.selectFrom("workflow_runs")
     .select((eb) => [
       eb.fn.countAll<string>().filterWhere("created_at", ">", since(60_000)).filterWhere("workflow_id", "=", workflowId).as("minute"),
@@ -53,9 +56,9 @@ export async function startRun(s: AccountScope, workflowId: string, trigger: Wor
   }
   const run = await s.db.insertInto("workflow_runs").values({
     id: newId("wfr"), account_id: s.accountId, workflow_id: w.id, definition: JSON.stringify(w.definition), source_ids: w.source_ids,
-    workflow_name: w.name, trigger: JSON.stringify(trigger), event_id: eventId, status: "queued", due_at: now, created_at: now,
+    workflow_name: w.name, trigger: JSON.stringify(trigger), event_id: eventId, status: "queued", due_at: sql`now()`, created_at: sql`now()`,
   }).returningAll().executeTakeFirstOrThrow();
-  await s.db.updateTable("workflows").set({ last_run_at: now }).where("id", "=", w.id).execute();
+  await s.db.updateTable("workflows").set({ last_run_at: sql`now()` }).where("id", "=", w.id).execute();
   // Wake the worker just after this transaction commits.
   setTimeout(() => workflowKick.dispatchEvent(new Event("kick")), 20);
   return { run };

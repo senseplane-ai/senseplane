@@ -207,9 +207,11 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     if (!text.trim()) return fail("the text came out empty");
     if (step.to.type === "channel") {
       return data.withAccount(env.accountId, async (s) => {
-        const ch = await s.db.selectFrom("channels").select(["id", "status", "snapshots"]).where("id", "=", step.to.id).executeTakeFirst();
+        const ch = await s.db.selectFrom("channels").select(["id", "status", "snapshots", "muted_until"]).where("id", "=", step.to.id).executeTakeFirst();
         if (!ch) return fail(`the chat ${step.to.id} isn't linked to this workspace`);
         if (ch.status !== "active") return fail(`the chat ${step.to.id} is ${ch.status}`);
+        // A chat someone muted stays quiet, as it does for watches' alerts; the step is done, and says so.
+        if (ch.muted_until && new Date(ch.muted_until) > new Date()) return { status: "succeeded", output: { channel_id: ch.id, muted: true } } as Outcome;
         // The event's snapshot when the chat takes them and the workflow may show it unblurred; otherwise text only.
         const ev = env.event;
         const photo = ev?.snapshot_key && ch.snapshots && !blurredOnly(env.access.grants, ev.source_id) ? { photo_key: ev.snapshot_key, photo_source: ev.source_id } : {};
@@ -459,18 +461,18 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
   }
 
   /** Scheduled workflows that are due: a run each, and the next time worked out. Returns how many it started. */
-  async function fireSchedules(at = new Date(), max = 50): Promise<number> {
-    const due = (await sql<{ account_id: string; id: string }>`select * from claim_workflow_schedules(${max}, ${60}, ${at})`.execute(data.db())).rows;
+  async function fireSchedules(at?: Date, max = 50): Promise<number> {
+    const due = (await sql<{ account_id: string; id: string }>`select * from claim_workflow_schedules(${max}, ${60}, ${at ?? sql`now()`})`.execute(data.db())).rows;
     let n = 0;
     for (const d of due) {
       await data.withAccount(d.account_id, async (s) => {
         const w = await s.db.selectFrom("workflows").selectAll().where("id", "=", d.id).executeTakeFirst();
         if (!w) return;
         const tz = (await s.account.get())?.time_zone || "UTC";
-        const out = await startRun(s, w.id, { type: "schedule", scheduled_for: (w.next_fire_at ? new Date(w.next_fire_at) : at).toISOString() }, null, at);
+        const out = await startRun(s, w.id, { type: "schedule", scheduled_for: (w.next_fire_at ? new Date(w.next_fire_at) : at ?? new Date()).toISOString() });
         if ("run" in out) n++;
         await s.db.updateTable("workflows").set({
-          next_fire_at: nextFireAt(w.definition.trigger as ScheduleTrigger, tz, at, true), fire_claimed_until: null, last_fired_at: at,
+          next_fire_at: nextFireAt(w.definition.trigger as ScheduleTrigger, tz, at ?? new Date(), true), fire_claimed_until: null, last_fired_at: at ?? new Date(),
         }).where("id", "=", w.id).execute();
       });
     }

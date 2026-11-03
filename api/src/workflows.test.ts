@@ -11,6 +11,7 @@
 import { createHmac } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { Readable } from "node:stream";
+import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createEvent } from "./events.js";
 import { type ApiBus, createApi, type SenseplaneApi } from "./index.js";
@@ -97,7 +98,7 @@ describe("workflows", () => {
   const stepsOf = async (runId: string) => Object.fromEntries(((await runOf(runId)).steps as { id: string; status: string }[]).map((s) => [s.id, s.status]));
   /** Everything waiting is due now. */
   const due = () => api.data.withAccount(acc, async (s) => {
-    await s.db.updateTable("workflow_runs").set({ due_at: new Date(Date.now() - 1000) }).where("due_at", "is not", null).execute();
+    await s.db.updateTable("workflow_runs").set({ due_at: sql`now() - interval '1 second'` }).where("due_at", "is not", null).execute();
     await s.db.updateTable("workflow_run_steps").set({ resume_at: new Date(Date.now() - 1000) }).where("status", "=", "waiting").execute();
   });
   const clearRuns = () => api.data.withAccount(acc, async (s) => {
@@ -321,6 +322,18 @@ describe("workflows", () => {
       expect(await stepsOf(run!.id)).toEqual({ night: "succeeded", parcel: "succeeded", say: "skipped", tell: "skipped", family: "succeeded" });
       const msg = await api.data.withAccount(acc, (s) => s.db.selectFrom("channel_messages").selectAll().where("channel_id", "=", chat).orderBy("created_at", "desc").executeTakeFirstOrThrow());
       expect(msg.body).toMatchObject({ text: "<b>Door</b>\nSomeone with no parcel: Someone at the door", photo_key: expect.stringContaining(porch), photo_source: porch });
+      // A muted chat stays quiet; the step says so.
+      await api.data.withAccount(acc, (s) => s.db.updateTable("channels").set({ muted_until: new Date(Date.now() + 3600_000) }).where("id", "=", chat).execute());
+      try {
+        const before = await api.data.withAccount(acc, (s) => s.db.selectFrom("channel_messages").select("id").execute());
+        await event(porch);
+        await api.workflows.runDue();
+        const [latest] = await runsOf(wf.id);
+        expect((await runOf(latest!.id)).steps.find((s: { id: string }) => s.id === "family")).toMatchObject({ status: "succeeded", output: { muted: true } });
+        expect(await api.data.withAccount(acc, (s) => s.db.selectFrom("channel_messages").select("id").execute())).toHaveLength(before.length);
+      } finally {
+        await api.data.withAccount(acc, (s) => s.db.updateTable("channels").set({ muted_until: null }).where("id", "=", chat).execute());
+      }
     });
   });
 

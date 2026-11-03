@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import time
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from ._base import jsonable
 from ._errors import SenseplaneError
 from ._sync_client import Senseplane
 from ._tool_defs import ToolResult, anthropic_tools, openai_tools, tool_names
+from .senses import is_sensor_sense, js_round, reading_text, sense_name
 
 __all__ = ["Toolkit"]
 
@@ -40,9 +42,38 @@ def _field(obj: Any, key: str) -> Any:
     return obj.get(key) if isinstance(obj, Mapping) else getattr(obj, key)
 
 
+def _pick(d: Mapping[str, Any], *keys: str) -> dict[str, Any]:
+    """The keys `d` has (a field the API left out stays out, as JSON.stringify drops undefined)."""
+    return {k: d[k] for k in keys if k in d}
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _number(v: Any) -> float | None:
+    """JavaScript's Number(): true is 1; what isn't a number is null in the JSON."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(n) else n
+
+
+def _request(c: Mapping[str, Any]) -> dict[str, Any]:
+    """A device request as the MCP server words it."""
+    out = {
+        "request": c.get("id"),
+        "device": c.get("device_name"),
+        **{k: c.get(k) for k in ("action", "status", "message", "state")},
+    }
+    if c.get("expires_at") and c.get("status") == "awaiting_confirmation":
+        out["confirm_by"] = c["expires_at"]
+    return out
+
+
 def _brief(e: Mapping[str, Any]) -> dict[str, Any]:
-    keys = ("id", "type", "source", "occurred_at", "summary", "confidence")
-    return {**{k: e.get(k) for k in keys}, **(e.get("media") or {})}
+    return {**_pick(e, "id", "type", "source", "occurred_at", "summary", "confidence"), **(e.get("media") or {})}
 
 
 def _inbox_brief(i: Mapping[str, Any]) -> dict[str, Any]:
@@ -149,7 +180,7 @@ class Toolkit:
 
     def _tool_list_senses(self, a: dict[str, Any]) -> ToolResult:
         keys = ("id", "name", "location", "type", "senses", "status")
-        return _text({"sources": [{k: s.get(k) for k in keys} for s in self._sources()]})
+        return _text({"sources": [_pick(s, *keys) for s in self._sources()]})
 
     def _tool_look(self, a: dict[str, Any]) -> ToolResult:
         src = self._resolve(a.get("source"))
@@ -199,39 +230,137 @@ class Toolkit:
     def _tool_read_environment(self, a: dict[str, Any]) -> ToolResult:
         sources = self._sources()
         room = str(a["room"]).lower() if a.get("room") else None
+        only = str(a["sense"]) if a.get("sense") else None
+
+        def sensing(src: Mapping[str, Any]) -> bool:
+            return any(is_sensor_sense(x) and (not only or x == only) for x in src["senses"])
+
         if a.get("source"):
             picked = [self._resolve(a["source"])]
         else:
             picked = [
-                s
-                for s in sources
-                if ("temperature" in s["senses"] or "humidity" in s["senses"])
-                and (not room or (s.get("location") or "").lower() == room or room in s["name"].lower())
+                x
+                for x in sources
+                if sensing(x) and (not room or (x.get("location") or "").lower() == room or room in x["name"].lower())
             ]
         if not picked:
-            return _fail("not_found", f'no climate sensor in "{a["room"]}"' if room else "no climate sensors")
+            where = f' in "{a["room"]}"' if room else ""
+            what = f"no {sense_name(only) if only else ''} sensor{'' if only else 's'}{where}"
+            return _fail("not_found", what.replace("no  ", "no "))
         since = datetime.now(timezone.utc) - timedelta(hours=1)
         out = []
-        for s in picked:
-            now = jsonable(self.client.sources.now(s["id"]))
-            history = jsonable((self.client.sources.history(s["id"], from_=since)).data)
+        for src in picked:
+            now = jsonable(self.client.sources.now(src["id"]))
+            latest = [r for r in now.get("readings") or [] if not only or r["sense"] == only]
+            numbers = any(r.get("kind") in ("number", None) for r in latest)
+            history = jsonable((self.client.sources.history(src["id"], from_=since)).data) if numbers else []
             readings = []
-            for r in now.get("readings") or []:
-                series = [h for h in history if h["sense"] == r["sense"]]
-                delta = r["value"] - series[0]["value"] if series else 0
-                steady = abs(delta) < (2 if r["sense"] == "humidity" else 0.3)
+            for r in latest:
+                dev = r.get("device")
+                device = {"device": dev.get("name") or dev["id"]} if dev else {}
+                if r.get("kind") == "state":
+                    readings.append(
+                        {"sense": r["sense"], **device, **_pick(r, "state", "value", "since", "measured_at")}
+                    )
+                    continue
+                if r.get("kind") == "event":
+                    at = _pick(r, "measured_at")
+                    detail = {"detail": r["detail"]} if r.get("detail") else {}
+                    readings.append(
+                        {
+                            "sense": r["sense"],
+                            **device,
+                            "last": reading_text(r),
+                            **detail,
+                            **({"at": at["measured_at"]} if at else {}),
+                        }
+                    )
+                    continue
+                value = _number(r.get("value"))
+                dev_id = dev["id"] if dev else None
+                series = [
+                    h for h in history if h["sense"] == r["sense"] and (h.get("device") or {}).get("id") == dev_id
+                ]
+                first: Any = series[0].get("value") if series else None
+                delta = value - float(first) if _is_number(first) and value is not None else 0
+                # "Steady" is a small change for the unit: 0.3 °C, 2 points of a percentage, else 5 %.
+                unit = r.get("unit")
+                still = 0.3 if unit == "celsius" else 2 if unit == "percent" else max(abs(value or 0) * 0.05, 0.01)
+                trend = "steady" if abs(delta) < still else "rising" if delta > 0 else "falling"
                 readings.append(
                     {
                         "sense": r["sense"],
-                        "value": r["value"],
-                        "unit": r.get("unit"),
-                        "measured_at": r.get("measured_at"),
-                        "trend_last_hour": "steady" if steady else "rising" if delta > 0 else "falling",
-                        "change_last_hour": round(delta * 10) / 10,
+                        **device,
+                        "value": value,
+                        **_pick(r, "unit"),
+                        "text": reading_text(r),
+                        **_pick(r, "measured_at"),
+                        "trend_last_hour": trend,
+                        "change_last_hour": js_round(delta * 10) / 10,
                     }
                 )
-            out.append({"source": s["id"], "name": s["name"], "location": s.get("location"), "readings": readings})
+            # A box that is off (or can't reach Home Assistant) left these values behind: say so, never pass them off as now.
+            offline = src.get("status") in ("offline", "reconnecting")
+            note = {
+                "status": "offline",
+                "note": f"Offline since {src.get('status_since') or 'a while'}: these are the last readings, not what is true now.",
+            }
+            out.append(
+                {
+                    "source": src["id"],
+                    "name": src["name"],
+                    **_pick(src, "location"),
+                    **(note if offline else {}),
+                    "readings": readings,
+                }
+            )
         return _text({"sources": out})
+
+    def _devices(self) -> list[dict[str, Any]]:
+        return [jsonable(d) for d in self.client.devices.list()]
+
+    def _device(self, ref: Any) -> dict[str, Any]:
+        """A device by id or (case-insensitive) name, with or without its room."""
+        r = str(ref if ref is not None else "").strip().lower()
+        devices = self._devices()
+        hit = (
+            next((d for d in devices if d["id"].lower() == r), None)
+            or next((d for d in devices if d["name"].lower() == r), None)
+            or next((d for d in devices if f"{d.get('room') or ''} {d['name']}".strip().lower() == r), None)
+        )
+        if hit is None:
+            raise SenseplaneError(404, "not_found", f'no device "{ref}"; call list_devices for the ids')
+        return hit
+
+    def _tool_list_devices(self, a: dict[str, Any]) -> ToolResult:
+        room = str(a["room"]).lower() if a.get("room") else None
+        devices = [d for d in self._devices() if not room or (d.get("room") or "").lower() == room]
+        keys = ("id", "name", "room", "type", "tier", "actions", "state", "online", "can_control")
+        return _text({"devices": [_pick(d, *keys) for d in devices]})
+
+    def _tool_control_device(self, a: dict[str, Any]) -> ToolResult:
+        if a.get("request"):
+            return _text(_request(jsonable(self.client.devices.request(str(a["request"])))))
+        if not a.get("device") or not a.get("action"):
+            return _fail("validation_failed", "give a device and an action, or a request id to check")
+        d = self._device(a["device"])
+        try:
+            c = jsonable(self.client.devices.command(d["id"], str(a["action"]), value=a.get("value")))
+        except SenseplaneError as err:
+            # Offline boxes, failures and refusals carry the recorded request.
+            cmd = (err.details or {}).get("command")
+            if isinstance(cmd, Mapping):
+                body = {"error": {"code": err.code, "message": err.message}, **_request(cmd)}
+                return ToolResult([{"type": "text", "text": json.dumps(body, indent=2, default=str)}], True)
+            raise
+        note = (
+            {
+                "note": "A person must confirm this in Senseplane (console, app or Telegram) within 2 minutes; it hasn't happened yet."
+            }
+            if c.get("status") == "awaiting_confirmation"
+            else {}
+        )
+        return _text({**_request(c), **note})
 
     def _tool_watch_for(self, a: dict[str, Any]) -> ToolResult:
         ids = [(self._resolve(s))["id"] for s in a.get("sources") or []]
@@ -259,7 +388,7 @@ class Toolkit:
         return _text(
             {
                 "watch_id": w["id"],
-                **{k: w.get(k) for k in keys},
+                **_pick(w, *keys),
                 "expires_at": w.get("expires_at"),
                 "active_hours": w.get("active_hours"),
                 "notify": w.get("notify") or [],
@@ -283,7 +412,7 @@ class Toolkit:
         out: dict[str, Any] = {"question": q}
         if inbox:
             out["new_from_your_watches"] = inbox
-        out["events"] = [{**_brief(h["event"]), "score": round(h["score"] * 1000) / 1000} for h in hits]
+        out["events"] = [{**_brief(h["event"]), "score": js_round(h["score"] * 1000) / 1000} for h in hits]
         return _text(out)
 
     def _tool_measure(self, a: dict[str, Any]) -> ToolResult:
@@ -298,13 +427,13 @@ class Toolkit:
         if a.get("max_checks") is not None:
             body["max_checks"] = int(a["max_checks"])
         r = jsonable(self.client.activity.check(body))
-        return _text({k: r.get(k) for k in ("matches", "checks_used", "candidates", "unchecked", "stored")})
+        return _text(_pick(r, "matches", "checks_used", "candidates", "unchecked", "stored"))
 
     def _tool_replay(self, a: dict[str, Any]) -> ToolResult:
         src = self._resolve(a.get("source"))
         start, end = str(a.get("from")), str(a.get("to"))
         p = jsonable(self.client.sources.playback(src["id"], from_=start, to=end))
-        out = {"source": src["id"], "url": p["url"], "expires_at": p.get("expires_at"), "gaps": p.get("gaps") or []}
+        out = {"source": src["id"], "url": p["url"], **_pick(p, "expires_at"), "gaps": p.get("gaps") or []}
         if a.get("save"):
             clip = self.client.clips.create({"source": src["id"], "from": start, "to": end})
             out["clip_id"] = clip.id

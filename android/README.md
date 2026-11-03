@@ -2,7 +2,8 @@
 
 The app turns an Android phone (8.0 or newer) into a Senseplane box: it sends
 its camera, relays the IP cameras on its Wi-Fi, listens for Bluetooth
-sensors, reads Matter devices shared to it with a pairing code (ADR 0065),
+sensors, reads Matter devices shared to it with a pairing code (ADR 0065)
+or new ones it pairs over Bluetooth (ADR 0073),
 and lets owners and admins chat and set watches. See
 [ADR 0064](../docs/decisions/0064-the-phone-as-a-box.md).
 
@@ -19,7 +20,7 @@ You need the Android SDK (platform 34, NDK 26), Go and `gomobile`
 ## Test
 
 ```sh
-./gradlew :app:testDebugUnitTest  # frames, sensors, status and API client
+./gradlew :app:testDebugUnitTest  # frames, sensors, status, API client, Matter pairing and QR codes
 ```
 
 End to end, on an emulator or a phone, against a running Senseplane

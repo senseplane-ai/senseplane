@@ -1,6 +1,6 @@
 # 65. A Matter controller in the bridge
 
-Date: 2026-11-02 · Status: accepted
+Date: 2026-11-02 · Status: accepted; adding over Bluetooth and revocation lists came with ADR 0073
 
 ## Context
 
@@ -51,10 +51,9 @@ the PAI must chain to a PAA on the CSA's Distributed Compliance Ledger
 be signed by one of the CSA's CD keys (in the bridge, from
 connectedhomeip) as an official certification for this vendor and
 product. Development devices and unknown makers are added and marked
-uncertified, with the reason. Revocation lists aren't checked yet.
+uncertified, with the reason. Revocation lists are checked since ADR 0073.
 
-**Not supported yet:** revocation lists for device certificates, adding a new device over Bluetooth (set it up in its
-own app first, then share it), Thread devices without a border router at
+**Not supported yet:** Thread devices without a border router at
 home, intermediate certificates, session resumption, and devices that
 split one attribute's list over messages in other ways than appending.
 

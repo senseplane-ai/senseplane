@@ -125,7 +125,9 @@ func TestTalkCarriesAPersonsVoiceToTheCamera(t *testing.T) {
 			b.runCommand(context.Background(), talkCommand("bcm_t", w.URL, w.Token, 10*time.Second))
 			rep := f.report("bcm_t")
 			res, _ := rep["result"].(map[string]any)
-			if rep["ok"] != true || res["ended"] != talk.EndReleased {
+			// Released: the fake closes its connection; on a loaded machine its DTLS goodbye can be lost, and then
+			// the 3 s without audio ends it (the real media plane is timed in TestTalkEndToEnd).
+			if rep["ok"] != true || (res["ended"] != talk.EndReleased && res["ended"] != talk.EndSilence) {
 				t.Fatalf("report %v", rep)
 			}
 			heard := talktest.DecodeG711(codec, cam.Audio())

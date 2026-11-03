@@ -111,7 +111,39 @@ def api(r: httpx.Request) -> httpx.Response:
         return respond({"id": "clp_1"}, 201)
     if p == "/v1/events":
         return respond({"data": [], "next_cursor": None})
+    if p in ("/v1/stories", "/v1/stories/sty_1"):
+        piece = {"source_id": "src_cam", "source_name": "Front door", "from": "2026-10-16T10:00:00Z", "to": "2026-10-16T10:00:10Z", "audio": False}
+        ready = r.method == "GET"
+        story = {"id": "sty_1", "mode": "labelled", "status": "ready" if ready else "queued", "pieces": [piece], "bytes": 0, "has_audio": False,
+                 "created_at": "2026-10-16T11:00:00Z", **({"playback_url": "http://media.test/s.m3u8", "playback_expires_at": "2026-10-16T11:15:00Z", "duration_ms": 10000} if ready else {})}
+        return respond(story, 200 if ready else 202)
+    if p == "/v1/follows" and r.method == "POST":
+        body = json.loads(r.content)
+        if "man" in (body["reference"].get("description") or ""):
+            return respond({"error": {"code": "forbidden", "message": "Senseplane doesn't follow people", "details": {"person": True}}}, 403)
+        return respond({"id": "fol_1", "status": "queued", "reference": body["reference"], "sources": ["src_cam"], "from": body["from"], "to": body["to"],
+                        "make_story": body["make_story"], "frames_examined": 0, "model_calls": 0, "created_at": "2026-10-16T11:00:00Z"}, 202)
+    if p == "/v1/follows/fol_1":
+        visit = {"source_id": "src_cam", "source_name": "Front door", "from": "2026-10-16T10:00:00Z", "to": "2026-10-16T10:01:00Z", "sightings": 4, "confidence": 0.9,
+                 "playback_url": "http://media.test/r.m3u8"}
+        return respond({"id": "fol_1", "status": "done", "reference": {}, "sources": ["src_cam"], "from": "2026-10-16T09:00:00Z", "to": "2026-10-16T11:00:00Z",
+                        "make_story": True, "story_id": "sty_1", "frames_examined": 30, "model_calls": 2, "created_at": "2026-10-16T11:00:00Z",
+                        "result": {"route": [visit], "handovers": [], "gaps": [{"from": "2026-10-16T10:01:00Z", "to": "2026-10-16T10:05:00Z", "note": "not seen"}]}})
     return respond({"error": {"code": "not_found", "message": f"no route {p}"}}, 404)
+
+
+def test_make_story_and_follow_object() -> None:
+    tk, rec = toolkit()
+    s = tk.call("make_story", {"moments": [{"event": "evt_1"}, {"source": "front door", "from": "2026-10-16T10:00:00Z", "to": "2026-10-16T10:00:10Z"}]}).value()
+    assert s == {"story_id": "sty_1", "status": "ready", "pieces": [{"source": "Front door", "from": "2026-10-16T10:00:00Z", "to": "2026-10-16T10:00:10Z"}],
+                 "url": "http://media.test/s.m3u8", "expires_at": "2026-10-16T11:15:00Z", "duration_ms": 10000}
+    sent = json.loads(next(x for x in rec.requests if x.url.path == "/v1/stories").content)
+    assert sent == {"moments": [{"event": "evt_1"}, {"source": "src_cam", "from": "2026-10-16T10:00:00Z", "to": "2026-10-16T10:00:10Z"}]}
+    f = tk.call("follow_object", {"event": "evt_1", "box": [0.1, 0.2, 0.3, 0.4], "from": "2026-10-16T09:00:00Z", "to": "2026-10-16T11:00:00Z"}).value()
+    assert f["route"] == [{"source": "Front door", "from": "2026-10-16T10:00:00Z", "to": "2026-10-16T10:01:00Z", "confidence": 0.9, "url": "http://media.test/r.m3u8"}]
+    assert f["gaps"][0]["note"] == "not seen" and f["story_id"] == "sty_1"
+    refused = tk.call("follow_object", {"description": "the man in the hat", "from": "2026-10-16T09:00:00Z", "to": "2026-10-16T11:00:00Z"})
+    assert refused.is_error and refused.value()["error"]["code"] == "forbidden"
 
 
 def toolkit() -> tuple[Toolkit, Recorder]:

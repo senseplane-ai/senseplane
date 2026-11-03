@@ -10,5 +10,5 @@ export interface ToolDefinition {
   output: string;
 }
 
-/** The 13 MCP tools, generated from spec/mcp/tools.json. Handlers are in handlers.ts. */
+/** The 15 MCP tools, generated from spec/mcp/tools.json. Handlers are in handlers.ts. */
 export const tools: ToolDefinition[] = spec.tools as ToolDefinition[];

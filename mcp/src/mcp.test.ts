@@ -60,6 +60,24 @@ const fakeApi: typeof fetch = async (input, init) => {
   if (p === "/events") return json({ data: [], next_cursor: null });
   if (p === "/sources/src_cam/playback") return json({ url: "http://api/playback/t/index.m3u8", expires_at: "2026-10-16T01:15:00Z", gaps: [] });
   if (p === "/clips" && req.method === "POST") return json({ id: "clp_1" }, 201);
+  // Stories and following (ADR 0070): ready, and done, by the first poll.
+  const piece = (source_name: string, from: string) => ({ source_id: "src_cam", source_name, from, to: from.replace(":00Z", ":10Z"), audio: false, recorded_ms: 10_000 });
+  if (p === "/stories" && req.method === "POST") {
+    const b = await req.json();
+    if (!b.moments?.length && !b.search) return json({ error: { code: "validation_failed", message: "give moments or a search", request_id: "r" } }, 400);
+    return json({ id: "sty_1", mode: b.mode ?? "labelled", status: "queued", pieces: [piece("Front door", "2026-10-16T00:30:00Z")], bytes: 0, has_audio: false, created_at: "2026-10-16T01:00:00Z" }, 202);
+  }
+  if (p === "/stories/sty_1") return json({ id: "sty_1", mode: "labelled", status: "ready", pieces: [piece("Front door", "2026-10-16T00:30:00Z")], bytes: 1000, has_audio: false, duration_ms: 10_000,
+    playback_url: "http://api/playback/s/index.m3u8", playback_expires_at: "2026-10-16T01:15:00Z", created_at: "2026-10-16T01:00:00Z" });
+  if (p === "/follows" && req.method === "POST") {
+    const b = await req.json();
+    if (/man|woman/.test(b.reference?.description ?? "")) return json({ error: { code: "forbidden", message: "Senseplane doesn't follow people", request_id: "r", details: { person: true } } }, 403);
+    return json({ id: "fol_1", status: "queued", reference: b.reference, sources: b.sources ?? ["src_cam"], from: b.from, to: b.to, make_story: b.make_story, frames_examined: 0, model_calls: 0, created_at: "2026-10-16T01:00:00Z" }, 202);
+  }
+  if (p === "/follows/fol_1") return json({ id: "fol_1", status: "done", reference: { event_id: "evt_1" }, sources: ["src_cam"], from: "2026-10-16T00:00:00Z", to: "2026-10-16T01:00:00Z",
+    make_story: true, story_id: "sty_1", frames_examined: 40, model_calls: 1, created_at: "2026-10-16T01:00:00Z",
+    result: { route: [{ source_id: "src_cam", source_name: "Front door", from: "2026-10-16T00:30:00Z", to: "2026-10-16T00:31:00Z", sightings: 5, confidence: 0.9, playback_url: "http://api/playback/r/index.m3u8" }],
+      handovers: [], gaps: [{ from: "2026-10-16T00:31:00Z", to: "2026-10-16T00:40:00Z", note: "not seen" }] } });
   if (p === "/activity/query" && req.method === "POST") {
     const b = await req.json();
     return json({ measure: b.measure, value: 2, unit: "count", window: { from: "2026-10-15T23:00:00Z", to: "2026-10-16T01:00:00Z", time_zone: "Europe/London" }, matched: 2,
@@ -107,6 +125,8 @@ const ARGS: Record<string, Record<string, unknown>> = {
   measure: { measure: "count", what: { watch_id: "wat_1" }, period: "today" },
   check_history: { instruction: "a person taking pills", sources: ["Front door"] },
   replay: { source: "src_cam", from: "2026-10-16T00:29:00Z", to: "2026-10-16T00:31:00Z", save: true },
+  make_story: { moments: [{ event: "evt_1" }, { source: "Front door", from: "2026-10-16T00:40:00Z", to: "2026-10-16T00:41:00Z" }], title: "The courier" },
+  follow_object: { event: "evt_1", box: [0.2, 0.3, 0.4, 0.6], from: "2026-10-16T00:00:00Z", to: "2026-10-16T01:00:00Z" },
   stop_watching: { watch_id: "wat_1" },
   list_devices: { room: "hall" },
   control_device: { device: "hall light", action: "turn_on" },
@@ -122,9 +142,9 @@ describe("mcp tools", () => {
     await client.connect(b);
   });
 
-  it("lists exactly the 13 tools from the spec", async () => {
+  it("lists exactly the 15 tools from the spec", async () => {
     const listed = (await client.listTools()).tools.map((t) => t.name);
-    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching", "list_devices", "control_device", "speak"]);
+    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching", "list_devices", "control_device", "speak", "make_story", "follow_object"]);
     expect(listed).toEqual(tools.map((t) => t.name));
   });
 
@@ -154,6 +174,9 @@ describe("mcp tools", () => {
     expect(body("measure")).toMatchObject({ value: 2, unit: "count", echo: { measure: "count", what: { watch_id: "wat_1" }, period: "today" } });
     expect(body("check_history")).toMatchObject({ checks_used: 3, unchecked: 1, stored: 0, matches: [{ summary: "A person takes a pill." }] });
     expect(body("replay")).toMatchObject({ url: "http://api/playback/t/index.m3u8", clip_id: "clp_1" });
+    expect(body("make_story")).toMatchObject({ story_id: "sty_1", status: "ready", url: "http://api/playback/s/index.m3u8", pieces: [{ source: "Front door" }] });
+    expect(body("follow_object")).toMatchObject({ follow_id: "fol_1", status: "done", story_id: "sty_1", route: [{ source: "Front door", url: "http://api/playback/r/index.m3u8" }],
+      gaps: [{ note: "not seen" }], frames_examined: 40 });
     expect(body("stop_watching")).toEqual({ stopped: "wat_1" });
     expect(body("list_devices").devices.map((d: { name: string }) => d.name)).toEqual(["Hall light", "Front door"]);
     expect(body("control_device")).toMatchObject({ request: "dcm_1", status: "done", message: "Hall light is on.", state: { on: true } });
@@ -263,7 +286,7 @@ describe("remote mcp with oauth", () => {
 
     const client = new Client({ name: "remote", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${refreshed.access_token}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(13);
+    expect((await client.listTools()).tools).toHaveLength(15);
     const r = (await client.callTool({ name: "list_senses", arguments: {} })) as { content: { text: string }[] };
     expect(JSON.parse(r.content[0]!.text).sources[0].id).toBe("src_cam");
     await client.close();
@@ -317,7 +340,7 @@ describe("remote mcp with oauth", () => {
   it("also accepts a Senseplane API key directly", async () => {
     const client = new Client({ name: "key", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${KEY}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(13);
+    expect((await client.listTools()).tools).toHaveLength(15);
     await client.close();
   });
 });

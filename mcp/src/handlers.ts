@@ -1,7 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The 13 tools, each a thin call into the public API through the TypeScript
+// The 15 tools, each a thin call into the public API through the TypeScript
 // SDK. Results are short JSON text for the model plus, for `look`, the image
 // itself so the agent can see it.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -27,6 +27,18 @@ const said = (m: SpeakMessage) => ({
 
 const text = (value: unknown): CallToolResult => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
 const fail = (code: string, message: string): CallToolResult => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message } }) }] });
+
+/** Polls `get` until `done` holds or `ms` pass (0.5 s at first, then up to every 3 s); returns the last answer. */
+async function until<T>(get: () => Promise<T>, done: (v: T) => boolean, ms: number): Promise<T> {
+  const end = Date.now() + ms;
+  let wait = 500;
+  for (;;) {
+    const v = await get();
+    if (done(v) || Date.now() + wait > end) return v;
+    await new Promise((r) => setTimeout(r, wait));
+    wait = Math.min(3000, wait * 2);
+  }
+}
 
 async function all<T>(it: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
@@ -246,6 +258,48 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
       const p = await client.sources.playback(src.id, range);
       const clip = a.save ? await client.clips.create({ source: src.id, ...range }) : undefined;
       return text({ source: src.id, url: p.url, expires_at: p.expires_at, gaps: p.gaps ?? [], ...(clip ? { clip_id: clip.id } : {}) });
+    },
+
+    async make_story(a) {
+      // Moments by event id or by source (name or id) and range; or a search, as what_happened does (ADR 0070).
+      const moments = [];
+      for (const m of (a.moments as Args[] | undefined) ?? []) {
+        moments.push(m.event ? { event: String(m.event) } : { source: (await resolve(m.source)).id, from: String(m.from), to: String(m.to) });
+      }
+      const ids = [];
+      for (const s of (a.sources as unknown[]) ?? []) ids.push((await resolve(s)).id);
+      const created = await client.stories.create({
+        ...(moments.length ? { moments } : {}),
+        ...(a.search ? { search: { q: String(a.search), ...(a.from ? { from: String(a.from) } : {}), ...(a.to ? { to: String(a.to) } : {}), ...(ids.length ? { sources: ids } : {}) } } : {}),
+        ...(a.title ? { title: String(a.title) } : {}), ...(a.fast ? { mode: "fast" as const } : {}),
+      });
+      const story = await until(() => client.stories.get(created.id), (s) => s.status === "ready" || s.status === "failed", 120_000);
+      return text({
+        story_id: story.id, status: story.status, ...(story.error ? { error: story.error } : {}),
+        pieces: story.pieces.map((p) => ({ source: p.source_name, from: p.from, to: p.to, ...(p.recorded_ms === 0 ? { note: "nothing recorded" } : {}) })),
+        ...(story.playback_url ? { url: story.playback_url, expires_at: story.playback_expires_at, duration_ms: story.duration_ms } : {}),
+        ...(story.status !== "ready" && story.status !== "failed" ? { note: "still rendering: get it later by its story id (GET /v1/stories/{id})" } : {}),
+      });
+    },
+
+    async follow_object(a) {
+      // Objects and pets only: the API refuses a person (ADR 0070).
+      const ids = [];
+      for (const s of (a.sources as unknown[]) ?? []) ids.push((await resolve(s)).id);
+      const created = await client.follows.create({
+        reference: { ...(a.event ? { event: String(a.event) } : {}), ...(a.box ? { box: (a.box as unknown[]).map(Number) } : {}), ...(a.description ? { description: String(a.description) } : {}) },
+        from: String(a.from), to: String(a.to), ...(ids.length ? { sources: ids } : {}), make_story: a.make_story !== false,
+      });
+      const f = await until(() => client.follows.get(created.id), (x) => ["done", "failed", "refused"].includes(x.status), 150_000);
+      const r = f.result;
+      return text({
+        follow_id: f.id, status: f.status, ...(f.error ? { error: f.error } : {}),
+        ...(r ? {
+          route: (r.route ?? []).map((v) => ({ source: v.source_name, from: v.from, to: v.to, confidence: v.confidence, ...(v.playback_url ? { url: v.playback_url } : {}) })),
+          handovers: r.handovers ?? [], gaps: r.gaps ?? [], frames_examined: f.frames_examined, model_calls: f.model_calls,
+        } : {}),
+        ...(f.story_id ? { story_id: f.story_id } : {}),
+      });
     },
 
     async stop_watching(a) {

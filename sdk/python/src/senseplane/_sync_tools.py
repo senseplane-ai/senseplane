@@ -477,6 +477,104 @@ class Toolkit:
             out["clip_id"] = clip.id
         return _text(out)
 
+    def _until(self, get: Any, done: Any, seconds: float) -> dict[str, Any]:
+        """Polls `get` until `done` holds or `seconds` pass (0.5 s at first, then up to every 3 s)."""
+        end = monotonic() + seconds
+        wait = 0.5
+        while True:
+            v = jsonable(get())
+            if done(v) or monotonic() + wait > end:
+                return dict(v)
+            time.sleep(wait)
+            wait = min(3.0, wait * 2)
+
+    def _tool_make_story(self, a: dict[str, Any]) -> ToolResult:
+        moments: list[dict[str, Any]] = []
+        for m in a.get("moments") or []:
+            if m.get("event"):
+                moments.append({"event": str(m["event"])})
+            else:
+                src = self._resolve(m.get("source"))
+                moments.append({"source": src["id"], "from": str(m.get("from")), "to": str(m.get("to"))})
+        body: dict[str, Any] = {}
+        if moments:
+            body["moments"] = moments
+        if a.get("search"):
+            search: dict[str, Any] = {"q": str(a["search"]), **{k: str(a[k]) for k in ("from", "to") if a.get(k)}}
+            ids = [(self._resolve(s))["id"] for s in a.get("sources") or []]
+            if ids:
+                search["sources"] = ids
+            body["search"] = search
+        if a.get("title"):
+            body["title"] = str(a["title"])
+        if a.get("fast"):
+            body["mode"] = "fast"
+        created = self.client.stories.create(body)
+        s = self._until(lambda: self.client.stories.get(created.id), lambda v: v["status"] in ("ready", "failed"), 120)
+        out: dict[str, Any] = {"story_id": s["id"], "status": s["status"], **_pick(s, "error")}
+        out["pieces"] = [
+            {
+                "source": p["source_name"],
+                "from": p["from"],
+                "to": p["to"],
+                **({"note": "nothing recorded"} if p.get("recorded_ms") == 0 else {}),
+            }
+            for p in s["pieces"]
+        ]
+        if s.get("playback_url"):
+            out.update(
+                {"url": s["playback_url"], "expires_at": s.get("playback_expires_at"), **_pick(s, "duration_ms")}
+            )
+        elif s["status"] not in ("ready", "failed"):
+            out["note"] = "still rendering: get it later by its story id (GET /v1/stories/{id})"
+        return _text(out)
+
+    def _tool_follow_object(self, a: dict[str, Any]) -> ToolResult:
+        ids = [(self._resolve(s))["id"] for s in a.get("sources") or []]
+        reference: dict[str, Any] = {}
+        if a.get("event"):
+            reference["event"] = str(a["event"])
+        if a.get("box"):
+            reference["box"] = [float(v) for v in a["box"]]
+        if a.get("description"):
+            reference["description"] = str(a["description"])
+        body: dict[str, Any] = {
+            "reference": reference,
+            "from": str(a.get("from")),
+            "to": str(a.get("to")),
+            "make_story": a.get("make_story") is not False,
+        }
+        if ids:
+            body["sources"] = ids
+        created = self.client.follows.create(body)
+        f = self._until(
+            lambda: self.client.follows.get(created.id), lambda v: v["status"] in ("done", "failed", "refused"), 150
+        )
+        out: dict[str, Any] = {"follow_id": f["id"], "status": f["status"], **_pick(f, "error")}
+        r = f.get("result")
+        if r:
+            out["route"] = [
+                {
+                    "source": v["source_name"],
+                    "from": v["from"],
+                    "to": v["to"],
+                    "confidence": v["confidence"],
+                    **({"url": v["playback_url"]} if v.get("playback_url") else {}),
+                }
+                for v in r.get("route") or []
+            ]
+            out.update(
+                {
+                    "handovers": r.get("handovers") or [],
+                    "gaps": r.get("gaps") or [],
+                    "frames_examined": f["frames_examined"],
+                    "model_calls": f["model_calls"],
+                }
+            )
+        if f.get("story_id"):
+            out["story_id"] = f["story_id"]
+        return _text(out)
+
     def _tool_stop_watching(self, a: dict[str, Any]) -> ToolResult:
         self.client.watches.delete(str(a.get("watch_id")))
         return _text({"stopped": str(a.get("watch_id"))})

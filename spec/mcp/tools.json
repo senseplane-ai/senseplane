@@ -1,6 +1,6 @@
 {
   "$comment": "Copyright 2026 The Senseplane Authors. SPDX-License-Identifier: Apache-2.0",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "tools": [
     {
       "name": "list_senses",
@@ -623,6 +623,128 @@
         }
       },
       "output": "The message: status (playing, played, sent, refused, offline, late, failed, interrupted), a message when it wasn't said, how long it took to say, and a link to hear the clip."
+    },
+    {
+      "name": "make_story",
+      "description": "Make one video from many moments across cameras, in time order: each piece labelled with its camera and time, long gaps shown as a short card. Give moments (events or time ranges) or a search ('the courier'). Waits for it to be ready (up to a minute or two) and returns its playback link. At most 20 pieces and 10 minutes of video; needs video on every camera in it.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "moments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "An event id (from what_happened), or a source with from and to",
+              "properties": {
+                "event": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Source id or name"
+                },
+                "from": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "to": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            },
+            "maxItems": 50
+          },
+          "search": {
+            "type": "string",
+            "description": "Find the moments by meaning instead, like what_happened"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "With search: default 24 h ago"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "With search: default now"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "With search: only these sources (ids or names)"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "fast": {
+            "type": "boolean",
+            "default": false,
+            "description": "Copy the recordings untouched (no labels or cards), quicker"
+          }
+        }
+      },
+      "output": "The story id, its status, its pieces in order and, once ready, a signed HLS playback URL."
+    },
+    {
+      "name": "follow_object",
+      "description": "Follow an object or a pet across cameras over a time range ('how did this box move through the house?'): where it was seen, in order, the handovers between cameras and the gaps where it was not seen. Point at it with a box on an event's snapshot, or describe it. Never a person: a person is refused. Looks at a limited number of frames (each vision model check is an AI check); waits up to two minutes.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The event whose snapshot shows the thing"
+          },
+          "box": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "x1, y1, x2, y2 around the thing, as fractions of the snapshot"
+          },
+          "description": {
+            "type": "string",
+            "description": "Instead of a box: 'the brown cardboard box with red tape' (needs a vision model)"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "At most 2 hours after from"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Source ids or names; default every camera you may watch"
+          },
+          "make_story": {
+            "type": "boolean",
+            "default": true,
+            "description": "Also make a story video of the route"
+          }
+        }
+      },
+      "output": "The route (camera, from, to, confidence, playback link per visit), handovers, gaps with why, and the story id."
     }
   ]
 }

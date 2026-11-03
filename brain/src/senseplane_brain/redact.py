@@ -34,8 +34,9 @@ Box = tuple[float, float, float, float]  # x1, y1, x2, y2 in frame pixels
 # that matters, a blurred patch of wall costs nothing.
 FACE_SCORE = 0.3
 FACE_NMS = 0.3
-# Faces of under 10 px (the model's floor) are found by looking at the frame
-# twice as large; above this many pixels on the long side it is not upscaled.
+# Faces near the model's floor (about 10 px) are found by looking at the frame
+# this much larger; above UPSCALE_BELOW pixels on the long side it is not upscaled.
+FACE_UPSCALE = 1.5
 UPSCALE_BELOW = 960
 # Padding around a face box, as a fraction of its size per side (hair, ears, a
 # beard, a box that is a little off), and pixelation cells across the padded box.
@@ -48,7 +49,7 @@ HEAD_MIN_ASPECT = 0.9
 # Plates: low for the same reason; a plate box grows by this much per side.
 PLATE_SCORE = 0.5
 PLATE_PAD = 0.25
-MAX_VEHICLES = 6  # vehicle crops looked at per frame
+MAX_VEHICLES = 4  # vehicle crops looked at per frame, largest first
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ class Blur:
 class FaceDetector:
     """YuNet face detection (boxes only; the landmarks it also outputs are ignored)."""
 
-    def __init__(self, score_threshold: float = FACE_SCORE, nms_threshold: float = FACE_NMS):
+    def __init__(self, score_threshold: float = FACE_SCORE, nms_threshold: float = FACE_NMS, upscale: float = FACE_UPSCALE):
         import onnxruntime as ort
 
         opts = ort.SessionOptions()
@@ -84,10 +85,11 @@ class FaceDetector:
         self.outputs = [o.name for o in self.session.get_outputs()]
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
+        self.upscale = upscale
 
     def detect(self, rgb: np.ndarray) -> list[tuple[Box, float]]:
         h, w = rgb.shape[:2]
-        scale = 2.0 if max(h, w) < UPSCALE_BELOW else 1.0
+        scale = self.upscale if max(h, w) < UPSCALE_BELOW else 1.0
         img = cv2.resize(rgb, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LINEAR) if scale != 1.0 else rgb
         ih, iw = img.shape[:2]
         # The model wants BGR 0-255 in a size divisible by its largest stride (32).
@@ -128,7 +130,7 @@ class PlateDetector:
     MIN_SIZES = ([10, 16, 24], [32, 48], [64, 96], [128, 192, 256])
     STEPS = (8, 16, 32, 64)
     VARIANCE = 0.1
-    CROP_SIDE = 640  # a vehicle crop is enlarged to this on its long side
+    CROP_SIDE = 480  # a vehicle crop is resized to this on its long side
 
     def __init__(self, score_threshold: float = PLATE_SCORE, nms_threshold: float = 0.3):
         self.net = cv2.dnn.readNet(str(models.fetch("lpd_yunet")))
@@ -172,17 +174,24 @@ class PlateDetector:
                 if boxes[k][2] < w * 0.5 and boxes[k][3] < h * 0.5]
 
     def detect(self, rgb: np.ndarray, vehicles: list[Box] | None = None) -> list[tuple[Box, float]]:
+        """Plates in the frame. With `vehicles` (the tracker's), only on those, each enlarged; plates are
+        on vehicles, and a frame with none costs nothing. Without (a stored snapshot), the whole frame."""
         h, w = rgb.shape[:2]
-        found = self._run(rgb)
-        for v in (vehicles or [])[:MAX_VEHICLES]:
-            x1, y1, x2, y2 = int(max(0, v[0])), int(max(0, v[1])), int(min(w, v[2])), int(min(h, v[3]))
-            if x2 - x1 < 16 or y2 - y1 < 16:
-                continue
-            s = self.CROP_SIDE / max(x2 - x1, y2 - y1)
-            if s <= 1.25:
-                continue  # already about full size in the frame
-            crop = cv2.resize(rgb[y1:y2, x1:x2], (int((x2 - x1) * s), int((y2 - y1) * s)), interpolation=cv2.INTER_LINEAR)
-            found += [((b[0] / s + x1, b[1] / s + y1, b[2] / s + x1, b[3] / s + y1), sc) for b, sc in self._run(crop)]
+        if vehicles is None:
+            found = self._run(rgb)
+        else:
+            found = []
+            for v in sorted(vehicles, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)[:MAX_VEHICLES]:
+                # A little beyond the vehicle's box: a plate on a bumper sits at its edge.
+                pw, ph = (v[2] - v[0]) * 0.05, (v[3] - v[1]) * 0.05
+                x1, y1, x2, y2 = int(max(0, v[0] - pw)), int(max(0, v[1] - ph)), int(min(w, v[2] + pw)), int(min(h, v[3] + ph))
+                if x2 - x1 < 16 or y2 - y1 < 16:
+                    continue
+                s = self.CROP_SIDE / max(x2 - x1, y2 - y1)
+                cw, ch = max(32, round((x2 - x1) * s)), max(32, round((y2 - y1) * s))
+                sx, sy = cw / (x2 - x1), ch / (y2 - y1)
+                crop = cv2.resize(rgb[y1:y2, x1:x2], (cw, ch), interpolation=cv2.INTER_LINEAR)
+                found += [((b[0] / sx + x1, b[1] / sy + y1, b[2] / sx + x1, b[3] / sy + y1), sc) for b, sc in self._run(crop)]
         return [((max(0.0, b[0]), max(0.0, b[1]), min(float(w), b[2]), min(float(h), b[3])), s) for b, s in found]
 
 

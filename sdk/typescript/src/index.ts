@@ -7,6 +7,7 @@ export type {
   Conversation, Message, Moment, SuggestedWatch, ConversationStreamEvent,
   LiveViewSession,
   Destination, WatchSchedule, InboxItem, WatchTestResult,
+  Workflow, WorkflowRun, WorkflowRunStep, WorkflowStep, WorkflowTrigger, WorkflowEdge,
 } from "./client.js";
 export { SenseplaneError, WebhookVerificationError } from "./errors.js";
 export { verifyWebhook, signWebhook } from "./webhooks.js";

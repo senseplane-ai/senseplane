@@ -139,6 +139,55 @@ describe("client", () => {
   });
 });
 
+describe("workflows", () => {
+  it("calls the workflow endpoints", async () => {
+    const calls: string[] = [];
+    const fakeFetch = async (req: Request) => {
+      const u = new URL(req.url);
+      calls.push(`${req.method} ${u.pathname}${u.search} ${["POST", "PATCH"].includes(req.method) ? await req.text() : ""}`.trim());
+      const body = u.pathname.endsWith("/runs") || u.pathname.endsWith("/workflows") && req.method === "GET" ? { data: [{ id: "x" }], next_cursor: null } : { id: "wfl_1" };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    };
+    const sp = new Senseplane({ apiKey: "k", baseUrl: "http://x/v1", fetch: fakeFetch as typeof fetch });
+    const def = { trigger: { type: "webhook" as const }, steps: [{ id: "pause", kind: "wait" as const, seconds: 5 }], edges: [{ from: "trigger", to: "pause" }] };
+    await sp.workflows.create({ name: "Door", sources: ["src_1"], ...def });
+    await sp.workflows.update("wfl_1", { enabled: false });
+    expect(await sp.workflows.list()).toEqual([{ id: "x" }]);
+    await sp.workflows.run("wfl_1", { door: "front" });
+    expect(await sp.workflows.runs("wfl_1", { status: "failed", limit: 5 })).toEqual([{ id: "x" }]);
+    await sp.workflows.getRun("wfr_1");
+    await sp.workflows.rotateHookSecret("wfl_1");
+    await sp.workflows.delete("wfl_1");
+    expect(calls).toEqual([
+      `POST /v1/workflows ${JSON.stringify({ name: "Door", sources: ["src_1"], ...def })}`,
+      'PATCH /v1/workflows/wfl_1 {"enabled":false}',
+      "GET /v1/workflows",
+      'POST /v1/workflows/wfl_1/run {"input":{"door":"front"}}',
+      "GET /v1/workflows/wfl_1/runs?status=failed&limit=5",
+      "GET /v1/workflow-runs/wfr_1",
+      "POST /v1/workflows/wfl_1/hook-secret",
+      "DELETE /v1/workflows/wfl_1",
+    ]);
+  });
+
+  it("signs a webhook trigger over the exact body, without the API key", async () => {
+    let seen: Request | undefined;
+    const fakeFetch = async (req: Request) => {
+      seen = req.clone();
+      return new Response(JSON.stringify({ run_id: "wfr_1", status: "queued" }), { status: 202, headers: { "content-type": "application/json" } });
+    };
+    const sp = new Senseplane({ apiKey: "sk_secret", baseUrl: "http://x/v1", fetch: fakeFetch as typeof fetch });
+    expect(await sp.workflows.trigger("wfl_1", "whsec_hook", { door: "front", n: 2 })).toEqual({ run_id: "wfr_1", status: "queued" });
+    expect(seen!.url).toBe("http://x/v1/workflow-hooks/wfl_1");
+    expect(seen!.headers.get("authorization")).toBeNull();
+    const body = await seen!.text();
+    expect(body).toBe('{"door":"front","n":2}');
+    // What the API checks: the same signature as Senseplane's own webhooks, over that body.
+    expect(verifyWebhook(body, seen!.headers.get("senseplane-signature") ?? undefined, "whsec_hook")).toEqual({ door: "front", n: 2 });
+    expect(() => verifyWebhook(body, seen!.headers.get("senseplane-signature") ?? undefined, "whsec_other")).toThrow(WebhookVerificationError);
+  });
+});
+
 describe("demo stream", () => {
   it("parses server-sent events split across chunks", async () => {
     const chunks = ['event: status\ndata: {"camera":"online"}\n\nevent: ev', 'ent\ndata: {"id":"evt_1","summary":"A person"}\n\n: keep-alive\n\nevent: ended\ndata: {"reason":"expired"}\n\n'];

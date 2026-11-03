@@ -4,7 +4,7 @@
 import createClient, { type Client } from "openapi-fetch";
 import type { components, paths } from "./generated/schema.js";
 import { SenseplaneError } from "./errors.js";
-import { verifyWebhook } from "./webhooks.js";
+import { signWebhook, verifyWebhook } from "./webhooks.js";
 import { readSse } from "./sse.js";
 
 type S = components["schemas"];
@@ -41,6 +41,12 @@ export type Destination = S["Destination"];
 export type WatchSchedule = S["WatchSchedule"];
 export type InboxItem = S["InboxItem"];
 export type WatchTestResult = S["WatchTestResult"];
+export type Workflow = S["Workflow"];
+export type WorkflowRun = S["WorkflowRun"];
+export type WorkflowRunStep = S["WorkflowRunStep"];
+export type WorkflowStep = Workflow["steps"][number];
+export type WorkflowTrigger = Workflow["trigger"];
+export type WorkflowEdge = Workflow["edges"][number];
 
 export interface SenseplaneOptions {
   apiKey: string;
@@ -205,6 +211,41 @@ export class Senseplane {
     get: (id: string) => unwrap(this.raw.GET("/follows/{id}", { params: { path: { id } } })),
     delete: (id: string) => unwrap(this.raw.DELETE("/follows/{id}", { params: { path: { id } } })),
     list: () => unwrap(this.raw.GET("/follows")).then((r) => r.data as Follow[]),
+  };
+
+  /**
+   * Workflows (ADR 0072): a trigger (an event, a schedule or a signed webhook) and steps that tell people and
+   * systems, ask the vision model, speak, save clips and stories, and wait. No step ever switches a device.
+   * Admins and up make them; runs act on the workflow's own sources with an agent's grant and privacy rules.
+   */
+  readonly workflows = {
+    /** The answer carries `hook_secret` once, for a webhook trigger. */
+    create: (body: S["WorkflowCreate"]) => unwrap(this.raw.POST("/workflows", { body })),
+    get: (id: string) => unwrap(this.raw.GET("/workflows/{id}", { params: { path: { id } } })),
+    update: (id: string, body: S["WorkflowUpdate"]) => unwrap(this.raw.PATCH("/workflows/{id}", { params: { path: { id } }, body })),
+    delete: (id: string) => unwrap(this.raw.DELETE("/workflows/{id}", { params: { path: { id } } })),
+    list: () => unwrap(this.raw.GET("/workflows")).then((r) => r.data as Workflow[]),
+    /** Starts a run by hand (a schedule or webhook trigger), with what a webhook would have sent. */
+    run: (id: string, input?: Record<string, unknown>) =>
+      unwrap(this.raw.POST("/workflows/{id}/run", { params: { path: { id } }, body: input ? { input } : {} })),
+    /** A new hook secret (shown once); the old one stops working. */
+    rotateHookSecret: (id: string) => unwrap(this.raw.POST("/workflows/{id}/hook-secret", { params: { path: { id } } })),
+    runs: (id: string, query: { limit?: number; status?: WorkflowRun["status"] } = {}) =>
+      unwrap(this.raw.GET("/workflows/{id}/runs", { params: { path: { id }, query } })).then((r) => r.data as WorkflowRun[]),
+    /** A run with each step's status, timing, output and error. */
+    getRun: (id: string) => unwrap(this.raw.GET("/workflow-runs/{id}", { params: { path: { id } } })),
+    /**
+     * Starts a workflow with a webhook trigger, signed with its hook secret, as n8n, Zapier or a script would:
+     * `Senseplane-Signature` over the exact body. Takes no API key.
+     */
+    trigger: (id: string, hookSecret: string, input: Record<string, unknown> = {}) => {
+      const body = JSON.stringify(input);
+      return unwrap(this.raw.POST("/workflow-hooks/{id}", {
+        params: { path: { id }, header: { "Senseplane-Signature": signWebhook(body, hookSecret) } },
+        // The hook takes no API key: the client's is left off.
+        body: input, bodySerializer: () => body, headers: { Authorization: null },
+      }));
+    },
   };
 
   /** Ask about what your sources saw and heard (ADR 0041). Answers cite moments as [1], [2], … */

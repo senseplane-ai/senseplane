@@ -442,7 +442,8 @@ export function Thumb({ url }: { url?: string | null }) {
 }
 
 /** Plays a signed HLS URL (native on Safari, hls.js elsewhere). */
-export function HlsVideo({ url, label }: { url: string; label: string }) {
+/** Plays a signed HLS URL; `captions` is a WebVTT track shown by default (a story's camera and time, ADR 0070). */
+export function HlsVideo({ url, label, captions }: { url: string; label: string; captions?: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -465,7 +466,9 @@ export function HlsVideo({ url, label }: { url: string; label: string }) {
   }, [url]);
   return (
     <>
-      <video ref={ref} controls muted playsInline aria-label={label} />
+      <video ref={ref} controls muted playsInline aria-label={label} {...(captions ? { crossOrigin: "anonymous" as const } : {})}>
+        {captions && <track kind="captions" src={captions} srcLang="en" label="Camera and time" default />}
+      </video>
       {error && <span className="adm-shot-tag" role="alert" style={{ left: 10, top: 10 }}>{error}</span>}
     </>
   );

@@ -13,6 +13,10 @@ const story = {
   id: "sty_01", title: "How the cat got out", mode: "labelled", status: "ready", bytes: 1000, has_audio: false, duration_ms: 20_000,
   pieces: [piece(SRC.front, "Front door", "2026-11-01T10:00:00Z"), piece(SRC.dock, "Loading dock", "2026-11-01T10:05:00Z", { gap_before_ms: 292_000 })],
   playback_url: "https://api.test/playback/t/index.m3u8", created_at: "2026-11-01T11:00:00Z",
+  captions_url: "https://api.test/playback/t/captions.vtt",
+  parts: [{ pieces: [0], duration_ms: 8000, bytes: 10, has_audio: false, download_url: "https://api.test/playback/t/part/0.mp4" },
+    { pieces: [1], duration_ms: 8000, bytes: 10, has_audio: false, download_url: "https://api.test/playback/t/part/1.mp4" }],
+  note: "The cameras in this story record differently (picture size, codec or sound), so without re-encoding it downloads as 2 MP4 parts; in the browser it plays as one.",
 };
 const follow = {
   id: "fol_01", status: "done", reference: { event_id: "evt_1", box: [0.1, 0.1, 0.3, 0.3] }, sources: [SRC.front, SRC.dock], from: "2026-11-01T09:30:00Z", to: "2026-11-01T10:30:00Z",
@@ -46,7 +50,11 @@ describe("StoriesPage", () => {
     const { props, api } = setup(routes());
     render(<StoriesPage {...props} />);
     const detail = await screen.findByRole("region", { name: "Story" });
-    expect(await within(detail).findByLabelText("Story: How the cat got out")).toBeTruthy();
+    const video = await within(detail).findByLabelText("Story: How the cat got out");
+    // Captions (camera and time) as a track, never burned in; the parts to download, and why there are two.
+    expect(video.querySelector("track")?.getAttribute("src")).toBe("https://api.test/playback/t/captions.vtt");
+    expect(within(detail).getByRole("link", { name: "Download part 2 (MP4)" }).getAttribute("href")).toBe("https://api.test/playback/t/part/1.mp4");
+    expect(within(detail).getByRole("note").textContent).toContain("2 MP4 parts");
     const pieces = within(detail).getByRole("list", { name: "Pieces" });
     expect(within(pieces).getAllByRole("listitem")).toHaveLength(2);
     expect(pieces.textContent).toContain("4:52 later");

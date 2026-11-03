@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Stories and following (ADR 0070). A story is one video from many moments
-// across cameras, in time order, each piece labelled with its camera and time.
+// across cameras, in time order, never re-encoded: each piece captioned with its camera and time.
 // Build one from events picked on the Events page (?events=…) and time
 // ranges added here, play it, and share a signed link. Following an object
 // or a pet (started from an event's snapshot) shows its route here (?follow=…).
@@ -160,13 +160,13 @@ function Builder({ p, names, initial, onMade }: { p: PageProps; names: Map<strin
         )}
         <div className="adm-row">
           <label className="adm-label"><span>Title</span><input className="adm-input" value={title} maxLength={200} placeholder="How the cat got out" onChange={(e) => setTitle(e.target.value)} /></label>
-          <label className="adm-row adm-small"><input type="checkbox" checked={fast} onChange={(e) => setFast(e.target.checked)} />Fast (no labels, recordings copied as they are)</label>
+          <label className="adm-row adm-small"><input type="checkbox" checked={fast} onChange={(e) => setFast(e.target.checked)} />Fast (no captions or downloads)</label>
           <span className="adm-grow" />
           <button type="button" className="adm-btn adm-btn-primary" disabled={!moments.length || working} onClick={() => void make()}>
             {working ? "Making…" : `Make story${moments.length ? ` of ${moments.length}` : ""}`}
           </button>
         </div>
-        <p className="adm-small adm-muted">Pieces go in time order, labelled with camera and time; a gap over a minute becomes a short card. At most 20 pieces and 10 minutes.</p>
+        <p className="adm-small adm-muted">Pieces go in time order, captioned with camera and time; a gap over a minute is said in the next caption. Nothing is re-encoded. At most 20 pieces and 10 minutes.</p>
         <ErrorNote error={error} />
       </div>
     </section>
@@ -192,13 +192,13 @@ function StoryDetail({ p, id, canDelete, onDeleted }: { p: PageProps; id: string
   return (
     <section aria-label="Story" className="adm-card adm-ev-detail">
       <div className="adm-shot">
-        {s.status === "ready" && s.playback_url ? <HlsVideo url={s.playback_url} label={`Story: ${s.title ?? s.id}`} />
+        {s.status === "ready" && s.playback_url ? <HlsVideo url={s.playback_url} label={`Story: ${s.title ?? s.id}`} {...(s.captions_url ? { captions: s.captions_url } : {})} />
           : <p className="adm-empty" role="status">{s.status === "failed" ? `This story could not be made: ${s.error ?? "it failed"}.` : "Making the video…"}</p>}
       </div>
       <div className="adm-stack" style={{ padding: 16 }}>
         <h2 style={{ fontSize: 17, fontWeight: 500 }}>{s.title ?? "Story"}</h2>
         <span className="adm-muted" style={{ fontSize: 13 }}>
-          {s.mode === "fast" ? "Fast (no labels)" : "Labelled"}{s.duration_ms ? ` · ${fmtDuration(s.duration_ms)}` : ""}{s.has_audio ? " · with sound" : ""}
+          {s.mode === "fast" ? "Fast (no captions)" : "With captions"}{s.duration_ms ? ` · ${fmtDuration(s.duration_ms)}` : ""}{s.has_audio ? " · with sound" : ""}
         </span>
         <ol aria-label="Pieces" className="adm-small" style={{ paddingLeft: 18 }}>
           {s.pieces.map((x, i) => (
@@ -210,6 +210,14 @@ function StoryDetail({ p, id, canDelete, onDeleted }: { p: PageProps; id: string
             </li>
           ))}
         </ol>
+        {s.note && <p className="adm-small adm-muted" role="note">{s.note}</p>}
+        {s.parts && s.parts.length > 0 && (
+          <div className="adm-row" aria-label="Downloads">
+            {s.parts.map((x, i) => x.download_url && (
+              <a key={i} className="adm-btn adm-btn-sm" href={x.download_url} download>{s.parts!.length > 1 ? `Download part ${i + 1} (MP4)` : "Download (MP4)"}</a>
+            ))}
+          </div>
+        )}
         {s.status === "ready" && (
           <div className="adm-row">
             <button type="button" className="adm-btn" onClick={() => void makeLink()}>Share link</button>

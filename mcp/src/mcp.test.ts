@@ -13,7 +13,7 @@ import { tools } from "./tools.js";
 
 const KEY = "sk_test_key";
 const SOURCES = [
-  { id: "src_cam", name: "Front door", location: "Door", type: "browser", senses: ["video"], status: "online", record_audio: false, retention_days: null, zones: [], privacy_masks: [], sensor_thresholds: null, created_at: "2026-10-16T00:00:00Z" },
+  { id: "src_cam", name: "Front door", location: "Door", type: "browser", senses: ["video", "speak"], speaker: true, status: "online", record_audio: false, retention_days: null, zones: [], privacy_masks: [], sensor_thresholds: null, created_at: "2026-10-16T00:00:00Z" },
   { id: "src_th", name: "Kitchen sensor", location: "Kitchen", type: "sensor", senses: ["temperature", "humidity"], status: "online", record_audio: false, retention_days: null, zones: [], privacy_masks: [], sensor_thresholds: null, created_at: "2026-10-16T00:00:00Z" },
 ];
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
@@ -85,6 +85,15 @@ const fakeApi: typeof fetch = async (input, init) => {
   if (p === "/devices/dev_porch/commands") return json({ error: { code: "device_offline", message: "Porch light's box didn't take the command", request_id: "r",
     details: { command: cmd({ id: "dcm_3", device_name: "Porch light", status: "offline", state: null, message: "Porch light's box didn't take the command" }) } } }, 503);
   if (p === "/device-commands/dcm_2") return json(cmd({ id: "dcm_2", device_name: "Front door", action: "unlock", status: "expired", state: null, message: "Nobody confirmed in time, so this wasn't done." }));
+  if (p === "/sources/src_cam/speak" && req.method === "POST") {
+    const { text } = (await req.json()) as { text: string };
+    const msg = { id: "spk_1", source_id: "src_cam", kind: "agent", text, status: "playing", message: null, duration_ms: 2400, clip_url: "http://api/media/s/speak.wav", created_at: "2026-10-16T01:00:00Z" };
+    if (/everything/.test(text)) {
+      return json({ error: { code: "message_too_long", message: "That message would take 41 seconds; the most is 30. Say less.", request_id: "r",
+        details: { message: { ...msg, id: "spk_2", status: "refused", message: "That message would take 41 seconds; the most is 30. Say less.", clip_url: null } } } }, 400);
+    }
+    return json(msg);
+  }
   return json({ error: { code: "not_found", message: p, request_id: "r" } }, 404);
 };
 
@@ -101,6 +110,7 @@ const ARGS: Record<string, Record<string, unknown>> = {
   stop_watching: { watch_id: "wat_1" },
   list_devices: { room: "hall" },
   control_device: { device: "hall light", action: "turn_on" },
+  speak: { source: "front door", text: "Hello, this is an automated assistant. Please leave the parcel by the door." },
 };
 
 describe("mcp tools", () => {
@@ -112,9 +122,9 @@ describe("mcp tools", () => {
     await client.connect(b);
   });
 
-  it("lists exactly the 12 tools from the spec", async () => {
+  it("lists exactly the 13 tools from the spec", async () => {
     const listed = (await client.listTools()).tools.map((t) => t.name);
-    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching", "list_devices", "control_device"]);
+    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching", "list_devices", "control_device", "speak"]);
     expect(listed).toEqual(tools.map((t) => t.name));
   });
 
@@ -147,6 +157,17 @@ describe("mcp tools", () => {
     expect(body("stop_watching")).toEqual({ stopped: "wat_1" });
     expect(body("list_devices").devices.map((d: { name: string }) => d.name)).toEqual(["Hall light", "Front door"]);
     expect(body("control_device")).toMatchObject({ request: "dcm_1", status: "done", message: "Hall light is on.", state: { on: true } });
+    expect(body("speak")).toMatchObject({ message_id: "spk_1", source: "src_cam", status: "playing", duration_ms: 2400, clip_url: "http://api/media/s/speak.wav" });
+    expect(body("list_senses").sources[0]).toMatchObject({ id: "src_cam", speaker: true });
+  });
+
+  it("tells agents to say they are automated, and reports a message that wasn't said", async () => {
+    const speak = (await client.listTools()).tools.find((t) => t.name === "speak")!;
+    expect(speak.description).toMatch(/automated assistant/);
+    expect(speak.description).toMatch(/30 seconds/);
+    const r = (await client.callTool({ name: "speak", arguments: { source: "src_cam", text: "everything that happened today in great detail" } })) as { isError?: boolean; content: { text: string }[] };
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ error: { code: "message_too_long" }, status: "refused", message_id: "spk_2" });
   });
 
   it("says a lock waits for a person, an offline box isn't done, and checks an earlier request", async () => {
@@ -242,7 +263,7 @@ describe("remote mcp with oauth", () => {
 
     const client = new Client({ name: "remote", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${refreshed.access_token}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(12);
+    expect((await client.listTools()).tools).toHaveLength(13);
     const r = (await client.callTool({ name: "list_senses", arguments: {} })) as { content: { text: string }[] };
     expect(JSON.parse(r.content[0]!.text).sources[0].id).toBe("src_cam");
     await client.close();
@@ -296,7 +317,7 @@ describe("remote mcp with oauth", () => {
   it("also accepts a Senseplane API key directly", async () => {
     const client = new Client({ name: "key", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${KEY}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(12);
+    expect((await client.listTools()).tools).toHaveLength(13);
     await client.close();
   });
 });

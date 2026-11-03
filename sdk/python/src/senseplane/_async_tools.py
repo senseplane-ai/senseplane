@@ -63,6 +63,22 @@ def _number(v: Any) -> float | None:
     return None if math.isnan(n) else n
 
 
+def _said(m: Mapping[str, Any]) -> dict[str, Any]:
+    """What an agent needs to know about a message it said through a camera (ADR 0069), as the MCP server words it."""
+    out: dict[str, Any] = {"message_id": m.get("id"), "source": m.get("source_id"), "status": m.get("status")}
+    if m.get("message"):
+        out["message"] = m["message"]
+    if m.get("duration_ms"):
+        out["duration_ms"] = m["duration_ms"]
+    if m.get("clip_url"):
+        out["clip_url"] = m["clip_url"]
+    if m.get("status") == "playing":
+        out["note"] = "It is playing on the camera now, after a short chime."
+    if m.get("status") == "sent":
+        out["note"] = "The camera's box has it; it hasn't said it has played it yet."
+    return out
+
+
 def _request(c: Mapping[str, Any]) -> dict[str, Any]:
     """A device request as the MCP server words it."""
     out = {
@@ -183,7 +199,29 @@ class AsyncToolkit:
 
     async def _tool_list_senses(self, a: dict[str, Any]) -> ToolResult:
         keys = ("id", "name", "location", "type", "senses", "status")
-        return _text({"sources": [_pick(s, *keys) for s in await self._sources()]})
+        out = []
+        for s in await self._sources():
+            row = _pick(s, *keys)
+            if s.get("speaker"):
+                row["speaker"] = True
+            out.append(row)
+        return _text({"sources": out})
+
+    async def _tool_speak(self, a: dict[str, Any]) -> ToolResult:
+        src = await self._resolve(a.get("source"))
+        words = str(a.get("text") or "").strip()
+        if not words:
+            return _fail("validation_failed", "give the text to say")
+        try:
+            m = jsonable(await self.client.sources.speak(src["id"], words))
+        except SenseplaneError as err:
+            # Refused, offline and too long carry the recorded message.
+            msg = (err.details or {}).get("message")
+            if isinstance(msg, Mapping):
+                body = {"error": {"code": err.code, "message": err.message}, **_said(msg)}
+                return ToolResult([{"type": "text", "text": json.dumps(body, indent=2, default=str)}], True)
+            raise
+        return _text(_said(m))
 
     async def _tool_look(self, a: dict[str, Any]) -> ToolResult:
         src = await self._resolve(a.get("source"))

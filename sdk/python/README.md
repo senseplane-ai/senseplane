@@ -107,13 +107,14 @@ happened to one later. Boxes are `sp.bridges` (and, with a bridge token, `sp.bri
 
 ### Tools for Claude (and OpenAI, LangChain)
 
-`senseplane.tools` has the MCP server's twelve tools (`look`, `listen`,
+`senseplane.tools` has the MCP server's thirteen tools (`look`, `listen`,
 `read_environment`, `watch_for`, `what_happened`, `measure`, `check_history`,
-`replay`, `list_devices`, `control_device`, …) with the same names, descriptions
-and results, and a dispatcher that runs them. Give the agent an agent key, so it
-sees only what its grants allow; `control_device` also needs the Control
+`replay`, `list_devices`, `control_device`, `speak`, …) with the same names,
+descriptions and results, and a dispatcher that runs them. Give the agent an agent
+key, so it sees only what its grants allow; `control_device` also needs the Control
 permission, and a lock, garage door, gate or alarm it asks for waits for a person
-to confirm.
+to confirm. `speak` needs the Speak permission and a camera with a speaker
+(`sp.sources.speak(id, text)` does the same from code).
 
 ```python
 import anthropic

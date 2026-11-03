@@ -1,7 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The 12 tools, each a thin call into the public API through the TypeScript
+// The 13 tools, each a thin call into the public API through the TypeScript
 // SDK. Results are short JSON text for the model plus, for `look`, the image
 // itself so the agent can see it.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -15,7 +15,15 @@ import { tools } from "./tools.js";
 import { SpanKind, SpanStatusCode, withSpan } from "@senseplane/telemetry";
 
 type Args = Record<string, unknown>;
-type Source = { id: string; name: string; location?: string; type: string; senses: string[]; status: string };
+type Source = { id: string; name: string; location?: string; type: string; senses: string[]; status: string; speaker?: boolean };
+type SpeakMessage = { id: string; source_id: string; status: string; message?: string | null; duration_ms?: number | null; clip_url?: string | null };
+/** What an agent needs to know about a message it said (ADR 0069). */
+const said = (m: SpeakMessage) => ({
+  message_id: m.id, source: m.source_id, status: m.status, ...(m.message ? { message: m.message } : {}),
+  ...(m.duration_ms ? { duration_ms: m.duration_ms } : {}), ...(m.clip_url ? { clip_url: m.clip_url } : {}),
+  ...(m.status === "playing" ? { note: "It is playing on the camera now, after a short chime." } : {}),
+  ...(m.status === "sent" ? { note: "The camera's box has it; it hasn't said it has played it yet." } : {}),
+});
 
 const text = (value: unknown): CallToolResult => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
 const fail = (code: string, message: string): CallToolResult => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message } }) }] });
@@ -102,7 +110,21 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
 
     async list_senses() {
       const list = await sources();
-      return text({ sources: list.map((s) => ({ id: s.id, name: s.name, location: s.location, type: s.type, senses: s.senses, status: s.status })) });
+      return text({ sources: list.map((s) => ({ id: s.id, name: s.name, location: s.location, type: s.type, senses: s.senses, status: s.status, ...(s.speaker ? { speaker: true } : {}) })) });
+    },
+
+    async speak(a) {
+      const src = await resolve(a.source);
+      const words = String(a.text ?? "").trim();
+      if (!words) return fail("validation_failed", "give the text to say");
+      try {
+        return text(said((await client.sources.speak(src.id, words)) as SpeakMessage));
+      } catch (err) {
+        // Refused, offline and too long carry the recorded message.
+        const m = err instanceof SenseplaneError ? (err.details?.message as SpeakMessage | undefined) : undefined;
+        if (m) return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code: (err as SenseplaneError).code, message: (err as Error).message }, ...said(m) }, null, 2) }] };
+        throw err;
+      }
     },
 
     async look(a) {

@@ -67,7 +67,7 @@ for (const file of ["openapi.yaml", "media/control-api.yaml", "media/whip.yaml"]
 }
 
 const { tools } = JSON.parse(readFileSync(join(root, "mcp/tools.json"), "utf8"));
-if (tools.length !== 12) throw new Error(`expected 12 MCP tools, found ${tools.length}`);
+if (tools.length !== 13) throw new Error(`expected 13 MCP tools, found ${tools.length}`);
 for (const t of tools) ajv.compile(t.inputSchema);
 
 // The media contract's callbacks and token vectors (spec/media, ADR 0049).

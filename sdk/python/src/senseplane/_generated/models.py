@@ -1541,6 +1541,10 @@ class BridgeConfig(BaseModel):
     """
     The plan's largest stream: a camera added from the list gets the profile that fits it
     """
+    features: list[str] | None = None
+    """
+    What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health)
+    """
 
 
 class Camera(BaseModel):
@@ -1589,6 +1593,19 @@ class Matter(BaseModel):
     nodes: Annotated[int | None, Field(ge=0)] = None
 
 
+class Mqtt(BaseModel):
+    """
+    Set by a bridge with an MQTT broker (ADR 0071), when the config lists `health_mqtt`; its sensor sources are online while Home Assistant or the broker is reachable
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    connected: bool
+    entities: Annotated[int | None, Field(ge=0)] = None
+
+
 class BridgeHealth(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -1603,6 +1620,10 @@ class BridgeHealth(BaseModel):
     matter: Matter | None = None
     """
     Set by a bridge that runs a Matter controller (ADR 0062)
+    """
+    mqtt: Mqtt | None = None
+    """
+    Set by a bridge with an MQTT broker (ADR 0071), when the config lists `health_mqtt`; its sensor sources are online while Home Assistant or the broker is reachable
     """
     cameras_found: Annotated[int | None, Field(ge=0)] = None
     """
@@ -1821,6 +1842,10 @@ class Event2(BaseModel):
     source_id: str
     watch_id: str | None = None
     occurred_at: AwareDatetime
+    age_ms: int
+    """
+    How old the event is by the server's clock
+    """
     summary: str
 
 
@@ -1834,9 +1859,13 @@ class BridgeOutputs(BaseModel):
     """
     This box; it names what it publishes, so boxes can share a broker
     """
-    cursor: str | None
+    now: AwareDatetime
     """
-    Pass as `after` next time
+    The server's time
+    """
+    cursor: str
+    """
+    Pass as `after` next time: a position in time (the newest event handed over, or now). The answer also repeats events from a few seconds before `after` (ids are minted before their event is stored); drop the ones already taken. It never reaches more than 10 minutes back.
     """
     cameras: list[Camera1]
     watches: list[Watch3]

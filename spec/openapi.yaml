@@ -747,7 +747,7 @@ paths:
         this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and
         the lists are empty. The cameras with their online state, the watches
         that alert, and the person, vehicle and animal detections and watch
-        firings after `after`, in order. On and without `after`, it answers at
+        firings of those watches after `after`, in order. On and without `after`, it answers at
         once with no events and a `cursor` at the newest event (old events are
         not replayed); otherwise it waits up to `wait` seconds (at most 25) for
         one, or for publishing to be turned on or off.
@@ -3170,6 +3170,7 @@ components:
         cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}, description: 'Empty when this deployment has no WHIP ingest'}
         sensors: {type: array, items: {type: string}, description: 'The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only'}
         max_resolution: {type: string, enum: ['720p', '1080p'], description: "The plan's largest stream: a camera added from the list gets the profile that fits it"}
+        features: {type: array, items: {type: string}, description: 'What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health)'}
     BridgeHealth:
       type: object
       additionalProperties: false
@@ -3204,6 +3205,14 @@ components:
           properties:
             connected: {type: boolean}
             nodes: {type: integer, minimum: 0}
+        mqtt:
+          type: object
+          additionalProperties: false
+          required: [connected]
+          description: 'Set by a bridge with an MQTT broker (ADR 0071), when the config lists `health_mqtt`; its sensor sources are online while Home Assistant or the broker is reachable'
+          properties:
+            connected: {type: boolean}
+            entities: {type: integer, minimum: 0}
         cameras_found: {type: integer, minimum: 0, description: 'Set by a bridge that looks for cameras (ADR 0063): how many it lists'}
     BridgeCommand:
       type: object
@@ -3310,11 +3319,12 @@ components:
         mqtt_publish: {type: boolean, description: 'Whether it publishes Senseplane''s events to its MQTT broker for Home Assistant (ADR 0071); off by default'}
     BridgeOutputs:
       type: object
-      required: [mqtt_publish, bridge_id, cursor, cameras, watches, events]
+      required: [mqtt_publish, bridge_id, now, cursor, cameras, watches, events]
       properties:
         mqtt_publish: {type: boolean}
         bridge_id: {type: string, description: 'This box; it names what it publishes, so boxes can share a broker'}
-        cursor: {type: [string, 'null'], description: Pass as `after` next time}
+        now: {type: string, format: date-time, description: The server's time}
+        cursor: {type: string, description: 'Pass as `after` next time: a position in time (the newest event handed over, or now). The answer also repeats events from a few seconds before `after` (ids are minted before their event is stored); drop the ones already taken. It never reaches more than 10 minutes back.'}
         cameras:
           type: array
           items:
@@ -3336,13 +3346,14 @@ components:
           type: array
           items:
             type: object
-            required: [id, type, source_id, occurred_at, summary]
+            required: [id, type, source_id, occurred_at, age_ms, summary]
             properties:
               id: {type: string}
               type: {type: string, enum: [detection.person, detection.vehicle, detection.animal, watch.triggered, reading.threshold]}
               source_id: {type: string}
               watch_id: {type: string}
               occurred_at: {type: string, format: date-time}
+              age_ms: {type: integer, description: How old the event is by the server's clock}
               summary: {type: string}
     ClipCreate:
       type: object

@@ -467,7 +467,7 @@ export interface paths {
         };
         /**
          * What this box may publish to its MQTT broker, long-polled
-         * @description MQTT out (ADR 0071). Only when the account turned `mqtt_publish` on for this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and the lists are empty. The cameras with their online state, the watches that alert, and the person, vehicle and animal detections and watch firings after `after`, in order. On and without `after`, it answers at once with no events and a `cursor` at the newest event (old events are not replayed); otherwise it waits up to `wait` seconds (at most 25) for one, or for publishing to be turned on or off.
+         * @description MQTT out (ADR 0071). Only when the account turned `mqtt_publish` on for this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and the lists are empty. The cameras with their online state, the watches that alert, and the person, vehicle and animal detections and watch firings of those watches after `after`, in order. On and without `after`, it answers at once with no events and a `cursor` at the newest event (old events are not replayed); otherwise it waits up to `wait` seconds (at most 25) for one, or for publishing to be turned on or off.
          */
         get: operations["takeBridgeOutputs"];
         put?: never;
@@ -2129,6 +2129,8 @@ export interface components {
              * @enum {string}
              */
             max_resolution?: "720p" | "1080p";
+            /** @description What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health) */
+            features?: string[];
         };
         BridgeHealth: {
             version?: string;
@@ -2151,6 +2153,11 @@ export interface components {
             matter?: {
                 connected: boolean;
                 nodes?: number;
+            };
+            /** @description Set by a bridge with an MQTT broker (ADR 0071), when the config lists `health_mqtt`; its sensor sources are online while Home Assistant or the broker is reachable */
+            mqtt?: {
+                connected: boolean;
+                entities?: number;
             };
             /** @description Set by a bridge that looks for cameras (ADR 0063): how many it lists */
             cameras_found?: number;
@@ -2266,8 +2273,13 @@ export interface components {
             mqtt_publish: boolean;
             /** @description This box; it names what it publishes, so boxes can share a broker */
             bridge_id: string;
-            /** @description Pass as `after` next time */
-            cursor: string | null;
+            /**
+             * Format: date-time
+             * @description The server's time
+             */
+            now: string;
+            /** @description Pass as `after` next time: a position in time (the newest event handed over, or now). The answer also repeats events from a few seconds before `after` (ids are minted before their event is stored); drop the ones already taken. It never reaches more than 10 minutes back. */
+            cursor: string;
             cameras: {
                 id: string;
                 name: string;
@@ -2286,6 +2298,8 @@ export interface components {
                 watch_id?: string;
                 /** Format: date-time */
                 occurred_at: string;
+                /** @description How old the event is by the server's clock */
+                age_ms: number;
                 summary: string;
             }[];
         };

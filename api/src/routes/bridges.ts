@@ -63,6 +63,11 @@ const healthBody = {
       type: "object", additionalProperties: false, required: ["connected"],
       properties: { connected: { type: "boolean" }, nodes: { type: "integer", minimum: 0 } },
     },
+    // Its MQTT broker (ADR 0071); a box sends it only when the config lists the `health_mqtt` feature.
+    mqtt: {
+      type: "object", additionalProperties: false, required: ["connected"],
+      properties: { connected: { type: "boolean" }, entities: { type: "integer", minimum: 0 } },
+    },
     cameras_found: { type: "integer", minimum: 0 },
     cameras: {
       type: "array", maxItems: 256,
@@ -176,6 +181,8 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         // Paused cameras are left out, so the bridge stops pulling them until they are resumed.
         cameras: deps.whip ? await Promise.all((await cameras(req)).filter((c) => c.rtsp_url && c.status !== "paused").map((c) => toCamera(req, c))) : [],
         max_resolution: deps.maxResolution ? await deps.maxResolution(accountId) : "720p",
+        // What this API takes that an older one doesn't, so a newer box sends it only here.
+        features: ["health_mqtt"],
         // The Home Assistant entities a person chose; the bridge sends nothing else (ADR 0061).
         sensors: (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridgeId)
           .where("source_id", "is not", null).where("listed", "=", true).orderBy("entity_id").execute())).map((e) => e.entity_id),
@@ -226,12 +233,15 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
-    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; cameras_found?: number } }>(
+    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; mqtt?: { connected: boolean; entities?: number }; cameras_found?: number } }>(
       "/v1/bridge/health",
       { schema: { body: healthBody } },
       async (req, reply) => {
         const { bridgeId, accountId } = req.bridge!;
         const ha = req.body.home_assistant;
+        // The box's sensors come from Home Assistant, its MQTT broker, or both: online while one is reachable.
+        const links = [ha, req.body.mqtt].filter((l): l is { connected: boolean } => !!l);
+        const linked = links.some((l) => l.connected);
         await deps.data.withAccount(accountId, async (s) => {
           const now = new Date();
           await s.db.updateTable("bridges").set({
@@ -240,13 +250,14 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
             matter_connected: req.body.matter ? req.body.matter.connected : null, matter_nodes: req.body.matter?.nodes ?? null,
             cameras_found: req.body.cameras_found ?? null,
           }).where("id", "=", bridgeId).execute();
-          if (ha) {
-            // The box's sensors are online while it reads Home Assistant; otherwise their latest values are old news.
+          if (links.length) {
+            // The box's sensors are online while it reads them; otherwise their latest values are old news.
+            const detail = ha && req.body.mqtt ? "the box can't reach Home Assistant or its MQTT broker" : ha ? "the box can't reach Home Assistant" : "the box can't reach its MQTT broker";
             await s.db.updateTable("sources").set((eb) => ({
-              bridge_state: ha.connected ? "online" : "offline", bridge_detail: ha.connected ? null : "the box can't reach Home Assistant",
-              status: eb.case().when("status", "=", "paused").then("paused").else(ha.connected ? "online" : "offline").end(),
+              bridge_state: linked ? "online" : "offline", bridge_detail: linked ? null : detail,
+              status: eb.case().when("status", "=", "paused").then("paused").else(linked ? "online" : "offline").end(),
             })).where("bridge_id", "=", bridgeId).where("type", "=", "sensor").execute();
-            if (ha.connected) await extendLink(s, accountId, bridgeId, now);
+            if (linked) await extendLink(s, accountId, bridgeId, now);
           }
           for (const c of req.body.cameras) {
             const status = statusFor(c.state);

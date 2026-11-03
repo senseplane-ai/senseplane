@@ -10,6 +10,7 @@ import type { Destination, EventsTable } from "./data/schema.js";
 import type { MediaClaims, PlaybackSigner } from "./playback.js";
 import { queueEventForChannels } from "./channels.js";
 import { deliveryKick, rememberEventTrace } from "./workers.js";
+import { kickOutputs } from "./outputs-kick.js";
 import type { ReadingOut } from "./readings.js";
 
 export type EventRow = Selectable<EventsTable>;
@@ -50,6 +51,7 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
     .executeTakeFirst();
   if (!row) return undefined;
   rememberEventTrace(row.id); // webhook deliveries continue this event's trace
+  kickOutputs(s.accountId); // a box publishing to MQTT hears of it at once (ADR 0071)
   const hooks = await s.db.selectFrom("webhooks").select(["id", "events"]).execute();
   const watch = isWatchEvent(row.type) && row.watch_id
     ? await s.db.selectFrom("watches").select("notify").where("id", "=", row.watch_id).executeTakeFirst()

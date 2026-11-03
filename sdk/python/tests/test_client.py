@@ -278,7 +278,7 @@ def test_readings_webhook_and_mqtt_publishing() -> None:
         if r.url.path.endswith("/secret"):
             return respond({"url": "http://x/v1/integration/readings", "token_prefix": "sit_abcd", "signed": True, "secret": "whsec_s"})
         if r.url.path.endswith("/outputs"):
-            return respond({"mqtt_publish": True, "bridge_id": "brg_1", "cursor": "evt_2", "cameras": [{"id": "src_1", "name": "Front door", "online": True}], "watches": [], "events": []})
+            return respond({"mqtt_publish": True, "bridge_id": "brg_1", "now": "2026-11-03T10:00:00Z", "cursor": "evt_2", "cameras": [{"id": "src_1", "name": "Front door", "online": True}], "watches": [], "events": []})
         return respond({"id": "brg_1", "name": "Home", "online": True, "created_at": "2026-11-03T10:00:00Z", "mqtt_publish": True})
 
     sp = Senseplane(api_key="sk_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler)))

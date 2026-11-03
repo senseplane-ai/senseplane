@@ -62,7 +62,8 @@ def default_headers(api_key: str | None) -> dict[str, str]:
 def jsonable(value: Any) -> Any:
     """Models (by their API names), datetimes and nested containers as plain JSON values."""
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        # warnings=False: a response built field by field (see parse) may hold raw values.
+        return value.model_dump(mode="json", by_alias=True, exclude_unset=True, warnings=False)
     if isinstance(value, datetime):
         return iso(value)
     if isinstance(value, date):

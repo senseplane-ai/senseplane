@@ -28,16 +28,30 @@ from ._errors import (
     SenseplaneError,
     WebhookVerificationError,
 )
-from ._generated.api import SENSES, KnownSense
+from ._generated.api import KNOWN_SENSES, KnownSense
 from ._sync_client import Senseplane, SenseplaneDemo
 from ._version import __version__
 from ._webhooks import sign_webhook, verify_webhook
 from .labels import LABELS, Label, LabelInfo, detection_label, is_label, label_name
+from .senses import (
+    SENSES,
+    UNIT_SYMBOLS,
+    ReadingKind,
+    SenseInfo,
+    is_sensor_sense,
+    reading_text,
+    sense_info,
+    sense_name,
+    state_word,
+    unit_symbol,
+)
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "KNOWN_SENSES",
     "LABELS",
     "SENSES",
+    "UNIT_SYMBOLS",
     "APIConnectionError",
     "AsyncSenseplane",
     "AsyncSenseplaneDemo",
@@ -52,6 +66,8 @@ __all__ = [
     "NotFoundError",
     "PermissionDeniedError",
     "RateLimitError",
+    "ReadingKind",
+    "SenseInfo",
     "Senseplane",
     "SenseplaneDemo",
     "SenseplaneError",
@@ -60,7 +76,13 @@ __all__ = [
     "__version__",
     "detection_label",
     "is_label",
+    "is_sensor_sense",
     "label_name",
+    "reading_text",
+    "sense_info",
+    "sense_name",
     "sign_webhook",
+    "state_word",
+    "unit_symbol",
     "verify_webhook",
 ]

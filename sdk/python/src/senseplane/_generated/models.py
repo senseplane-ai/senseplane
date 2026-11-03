@@ -15,7 +15,19 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
+    StringConstraints,
 )
+
+
+class AccountKeys(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    current_version: Annotated[int, Field(ge=1)]
+    rotating: bool
+    rotation_started_at: AwareDatetime | None = None
+    segments_left: Annotated[int | None, Field(ge=0)] = None
 
 
 class Sense2(RootModel[str]):
@@ -28,17 +40,23 @@ class Sense2(RootModel[str]):
         ),
     ]
     """
-    One thing measured. Open enum: clients must accept unknown values.
+    One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.
     """
 
 
-class Sense(RootModel[Literal['video', 'audio', 'temperature', 'humidity'] | Sense2]):
+class Sense(
+    RootModel[
+        Literal['video', 'audio', 'temperature', 'humidity', 'sensors', 'control']
+        | Sense2
+    ]
+):
     root: Annotated[
-        Literal['video', 'audio', 'temperature', 'humidity'] | Sense2,
+        Literal['video', 'audio', 'temperature', 'humidity', 'sensors', 'control']
+        | Sense2,
         Field(examples=['video', 'audio', 'temperature', 'humidity'], title='Sense'),
     ]
     """
-    One thing measured. Open enum: clients must accept unknown values.
+    One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.
     """
 
 
@@ -120,35 +138,13 @@ class Ingest(BaseModel):
     """
 
 
-class Temperature(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    above: float | None = None
-    below: float | None = None
-
-
-class Humidity(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    above: float | None = None
-    below: float | None = None
-
-
 class SensorThresholds(BaseModel):
-    """
-    sensor.threshold fires when a reading crosses one of these.
-    """
-
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
     )
-    temperature: Temperature | None = None
-    humidity: Humidity | None = None
+    above: float | None = None
+    below: float | None = None
 
 
 class Source(BaseModel):
@@ -192,9 +188,15 @@ class Source(BaseModel):
     """
     Fill mode: this source's own byte cap; null shares the account's cap.
     """
-    sensor_thresholds: SensorThresholds | None = None
+    sensor_thresholds: (
+        dict[
+            Annotated[str, StringConstraints(pattern=r'^[a-z][a-z0-9_]*$')],
+            SensorThresholds,
+        ]
+        | None
+    ) = None
     """
-    sensor.threshold fires when a reading crosses one of these.
+    Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses one of these.
     """
     max_resolution: Literal['720p', '1080p'] | None = None
     """
@@ -216,6 +218,14 @@ class Source(BaseModel):
     """
     rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed.
     """
+    blur_faces: bool | None = None
+    """
+    Blur faces on this camera (ADR 0068); null follows the account's blur_faces.
+    """
+    blur_plates: bool | None = None
+    """
+    Blur number plates on this camera (ADR 0068); null follows the account's blur_plates.
+    """
 
 
 class Test(BaseModel):
@@ -233,7 +243,7 @@ class Test(BaseModel):
 
 class Sensor1(BaseModel):
     """
-    A sensor: its readings, or the spans above/below a threshold
+    A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments
     """
 
     model_config = ConfigDict(
@@ -242,10 +252,18 @@ class Sensor1(BaseModel):
     )
     sense: str
     """
-    temperature or humidity
+    temperature, humidity, power, contact, motion, switch, doorbell, ... (spec/senses.json)
+    """
+    device: str | None = None
+    """
+    Only this device on the source (its id or name)
     """
     above: float | None = None
     below: float | None = None
+    state: bool | None = None
+    """
+    States: the spans with this value (contact true: while open; switch true: while on)
+    """
 
 
 class What(BaseModel):
@@ -273,7 +291,7 @@ class What(BaseModel):
     """
     sensor: Sensor1 | None = None
     """
-    A sensor: its readings, or the spans above/below a threshold
+    A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments
     """
     zone: str | None = None
     """
@@ -314,7 +332,7 @@ class Then(BaseModel):
     """
     sensor: Sensor1 | None = None
     """
-    A sensor: its readings, or the spans above/below a threshold
+    A sensor: its readings; spans above/below a threshold or in a state; events (doorbell, button) as moments
     """
     zone: str | None = None
     """
@@ -568,14 +586,33 @@ class Schedule(BaseModel):
 
 
 class Sensor(BaseModel):
+    """
+    A sensor reading (ADR 0060). Numbers: above and/or below. States: state true or false (contact true = open, switch true = on, leak true = wet; spec/senses.json). Events (doorbell, button): every one, or only those with detail. Fires once per run that holds min_duration_s.
+    """
+
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
     )
     type: Literal['sensor']
-    sense: Literal['temperature', 'humidity']
+    sense: Annotated[str, Field(pattern='^[a-z][a-z0-9_]*$')]
+    """
+    temperature, humidity, power, contact, motion, leak, smoke, switch, doorbell, ... (spec/senses.json)
+    """
+    device: Annotated[str | None, Field(max_length=200)] = None
+    """
+    Only this device on the source (its id or name), when it has several
+    """
     above: float | None = None
     below: float | None = None
+    state: bool | None = None
+    """
+    States only: the value to watch for
+    """
+    detail: Annotated[str | None, Field(max_length=64)] = None
+    """
+    Events only: just these (single, double, long, ...)
+    """
     rate_per_min: float | None = None
     min_duration_s: Annotated[float | None, Field(ge=0.0)] = 0
 
@@ -676,16 +713,6 @@ class Source2(BaseModel):
     location: str | None = None
 
 
-class Value(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    sense: Sense
-    value: float
-    unit: str
-
-
 class Media(BaseModel):
     """
     Signed URLs, 15-minute expiry.
@@ -699,112 +726,17 @@ class Media(BaseModel):
     clip_url: str | None = None
 
 
-class Event(BaseModel):
+class ReadingDevice(BaseModel):
+    """
+    The device that measured it, when a source has more than one (a Home Assistant entity, a Matter node)
+    """
+
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
     )
-    id: Annotated[str, Field(pattern='^evt_[0-9A-HJKMNP-TV-Z]{26}$')]
-    type: Literal[
-        'watch.triggered',
-        'detection.person',
-        'detection.vehicle',
-        'detection.animal',
-        'detection.airplane',
-        'detection.train',
-        'detection.boat',
-        'detection.traffic_light',
-        'detection.fire_hydrant',
-        'detection.stop_sign',
-        'detection.parking_meter',
-        'detection.bench',
-        'detection.backpack',
-        'detection.umbrella',
-        'detection.handbag',
-        'detection.tie',
-        'detection.suitcase',
-        'detection.frisbee',
-        'detection.skis',
-        'detection.snowboard',
-        'detection.ball',
-        'detection.kite',
-        'detection.baseball_bat',
-        'detection.baseball_glove',
-        'detection.skateboard',
-        'detection.surfboard',
-        'detection.tennis_racket',
-        'detection.bottle',
-        'detection.wine_glass',
-        'detection.cup',
-        'detection.fork',
-        'detection.knife',
-        'detection.spoon',
-        'detection.bowl',
-        'detection.banana',
-        'detection.apple',
-        'detection.sandwich',
-        'detection.orange',
-        'detection.broccoli',
-        'detection.carrot',
-        'detection.hot_dog',
-        'detection.pizza',
-        'detection.donut',
-        'detection.cake',
-        'detection.chair',
-        'detection.couch',
-        'detection.plant',
-        'detection.bed',
-        'detection.table',
-        'detection.toilet',
-        'detection.tv',
-        'detection.laptop',
-        'detection.computer_mouse',
-        'detection.remote',
-        'detection.keyboard',
-        'detection.phone',
-        'detection.microwave',
-        'detection.oven',
-        'detection.toaster',
-        'detection.sink',
-        'detection.refrigerator',
-        'detection.book',
-        'detection.clock',
-        'detection.vase',
-        'detection.scissors',
-        'detection.teddy_bear',
-        'detection.hair_dryer',
-        'detection.toothbrush',
-        'sound.detected',
-        'sensor.threshold',
-        'reading.threshold',
-        'source.online',
-        'source.offline',
-        'source.view_changed',
-    ]
-    watch_id: str | None = None
-    source: Source2
-    occurred_at: AwareDatetime
-    summary: str
-    labels: list[str]
-    confidence: Annotated[float | None, Field(ge=0.0, le=1.0)]
-    verified: bool | None = None
-    """
-    For watch.triggered: true when a vision model confirmed the watch, false when the watch has a check but no model ran (the event fired on its cheap trigger alone). Null for events without a model check.
-    """
-    value: Value | None
-    media: Media
-    """
-    Signed URLs, 15-minute expiry.
-    """
-    ended_at: AwareDatetime | None = None
-    """
-    When the episode ended (absent while ongoing).
-    """
-    zones: list[str] | None = None
-    """
-    Zones the subject was in.
-    """
-    feedback: Literal['relevant', 'not_relevant'] | None = None
+    id: Annotated[str, Field(max_length=200)]
+    name: Annotated[str | None, Field(max_length=200)] = None
 
 
 class Clip(BaseModel):
@@ -862,6 +794,10 @@ class Grant(BaseModel):
     Live access (look, ask, listen) only inside the window; recorded data only from inside it. Either end may be open.
     """
     created_at: AwareDatetime
+    blurred_only: bool | None = None
+    """
+    The agent sees these sources only blurred (ADR 0068): snapshots, looks and answers have faces and plates blurred whatever the camera's setting, and recordings, clips and live view are refused. A blurred-only grant on a source wins over another grant on it. Default false.
+    """
 
 
 class Webhook(BaseModel):
@@ -1050,17 +986,6 @@ class Usage(BaseModel):
     """
 
 
-class Reading(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    sense: Literal['temperature', 'humidity']
-    value: float
-    unit: Literal['celsius', 'percent']
-    measured_at: AwareDatetime | None = None
-
-
 class Error2(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -1089,6 +1014,12 @@ class Error2(BaseModel):
         'conflict',
         'feature_not_available',
         'limit_reached',
+        'not_controllable',
+        'confirmation_required',
+        'confirmation_expired',
+        'confirmation_denied',
+        'device_offline',
+        'device_failed',
     ]
     message: str
     request_id: str
@@ -1201,6 +1132,14 @@ class Account(BaseModel):
     """
     Display name of the account's plan, if the deployment has plans
     """
+    blur_faces: bool | None = None
+    """
+    Privacy blurring (ADR 0068): faces are pixelated in snapshots, look and ask results and every frame sent to a model, on every camera that does not set its own. Off by default. Recordings are kept as recorded.
+    """
+    blur_plates: bool | None = None
+    """
+    As blur_faces, for number plates (a best effort: the plate model was trained on Chinese plates, ADR 0068).
+    """
 
 
 class Delivery(BaseModel):
@@ -1285,6 +1224,18 @@ class AccountUpdate(BaseModel):
     """
     Fill mode byte cap; null uses the deployment's storage cap
     """
+    blur_faces: bool | None = None
+    """
+    Blur faces in snapshots and model inputs on cameras that do not set their own (ADR 0068)
+    """
+    blur_plates: bool | None = None
+    """
+    Blur number plates likewise (a best effort, ADR 0068)
+    """
+
+
+class Sense3(RootModel[str]):
+    root: Annotated[str, Field(pattern='^[a-z][a-z0-9_]*$')]
 
 
 class SourceCreate(BaseModel):
@@ -1306,11 +1257,9 @@ class SourceCreate(BaseModel):
     """
     Ignored for rtsp and sensor sources (bridge cameras are video only)
     """
-    senses: Annotated[
-        list[Literal['temperature', 'humidity']] | None, Field(min_length=1)
-    ] = None
+    senses: Annotated[list[Sense3] | None, Field(min_length=1)] = None
     """
-    Sensor sources only; default both.
+    Sensor sources only; default temperature and humidity. A sensor source also gains each new sense its readings bring (spec/senses.json lists the known ones).
     """
     rtsp_url: Annotated[str | None, Field(max_length=2048, pattern='^rtsps?://')] = None
     """
@@ -1320,15 +1269,6 @@ class SourceCreate(BaseModel):
     """
     rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued)
     """
-
-
-class SensorThresholds1(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    temperature: Temperature | None = None
-    humidity: Humidity | None = None
 
 
 class Zone1(BaseModel):
@@ -1349,7 +1289,16 @@ class SourceUpdate(BaseModel):
     location: Annotated[str | None, Field(max_length=120)] = None
     site: Annotated[str | None, Field(max_length=120)] = None
     record_audio: bool | None = None
-    sensor_thresholds: SensorThresholds1 | None = None
+    sensor_thresholds: (
+        dict[
+            Annotated[str, StringConstraints(pattern=r'^[a-z][a-z0-9_]*$')],
+            SensorThresholds,
+        ]
+        | None
+    ) = None
+    """
+    Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses above or below
+    """
     retention_days: Annotated[int | None, Field(ge=1)] = None
     """
     Raw retention override in days; null uses the account value.
@@ -1364,6 +1313,14 @@ class SourceUpdate(BaseModel):
     """
     zones: list[Zone1] | None = None
     privacy_masks: list[list[list[float]]] | None = None
+    blur_faces: bool | None = None
+    """
+    Blur faces on this camera (ADR 0068); null follows the account
+    """
+    blur_plates: bool | None = None
+    """
+    Blur number plates on this camera (ADR 0068); null follows the account
+    """
 
 
 class AskRequest(BaseModel):
@@ -1438,13 +1395,23 @@ class TimelineResponse(BaseModel):
 
 
 class ReadingInput(BaseModel):
+    """
+    One reading (ADR 0060). A number needs `value` and `unit` (a known sense in its unit: temperature in celsius, power in watt, ...; spec/senses.json); a state needs `value` true or false (contact true = open, switch true = on, ...); an event needs neither (doorbell, button, with an optional `detail`). `kind` may be left out for known senses and is otherwise taken from `value`.
+    """
+
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
     )
-    sense: Literal['temperature', 'humidity']
-    value: float
-    unit: Literal['celsius', 'percent']
+    sense: Annotated[str, Field(max_length=40, pattern='^[a-z][a-z0-9_]*$')]
+    kind: Literal['number', 'state', 'event'] | None = None
+    value: float | bool | None = None
+    unit: Annotated[str | None, Field(pattern='^[a-z0-9_]{1,32}$')] = None
+    detail: Annotated[str | None, Field(max_length=64)] = None
+    """
+    event only: single, double, long, ...
+    """
+    device: ReadingDevice | None = None
     measured_at: AwareDatetime | None = None
     """
     Defaults to now
@@ -1486,6 +1453,17 @@ class BridgeConfig(BaseModel):
     heartbeat_seconds: int
     poll_seconds: int
     cameras: list[BridgeCamera]
+    """
+    Empty when this deployment has no WHIP ingest
+    """
+    sensors: list[str] | None = None
+    """
+    The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only
+    """
+    max_resolution: Literal['720p', '1080p'] | None = None
+    """
+    The plan's largest stream: a camera added from the list gets the profile that fits it
+    """
 
 
 class Camera(BaseModel):
@@ -1501,6 +1479,39 @@ class Camera(BaseModel):
     """
 
 
+class HomeAssistant(BaseModel):
+    """
+    Set by a bridge that reads Home Assistant (ADR 0061)
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    connected: bool
+    entities: Annotated[int | None, Field(ge=0)] = None
+    """
+    How many entities it can send
+    """
+    sending: Annotated[int | None, Field(ge=0)] = None
+    """
+    How many a person chose
+    """
+
+
+class Matter(BaseModel):
+    """
+    Set by a bridge that runs a Matter controller (ADR 0062)
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    connected: bool
+    nodes: Annotated[int | None, Field(ge=0)] = None
+
+
 class BridgeHealth(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -1508,6 +1519,187 @@ class BridgeHealth(BaseModel):
     )
     version: Annotated[str | None, Field(max_length=64)] = None
     cameras: Annotated[list[Camera], Field(max_length=256)]
+    home_assistant: HomeAssistant | None = None
+    """
+    Set by a bridge that reads Home Assistant (ADR 0061)
+    """
+    matter: Matter | None = None
+    """
+    Set by a bridge that runs a Matter controller (ADR 0062)
+    """
+    cameras_found: Annotated[int | None, Field(ge=0)] = None
+    """
+    Set by a bridge that looks for cameras (ADR 0063): how many it lists
+    """
+
+
+class BridgeCommand(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    kind: str
+    """
+    matter_commission, onvif_add_camera, onvif_search or device_control
+    """
+    status: Literal['pending', 'taken', 'done', 'failed', 'expired']
+    """
+    `expired`: not taken in time, so never handed out (device commands)
+    """
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    created_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+
+
+class HomeAssistant1(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    entity_id: Annotated[str, Field(max_length=200, pattern='^camera\\.[a-z0-9_]+$')]
+    name: Annotated[str, Field(max_length=200)]
+    area: Annotated[str | None, Field(max_length=120)] = None
+    """
+    The room in Home Assistant
+    """
+
+
+class BridgeCameraFoundListed(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(max_length=200, min_length=1)]
+    """
+    Its ONVIF endpoint (urn:uuid:…), or the Home Assistant entity for a camera without ONVIF
+    """
+    address: Annotated[str | None, Field(max_length=255)] = None
+    """
+    Its IP address on the home network
+    """
+    xaddr: Annotated[str | None, Field(max_length=512, pattern='^https?://')] = None
+    """
+    Its ONVIF device service
+    """
+    manufacturer: Annotated[str | None, Field(max_length=120)] = None
+    model: Annotated[str | None, Field(max_length=120)] = None
+    name: Annotated[str | None, Field(max_length=120)] = None
+    """
+    The name in its ONVIF scopes
+    """
+    onvif: bool
+    """
+    Found with ONVIF; only these can be added from the list
+    """
+    home_assistant: HomeAssistant1 | None = None
+
+
+class HomeAssistant2(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    entity_id: str | None = None
+    name: str | None = None
+    area: str | None = None
+
+
+class BridgeCameraFound(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    address: str | None = None
+    manufacturer: str | None = None
+    model: str | None = None
+    name: str | None = None
+    onvif: bool
+    home_assistant: HomeAssistant2 | None = None
+    source_id: str | None = None
+    """
+    The box's camera at this address
+    """
+    seen_at: AwareDatetime
+
+
+class BridgeEntity(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    entity_id: str
+    name: str
+    area: str | None = None
+    device_class: str | None = None
+    sense: str
+    kind: Literal['number', 'state', 'event']
+    chosen: bool
+    """
+    A person chose it; its readings are sent
+    """
+    source_id: str | None = None
+    """
+    The sensor source of its room, once chosen
+    """
+    listed: bool
+    """
+    False when Home Assistant no longer has it
+    """
+
+
+class HomeAssistant3(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    connected: bool | None = None
+    entities: int | None = None
+    sending: int | None = None
+
+
+class Matter1(BaseModel):
+    """
+    Its Matter controller (ADR 0062); null when it runs none
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    connected: bool | None = None
+    nodes: int | None = None
+
+
+class Bridge(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    name: str
+    version: str | None = None
+    created_at: AwareDatetime
+    last_seen_at: AwareDatetime | None = None
+    online: bool
+    """
+    Reported within the last three heartbeats
+    """
+    home_assistant: HomeAssistant3 | None = None
+    token: str | None = None
+    """
+    Only when created with POST /bridges: the bridge token, shown once
+    """
+    matter: Matter1 | None = None
+    """
+    Its Matter controller (ADR 0062); null when it runs none
+    """
+    cameras_found: int | None = None
+    """
+    How many cameras it lists to pick from (ADR 0063); null when it doesn't look
+    """
 
 
 class ClipCreate(BaseModel):
@@ -1566,7 +1758,192 @@ class AuditEntry(BaseModel):
     """
     action: str
     target: str
+    details: dict[str, Any] | None = None
+    """
+    What happened, for entries that say more: a device command has its device, action, value, who asked (`by`), through what (`via`), the outcome and `state_after`
+    """
     occurred_at: AwareDatetime
+
+
+class DeviceAction(
+    RootModel[
+        Literal[
+            'turn_on',
+            'turn_off',
+            'set_brightness',
+            'open',
+            'close',
+            'set_position',
+            'set_temperature',
+            'set_mode',
+            'lock',
+            'unlock',
+            'arm_away',
+            'arm_home',
+            'disarm',
+        ]
+    ]
+):
+    root: Literal[
+        'turn_on',
+        'turn_off',
+        'set_brightness',
+        'open',
+        'close',
+        'set_position',
+        'set_temperature',
+        'set_mode',
+        'lock',
+        'unlock',
+        'arm_away',
+        'arm_home',
+        'disarm',
+    ]
+
+
+class DeviceState(BaseModel):
+    """
+    A device's state as its box read it back, or as its latest reading says; every field is optional.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    available: bool | None = None
+    on: bool | None = None
+    brightness: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
+    open: bool | None = None
+    position: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
+    """
+    Percent open
+    """
+    moving: str | None = None
+    """
+    opening or closing
+    """
+    target_temperature: float | None = None
+    """
+    °C
+    """
+    mode: str | None = None
+    locked: bool | None = None
+    alarm: str | None = None
+    """
+    disarmed, armed_away, armed_home, armed_night, triggered, arming, pending (or armed/disarmed from a reading)
+    """
+    at: AwareDatetime | None = None
+
+
+class Device(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    entity_id: str
+    """
+    Home Assistant entity (light.hall) or Matter entity (matter.n4_e1_switch)
+    """
+    name: str
+    room: str | None
+    bridge_id: str
+    source_id: str
+    """
+    The sensor source its state readings go to; a control grant on it lets an agent switch it
+    """
+    type: Literal[
+        'light',
+        'switch',
+        'fan',
+        'siren',
+        'cover',
+        'garage_door',
+        'gate',
+        'climate',
+        'lock',
+        'alarm',
+    ]
+    tier: Literal['switch', 'secure']
+    """
+    `secure`: an agent's request waits for a person, a person confirms their own
+    """
+    controllable: bool
+    """
+    An admin made it controllable; off by default
+    """
+    actions: list[DeviceAction]
+    state: DeviceState | None
+    online: bool
+    """
+    Its box is reporting and can reach Home Assistant or its Matter controller
+    """
+    can_control: bool
+    """
+    The caller may switch it now
+    """
+    warning: str
+    """
+    What to tell a person before they make it controllable
+    """
+
+
+class RequestedBy(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    kind: Literal['user', 'account_key', 'agent']
+    id: str
+    name: str | None
+
+
+class DeviceCommand(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    device_id: str
+    device_name: str
+    entity_id: str
+    action: DeviceAction
+    value: float | str | None
+    status: Literal[
+        'awaiting_confirmation',
+        'denied',
+        'expired',
+        'refused',
+        'sent',
+        'done',
+        'in_progress',
+        'unchanged',
+        'offline',
+        'failed',
+    ]
+    """
+    `done`: the state read back shows it; `in_progress`: it changed but hasn't got there yet (a door opening); `unchanged`: sent, but the state didn't change; `sent`: the box took it and hasn't reported yet; `offline`: the box didn't take it within 10 s and never will
+    """
+    message: str
+    """
+    What happened, in words: "Hall light is on."
+    """
+    state: DeviceState | None
+    """
+    The state after
+    """
+    requested_by: RequestedBy
+    via: Literal['console', 'app', 'telegram', 'agent', 'api']
+    expires_at: AwareDatetime | None
+    """
+    When a request waiting for a person is refused
+    """
+    decided_by: str | None
+    """
+    The person who confirmed or refused it
+    """
+    created_at: AwareDatetime
+    finished_at: AwareDatetime | None
 
 
 class ExportResponse(BaseModel):
@@ -2353,6 +2730,268 @@ class BridgeCamerasPostRequest(BaseModel):
     name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
 
 
+class BridgeEntitiesGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[BridgeEntity]
+
+
+class BridgeCamerasFoundPutRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    cameras: Annotated[list[BridgeCameraFoundListed], Field(max_length=200)]
+
+
+class BridgeEntitiesChoosePostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    choose: Annotated[list[str] | None, Field(max_length=1000)] = None
+    drop: Annotated[list[str] | None, Field(max_length=1000)] = None
+
+
+class BridgeReadingsPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    accepted: int
+    ignored: int
+    events: list[str]
+
+
+class Datum1(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    kind: str
+    args: dict[str, Any]
+
+
+class BridgeCommandsGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Datum1]
+
+
+class BridgeCommandsIdPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    ok: bool
+    result: dict[str, Any] | None = None
+    error: Annotated[str | None, Field(max_length=500)] = None
+
+
+class BridgePairPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
+    """
+    What the person sees when approving
+    """
+
+
+class BridgePairPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    device_code: str
+    """
+    Secret; only the box has it
+    """
+    user_code: Annotated[str, Field(examples=['BCDF-GHJK'])]
+    verification_url: str
+    verification_url_complete: str
+    expires_in: int
+    """
+    Seconds
+    """
+    interval: int
+    """
+    Seconds between polls
+    """
+
+
+class BridgePairTokenPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    device_code: str
+
+
+class BridgePairTokenPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    status: Literal['waiting', 'expired', 'approved']
+    bridge_id: str | None = None
+    token: str | None = None
+    interval: int | None = None
+
+
+class BridgesGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Bridge]
+    next_cursor: str | None = None
+
+
+class BridgesPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    name: Annotated[str, Field(max_length=120, min_length=1)]
+
+
+class BridgesIdEntitiesGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[BridgeEntity]
+    next_cursor: str | None = None
+
+
+class BridgesIdEntitiesPatchRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    choose: Annotated[list[str] | None, Field(max_length=1000)] = None
+    drop: Annotated[list[str] | None, Field(max_length=1000)] = None
+
+
+class BridgesIdEntitiesPatchResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[BridgeEntity]
+    next_cursor: str | None = None
+
+
+class BridgesIdMatterPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    code: Annotated[str, Field(max_length=64, min_length=8)]
+
+
+class DevicesGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Device]
+    next_cursor: str | None = None
+
+
+class DevicesIdPatchRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    controllable: bool
+
+
+class DevicesIdCommandsPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    action: DeviceAction
+    value: float | str | None = None
+    """
+    Brightness or position 0–100, temperature in °C, or a mode (off, heat, cool, auto, heat_cool, dry, fan_only)
+    """
+    confirm: bool | None = None
+    """
+    A person confirms their own request for a secure device
+    """
+
+
+class ConfirmationsGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[DeviceCommand]
+    next_cursor: str | None = None
+
+
+class ConfirmationsIdPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    approve: bool
+
+
+class BridgesIdCamerasFoundGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[BridgeCameraFound]
+    next_cursor: str | None = None
+
+
+class BridgesIdOnvifPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    camera: Annotated[str, Field(max_length=200)]
+    """
+    The found camera's `id`
+    """
+    username: Annotated[str, Field(max_length=128, min_length=1)]
+    password: Annotated[str, Field(max_length=256)]
+    name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
+    """
+    Default: its Home Assistant name, else its model
+    """
+
+
+class BridgesPairGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    code: str
+    name: str
+    expires_at: AwareDatetime
+
+
+class BridgesPairPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    code: Annotated[str, Field(max_length=20)]
+    name: Annotated[str | None, Field(max_length=120, min_length=1)] = None
+
+
 class CaptureJoinPostRequest(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2556,6 +3195,41 @@ class Condition(BaseModel):
     """
 
 
+class Reading(BaseModel):
+    """
+    One sensor reading (ADR 0060). number: `value` in `unit`; state: `value` true or false, `state` its word (open, closed, on, off, ...); event: something happened, with an optional `detail`. Known senses and units: spec/senses.json.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    sense: Sense
+    kind: Literal['number', 'state', 'event']
+    value: float | bool | None = None
+    """
+    number: the value; state: true or false; absent for events
+    """
+    unit: str | None = None
+    """
+    number only: celsius, percent, watt, ... (spec/senses.json)
+    """
+    state: str | None = None
+    """
+    state only: what the value means for this sense (open/closed, on/off, wet/dry, ...)
+    """
+    since: AwareDatetime | None = None
+    """
+    state only, in latest readings: when it last changed to this value
+    """
+    detail: str | None = None
+    """
+    event only: e.g. single, double or long for a button
+    """
+    device: ReadingDevice | None = None
+    measured_at: AwareDatetime
+
+
 class SourceNow(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2581,6 +3255,28 @@ class ReadingsRequest(BaseModel):
         populate_by_name=True,
     )
     readings: Annotated[list[ReadingInput], Field(max_length=1000, min_length=1)]
+
+
+class BridgeEntityListed(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    entity_id: Annotated[
+        str, Field(max_length=200, pattern='^[a-z0-9_]+\\.[a-z0-9_]+$')
+    ]
+    name: Annotated[str, Field(max_length=200)]
+    area: Annotated[str | None, Field(max_length=120)] = None
+    """
+    The room in Home Assistant
+    """
+    device_class: Annotated[str | None, Field(max_length=64)] = None
+    sense: Annotated[str, Field(pattern='^[a-z][a-z0-9_]*$')]
+    kind: Literal['number', 'state', 'event']
+    controls: Annotated[list[DeviceAction] | None, Field(max_length=20)] = None
+    """
+    What the box can do to it (ADR 0067); the API offers only what the device's type allows
+    """
 
 
 class WatchCreate(BaseModel):
@@ -2631,23 +3327,6 @@ class WatchUpdate(BaseModel):
     """
 
 
-class Datum(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    event: Event
-    score: float
-
-
-class MemorySearchResponse(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    data: list[Datum]
-
-
 class GrantCreate(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2659,6 +3338,10 @@ class GrantCreate(BaseModel):
     abilities: list[Literal['watch', 'history']] | None = None
     """
     Default both (ADR 0048)
+    """
+    blurred_only: bool | None = None
+    """
+    Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068). Default false
     """
     window: Window1 | None = None
 
@@ -2683,6 +3366,10 @@ class AgentConnect(BaseModel):
     source_ids: Annotated[list[str], Field(min_length=1)]
     senses: Annotated[list[Sense], Field(min_length=1)]
     abilities: list[Literal['watch', 'history']] | None = None
+    blurred_only: bool | None = None
+    """
+    As on GrantCreate (ADR 0068). Default false
+    """
     window: Window1 | None = None
 
 
@@ -2803,18 +3490,6 @@ class ConversationStreamEvent(
     """
 
 
-class InboxItem(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    id: str
-    watch_id: str | None = None
-    created_at: AwareDatetime
-    seen_at: AwareDatetime | None
-    event: Event
-
-
 class SourcesGetResponse(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2822,6 +3497,14 @@ class SourcesGetResponse(BaseModel):
     )
     data: list[Source]
     next_cursor: str | None
+
+
+class BridgeEntitiesPutRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    entities: Annotated[list[BridgeEntityListed], Field(max_length=5000)]
 
 
 class IntegrationGetResponse(BaseModel):
@@ -2832,43 +3515,12 @@ class IntegrationGetResponse(BaseModel):
     source: Source
 
 
-class DemoSessionsIdAskPostResponse(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    answer: str
-    from_: Annotated[Literal['live', 'memory'], Field(alias='from')]
-    confidence: float | None = None
-    snapshot_url: str | None = None
-    event: Event | None = None
-
-
 class ClipsGetResponse(BaseModel):
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
     )
     data: list[Clip]
-    next_cursor: str | None
-
-
-class InboxGetResponse(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    agent_id: str
-    data: list[InboxItem]
-    next_cursor: str | None
-
-
-class EventsGetResponse(BaseModel):
-    model_config = ConfigDict(
-        extra='allow',
-        populate_by_name=True,
-    )
-    data: list[Event]
     next_cursor: str | None
 
 
@@ -2908,6 +3560,118 @@ class GrantsGetResponse(BaseModel):
     next_cursor: str | None
 
 
+class Event(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(pattern='^evt_[0-9A-HJKMNP-TV-Z]{26}$')]
+    type: Literal[
+        'watch.triggered',
+        'watch.unchecked',
+        'detection.person',
+        'detection.vehicle',
+        'detection.animal',
+        'detection.airplane',
+        'detection.train',
+        'detection.boat',
+        'detection.traffic_light',
+        'detection.fire_hydrant',
+        'detection.stop_sign',
+        'detection.parking_meter',
+        'detection.bench',
+        'detection.backpack',
+        'detection.umbrella',
+        'detection.handbag',
+        'detection.tie',
+        'detection.suitcase',
+        'detection.frisbee',
+        'detection.skis',
+        'detection.snowboard',
+        'detection.ball',
+        'detection.kite',
+        'detection.baseball_bat',
+        'detection.baseball_glove',
+        'detection.skateboard',
+        'detection.surfboard',
+        'detection.tennis_racket',
+        'detection.bottle',
+        'detection.wine_glass',
+        'detection.cup',
+        'detection.fork',
+        'detection.knife',
+        'detection.spoon',
+        'detection.bowl',
+        'detection.banana',
+        'detection.apple',
+        'detection.sandwich',
+        'detection.orange',
+        'detection.broccoli',
+        'detection.carrot',
+        'detection.hot_dog',
+        'detection.pizza',
+        'detection.donut',
+        'detection.cake',
+        'detection.chair',
+        'detection.couch',
+        'detection.plant',
+        'detection.bed',
+        'detection.table',
+        'detection.toilet',
+        'detection.tv',
+        'detection.laptop',
+        'detection.computer_mouse',
+        'detection.remote',
+        'detection.keyboard',
+        'detection.phone',
+        'detection.microwave',
+        'detection.oven',
+        'detection.toaster',
+        'detection.sink',
+        'detection.refrigerator',
+        'detection.book',
+        'detection.clock',
+        'detection.vase',
+        'detection.scissors',
+        'detection.teddy_bear',
+        'detection.hair_dryer',
+        'detection.toothbrush',
+        'sound.detected',
+        'sensor.threshold',
+        'reading.threshold',
+        'source.online',
+        'source.offline',
+        'source.view_changed',
+    ]
+    watch_id: str | None = None
+    source: Source2
+    occurred_at: AwareDatetime
+    summary: str
+    labels: list[str]
+    confidence: Annotated[float | None, Field(ge=0.0, le=1.0)]
+    verified: bool | None = None
+    """
+    For watch.triggered: true when a vision model confirmed the watch, false when the watch has a check but no model ran (the event fired on its cheap trigger alone). Null for events without a model check.
+    """
+    value: Reading | None
+    """
+    Sensor events: the reading that fired it
+    """
+    media: Media
+    """
+    Signed URLs, 15-minute expiry.
+    """
+    ended_at: AwareDatetime | None = None
+    """
+    When the episode ended (absent while ongoing).
+    """
+    zones: list[str] | None = None
+    """
+    Zones the subject was in.
+    """
+    feedback: Literal['relevant', 'not_relevant'] | None = None
+
+
 class Conversation(BaseModel):
     """
     A chat about what the sources saw and heard. An account key sees the account's conversations; an agent key sees only its own.
@@ -2928,6 +3692,66 @@ class Conversation(BaseModel):
     """
     Only on GET /v1/conversations/{id}: every message, oldest first.
     """
+
+
+class Datum(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    event: Event
+    score: float
+
+
+class MemorySearchResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Datum]
+
+
+class InboxItem(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    watch_id: str | None = None
+    created_at: AwareDatetime
+    seen_at: AwareDatetime | None
+    event: Event
+
+
+class DemoSessionsIdAskPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    answer: str
+    from_: Annotated[Literal['live', 'memory'], Field(alias='from')]
+    confidence: float | None = None
+    snapshot_url: str | None = None
+    event: Event | None = None
+
+
+class InboxGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    agent_id: str
+    data: list[InboxItem]
+    next_cursor: str | None
+
+
+class EventsGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Event]
+    next_cursor: str | None
 
 
 class ConversationsGetResponse(BaseModel):

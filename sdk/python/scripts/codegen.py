@@ -4,6 +4,7 @@
 
 - models.py: Pydantic v2 models for spec/openapi.yaml (datamodel-code-generator);
 - labels.py: the detector's labels from spec/labels.json;
+- senses.py: the known sensor senses from spec/senses.json;
 - tools.json: the MCP tool definitions from spec/mcp/tools.json.
 
 Run from sdk/python: `uv run python scripts/codegen.py` (`pnpm codegen` runs it too).
@@ -72,7 +73,18 @@ def models() -> None:
     # EmailStr would need the email-validator package.
     text = re.sub(r"^    (AnyUrl|EmailStr),\n", "", text, count=2, flags=re.M)  # from the pydantic import
     text = re.sub(r"\b(AnyUrl|EmailStr)\b", "str", text)
+    # Names datamodel-code-generator numbered: the spec's own schema keeps its name.
+    for old, new in RENAMES:
+        if not re.search(rf"^class {old}\(", text, flags=re.M):
+            raise SystemExit(f"codegen: no class {old} to rename; update RENAMES")
+        text = re.sub(rf"\b{old}\b", new, text)
+    text = text.replace("_RENAMED_", "")
     out.write_text(HEADER.format(source="openapi.yaml") + text)
+
+
+# reading.json's $defs/device (a reading's device: id and name) is generated before the Device
+# schema and takes its name.
+RENAMES = [("Device", "ReadingDevice"), ("Device1", "_RENAMED_Device")]
 
 
 def labels() -> None:
@@ -153,9 +165,47 @@ ErrorCode = {literal(codes)}
 KnownSense = {literal(senses)}
 """The senses every instance knows. Open set: sources may report others (lowercase words)."""
 
-SENSES: tuple[str, ...] = ({", ".join(json.dumps(s) for s in senses)})
+KNOWN_SENSES: tuple[str, ...] = ({", ".join(json.dumps(s) for s in senses)})
 '''
     (OUT / "api.py").write_text(HEADER.format(source="openapi.yaml and spec/schemas") + "\n" + body)
+
+
+def senses() -> None:
+    spec = json.loads((SPEC / "senses.json").read_text())
+    rows = []
+    for x in spec["senses"]:
+        extra = "".join(f", {k}={json.dumps(x[k], ensure_ascii=False)}" for k in ("unit", "on", "off") if k in x)
+        rows.append(
+            f"    SenseInfo(sense={json.dumps(x['sense'])}, kind={json.dumps(x['kind'])}, name={json.dumps(x['name'])}{extra}),"
+        )
+    units = "\n".join(f"    {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}," for k, v in spec["units"].items())
+    body = f'''from typing import Literal, NamedTuple
+
+ReadingKind = Literal["number", "state", "event"]
+
+
+class SenseInfo(NamedTuple):
+    """A known sensor sense: a number in `unit`, an on/off state (`on` is what true means) or an event."""
+
+    sense: str
+    kind: ReadingKind
+    name: str
+    unit: str | None = None
+    on: str | None = None
+    off: str | None = None
+
+
+UNIT_SYMBOLS: dict[str, str] = {{
+{units}
+}}
+"""How each unit is shown."""
+
+SENSES: tuple[SenseInfo, ...] = (
+{chr(10).join(rows)}
+)
+"""The known sensor senses (ADR 0060); readings of other senses are accepted too."""
+'''
+    (OUT / "senses.py").write_text(HEADER.format(source="senses.json") + "\n" + body)
 
 
 def tools() -> None:
@@ -198,10 +248,11 @@ def unasync(name: str) -> None:
 OUT.mkdir(parents=True, exist_ok=True)
 models()
 labels()
+senses()
 api()
 tools()
 init = OUT / "__init__.py"
-init.write_text(HEADER.format(source="openapi.yaml, labels.json and mcp/tools.json"))
+init.write_text(HEADER.format(source="openapi.yaml, labels.json, senses.json and mcp/tools.json"))
 for name in ("client", "tools"):
     if (ROOT / "src" / "senseplane" / f"_async_{name}.py").exists():
         unasync(name)

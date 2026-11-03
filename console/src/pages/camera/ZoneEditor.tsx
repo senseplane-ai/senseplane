@@ -7,6 +7,7 @@
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { type Senseplane, SenseplaneError, type Source } from "senseplane";
 import { Button, FrameGround, Input } from "../../ui";
+import { BlurSettings } from "./BlurSettings";
 
 type Pt = [number, number];
 type Zone = { name: string; polygon: Pt[] };
@@ -115,6 +116,7 @@ export function ZoneEditor({ client, source, onSaved }: { client: Senseplane; so
           </ul>
         )}
         {msg && <p role="status" className="field-hint">{msg}</p>}
+        <BlurSettings client={client} source={source} onSaved={onSaved} />
       </div>
     </div>
   );

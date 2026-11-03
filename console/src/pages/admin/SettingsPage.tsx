@@ -124,12 +124,15 @@ function Recording({ p, a, editable, onSaved }: { p: PageProps; a: AccountX; edi
   const [mode, setMode] = useState<"days" | "fill">(a.retention_mode);
   const [days, setDays] = useState(String(a.retention_days ?? 7));
   const [audio, setAudio] = useState(a.record_audio_default ?? false);
+  const [faces, setFaces] = useState(a.blur_faces ?? false);
+  const [plates, setPlates] = useState(a.blur_plates ?? false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const max = a.retention_max_days;
   const n = Number(days);
   const valid = mode === "fill" || (Number.isInteger(n) && n >= 1 && (max === null || n <= max));
-  const dirty = mode !== a.retention_mode || (mode === "days" && n !== a.retention_days) || (a.record_audio_default !== undefined && audio !== a.record_audio_default);
+  const dirty = mode !== a.retention_mode || (mode === "days" && n !== a.retention_days) || (a.record_audio_default !== undefined && audio !== a.record_audio_default)
+    || faces !== (a.blur_faces ?? false) || plates !== (a.blur_plates ?? false);
   const res = sources.list.find((s) => s.max_resolution)?.max_resolution ?? "720p";
   const save = async () => {
     setBusy(true);
@@ -139,6 +142,8 @@ function Recording({ p, a, editable, onSaved }: { p: PageProps; a: AccountX; edi
         retention_mode: mode,
         ...(mode === "days" ? { retention_days: n } : {}),
         ...(a.record_audio_default !== undefined ? { record_audio_default: audio } : {}),
+        ...(faces !== (a.blur_faces ?? false) ? { blur_faces: faces } : {}),
+        ...(plates !== (a.blur_plates ?? false) ? { blur_plates: plates } : {}),
       }));
       setMsg({ text: "Saved." });
     } catch (e) {
@@ -173,6 +178,14 @@ function Recording({ p, a, editable, onSaved }: { p: PageProps; a: AccountX; edi
           <span className="adm-col"><span style={{ fontWeight: 500 }}>Maximum resolution</span><span className="adm-small adm-muted">Streams above it are refused.</span></span>
           <span className="adm-mono adm-soft">{res}</span>
         </div>
+        <label className="adm-card adm-toggle-card">
+          <span className="adm-col"><span style={{ fontWeight: 500 }}>Blur faces</span><span className="adm-small adm-muted">In snapshots and in what AI models see. Recordings stay as filmed.</span></span>
+          <input type="checkbox" className="adm-check" checked={faces} disabled={!editable} onChange={(e) => setFaces(e.target.checked)} />
+        </label>
+        <label className="adm-card adm-toggle-card">
+          <span className="adm-col"><span style={{ fontWeight: 500 }}>Blur number plates</span><span className="adm-small adm-muted">Best effort: it misses some plates.</span></span>
+          <input type="checkbox" className="adm-check" checked={plates} disabled={!editable} onChange={(e) => setPlates(e.target.checked)} />
+        </label>
       </div>
       <div className="adm-row">
         <button type="button" className="adm-btn adm-btn-primary" disabled={!editable || !dirty || !valid || busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>

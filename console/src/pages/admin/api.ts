@@ -209,6 +209,8 @@ export interface AccountPatch {
   retention_mode?: "days" | "fill";
   retention_days?: number | null;
   record_audio_default?: boolean;
+  blur_faces?: boolean;
+  blur_plates?: boolean;
 }
 export type UsageX = Omit<Usage, "by_day"> & {
   live_view_minutes?: number;

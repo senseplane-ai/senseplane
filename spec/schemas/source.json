@@ -264,6 +264,20 @@
       ],
       "readOnly": true,
       "description": "rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed."
+    },
+    "blur_faces": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Blur faces on this camera (ADR 0068); null follows the account's blur_faces."
+    },
+    "blur_plates": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Blur number plates on this camera (ADR 0068); null follows the account's blur_plates."
     }
   }
 }

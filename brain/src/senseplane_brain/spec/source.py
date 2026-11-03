@@ -233,3 +233,15 @@ class Source(BaseModel):
             description='rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed.'
         ),
     ] = None
+    blur_faces: Annotated[
+        bool | None,
+        Field(
+            description="Blur faces on this camera (ADR 0068); null follows the account's blur_faces."
+        ),
+    ] = None
+    blur_plates: Annotated[
+        bool | None,
+        Field(
+            description="Blur number plates on this camera (ADR 0068); null follows the account's blur_plates."
+        ),
+    ] = None

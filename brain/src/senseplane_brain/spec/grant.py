@@ -48,3 +48,9 @@ class Grant(BaseModel):
         ),
     ] = None
     created_at: AwareDatetime
+    blurred_only: Annotated[
+        bool | None,
+        Field(
+            description="The agent sees these sources only blurred (ADR 0068): snapshots, looks and answers have faces and plates blurred whatever the camera's setting, and recordings, clips and live view are refused. A blurred-only grant on a source wins over another grant on it. Default false."
+        ),
+    ] = None

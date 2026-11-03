@@ -20,6 +20,9 @@ export interface AccountsTable {
   plan: ColumnType<string | null, string | null | undefined, string | null>;
   /** IANA time zone for schedules and the console (ADR 0044). */
   time_zone: ColumnType<string, string | undefined, string>;
+  /** Privacy blurring for the account's cameras (ADR 0068); off by default. */
+  blur_faces: ColumnType<boolean, boolean | undefined, boolean>;
+  blur_plates: ColumnType<boolean, boolean | undefined, boolean>;
   deleted_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   created_at: Timestamp;
 }
@@ -57,6 +60,9 @@ export interface SourcesTable {
   sensor_thresholds: ColumnType<Thresholds | null, string | null | undefined, string | null>;
   created_at: Timestamp;
   view_changed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** Privacy blurring for this camera (ADR 0068); null follows the account. */
+  blur_faces: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
+  blur_plates: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
   /** Capture-link binding (ADR 0038). */
   capture_epoch: ColumnType<number, number | undefined, number>;
   capture_device_hash: ColumnType<string | null, string | null | undefined, string | null>;
@@ -380,6 +386,8 @@ export interface GrantsTable {
   window_to: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   /** What else the agent may do on these sources: `watch` (set watches), `history` (recorded data older than two hours). ADR 0048. */
   abilities: ColumnType<string[], string[] | undefined, string[]>;
+  /** The agent sees these sources only blurred: no raw playback, clips or live view (ADR 0068). */
+  blurred_only: ColumnType<boolean, boolean | undefined, boolean>;
   created_at: Timestamp;
 }
 

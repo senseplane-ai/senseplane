@@ -1848,6 +1848,10 @@ export interface components {
             retention_mode?: "days" | "fill";
             /** @description Fill mode byte cap; null uses the deployment's storage cap */
             retention_max_bytes?: number | null;
+            /** @description Blur faces in snapshots and model inputs on cameras that do not set their own (ADR 0068) */
+            blur_faces?: boolean;
+            /** @description Blur number plates likewise (a best effort, ADR 0068) */
+            blur_plates?: boolean;
         };
         SourceCreate: {
             name: string;
@@ -1897,6 +1901,10 @@ export interface components {
                 polygon: number[][];
             }[];
             privacy_masks?: number[][][];
+            /** @description Blur faces on this camera (ADR 0068); null follows the account */
+            blur_faces?: boolean | null;
+            /** @description Blur number plates on this camera (ADR 0068); null follows the account */
+            blur_plates?: boolean | null;
         };
         SourceNow: {
             source_id: string;
@@ -2191,6 +2199,11 @@ export interface components {
             senses: components["schemas"]["sense"][];
             /** @description Default both (ADR 0048) */
             abilities?: ("watch" | "history")[];
+            /**
+             * @description Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068)
+             * @default false
+             */
+            blurred_only: boolean;
             window?: {
                 /** Format: date-time */
                 from?: string;
@@ -2757,6 +2770,10 @@ export interface components {
             readonly bridge_id?: string | null;
             /** @description rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed. */
             readonly status_detail?: string | null;
+            /** @description Blur faces on this camera (ADR 0068); null follows the account's blur_faces. */
+            blur_faces?: boolean | null;
+            /** @description Blur number plates on this camera (ADR 0068); null follows the account's blur_plates. */
+            blur_plates?: boolean | null;
         };
         /** @description The device that measured it, when a source has more than one (a Home Assistant entity, a Matter node) */
         device: {
@@ -3476,6 +3493,8 @@ export interface components {
             };
             /** Format: date-time */
             created_at: string;
+            /** @description The agent sees these sources only blurred (ADR 0068): snapshots, looks and answers have faces and plates blurred whatever the camera's setting, and recordings, clips and live view are refused. A blurred-only grant on a source wins over another grant on it. Default false. */
+            blurred_only?: boolean;
         };
         /**
          * Usage
@@ -3597,6 +3616,10 @@ export interface components {
             };
             /** @description Display name of the account's plan, if the deployment has plans */
             plan_label?: string | null;
+            /** @description Privacy blurring (ADR 0068): faces are pixelated in snapshots, look and ask results and every frame sent to a model, on every camera that does not set its own. Off by default. Recordings are kept as recorded. */
+            blur_faces?: boolean;
+            /** @description As blur_faces, for number plates (a best effort: the plate model was trained on Chinese plates, ADR 0068). */
+            blur_plates?: boolean;
         };
         /**
          * Moment

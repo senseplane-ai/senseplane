@@ -105,3 +105,15 @@ class Account(BaseModel):
             description="Display name of the account's plan, if the deployment has plans"
         ),
     ] = None
+    blur_faces: Annotated[
+        bool | None,
+        Field(
+            description='Privacy blurring (ADR 0068): faces are pixelated in snapshots, look and ask results and every frame sent to a model, on every camera that does not set its own. Off by default. Recordings are kept as recorded.'
+        ),
+    ] = None
+    blur_plates: Annotated[
+        bool | None,
+        Field(
+            description='As blur_faces, for number plates (a best effort: the plate model was trained on Chinese plates, ADR 0068).'
+        ),
+    ] = None

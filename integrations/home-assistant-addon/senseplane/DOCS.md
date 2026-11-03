@@ -53,12 +53,42 @@ Only the entities you choose, whenever their state changes:
 
 The add-on reads Home Assistant; it never switches anything.
 
+## MQTT
+
+With the Mosquitto add-on (or another broker), the add-on can publish what
+Senseplane sees back into Home Assistant, without any setup there. Turn on
+**MQTT** here, then in Senseplane open the box and turn on **Publish to
+MQTT** (both are off until you do). Home Assistant then shows, through MQTT
+discovery:
+
+- for each camera, a device with **Person**, **Vehicle** and **Animal**
+  sensors (on for a minute after one is seen) and **Online**;
+- **Senseplane watches**, with an event each time a watch fires, to start
+  automations from.
+
+The add-on finds the Mosquitto add-on by itself; set **MQTT broker**, with a
+username and password, for another one. It connects to the broker; nothing
+connects to it.
+
+Sensors that MQTT discovery announces are already in Home Assistant, so the
+add-on reads them from there. A device that only publishes to a topic, with no
+discovery, can be read as a sensor with **Plain MQTT topics**:
+`tele/plug/SENSOR=power:watt@ENERGY.Power` reads `ENERGY.Power` from the JSON
+on `tele/plug/SENSOR` as power in watts; `garage/door=contact` reads `open`,
+`closed`, `ON`, `OFF`, `true` or `false`. Units are Senseplane's: celsius,
+percent, watt, kilowatt_hour, volt, ampere, lux, ppm and the rest.
+
 ## Options
 
 | Option | |
 |---|---|
 | `server` | Your Senseplane address (required) |
 | `name` | What you see in Senseplane when you connect the box (default: Home Assistant) |
+| `mqtt` | Publish Senseplane's events to MQTT (off; also turn it on for the box in Senseplane) |
+| `mqtt_url`, `mqtt_username`, `mqtt_password` | Another broker than the Mosquitto add-on |
+| `mqtt_discovery_prefix` | Home Assistant's discovery prefix (default: homeassistant) |
+| `mqtt_sensors` | Also list the sensors MQTT discovery announces (off: Home Assistant lists them) |
+| `mqtt_topics` | Plain topics to read as sensors, `TOPIC=SENSE[:UNIT][@JSON.PATH]` |
 
 ## When something is wrong
 

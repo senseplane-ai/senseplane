@@ -25,9 +25,23 @@ ingress_port: 8099
 panel_icon: mdi:eye-outline
 panel_title: Senseplane
 watchdog: http://[HOST]:[PORT:8099]/healthz
+# MQTT in and out (ADR 0071), off until `mqtt` is on: the Mosquitto add-on is
+# found through the Supervisor unless `mqtt_url` names another broker.
+services:
+  - mqtt:want
 options:
   server: ""
   name: ""
+  mqtt: false
+  mqtt_topics: []
 schema:
   server: url
   name: str?
+  mqtt: bool
+  mqtt_url: str?
+  mqtt_username: str?
+  mqtt_password: password?
+  mqtt_discovery_prefix: str?
+  mqtt_sensors: bool?
+  mqtt_topics:
+    - str

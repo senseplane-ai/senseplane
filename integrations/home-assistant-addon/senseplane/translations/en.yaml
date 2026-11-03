@@ -5,3 +5,24 @@ configuration:
   name:
     name: Name
     description: What you see in Senseplane when you connect this box (default Home Assistant)
+  mqtt:
+    name: MQTT
+    description: Publish Senseplane's events to MQTT for Home Assistant (people, vehicles and animals seen, watch firings, cameras online), once you also turn it on for this box in Senseplane
+  mqtt_url:
+    name: MQTT broker
+    description: For example mqtt://192.168.1.10:1883; leave empty to use the Mosquitto add-on
+  mqtt_username:
+    name: MQTT username
+    description: Leave empty with the Mosquitto add-on
+  mqtt_password:
+    name: MQTT password
+    description: Leave empty with the Mosquitto add-on
+  mqtt_discovery_prefix:
+    name: Discovery prefix
+    description: Home Assistant's MQTT discovery prefix (default homeassistant)
+  mqtt_sensors:
+    name: Sensors from MQTT discovery
+    description: Also list the sensors MQTT discovery announces. Home Assistant already lists them, so this is off
+  mqtt_topics:
+    name: Plain MQTT topics
+    description: Sensors without discovery, as TOPIC=SENSE[:UNIT][@JSON.PATH], for example tele/plug/SENSOR=power:watt@ENERGY.Power

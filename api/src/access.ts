@@ -184,7 +184,7 @@ const HISTORY_ROUTES = new Set([
  * `history` clamped to the recent stretch. Everything downstream (filters,
  * ranges, media links) then applies the narrowed grants.
  */
-function grantsForRoute(route: string, grants: Grant[]): Grant[] {
+export function grantsForRoute(route: string, grants: Grant[]): Grant[] {
   if (WATCH_ROUTES.has(route)) {
     const g = grants.filter((x) => has(x, "watch"));
     if (!g.length) throw new ApiError(403, "forbidden", "this agent isn't allowed to set watches; give it the watch permission on the Agents page");

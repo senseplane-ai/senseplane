@@ -246,7 +246,14 @@ export interface LocalRun {
  */
 export async function recordingToFiles(deps: Pick<StoryDeps, "data" | "storage" | "keys">, accountId: string, sourceId: string, from: number, to: number, dir: string, name: string): Promise<LocalRun[]> {
   const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, sourceId, from, to));
-  const runs: { init: string; rows: typeof rows }[] = [];
+  return segmentsToFiles(deps, accountId, sourceId, rows, dir, name);
+}
+
+type SegmentRow = Awaited<ReturnType<typeof segmentsIn>>[number];
+
+/** Recorded segments (in time order) as local files, one per stretch without a break. */
+export async function segmentsToFiles(deps: Pick<StoryDeps, "storage" | "keys">, accountId: string, sourceId: string, rows: SegmentRow[], dir: string, name: string): Promise<LocalRun[]> {
+  const runs: { init: string; rows: SegmentRow[] }[] = [];
   for (const r of rows) {
     const last = runs.at(-1);
     const prevEnd = last ? new Date(last.rows.at(-1)!.start_at).getTime() + last.rows.at(-1)!.duration_ms : 0;

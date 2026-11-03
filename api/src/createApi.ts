@@ -54,6 +54,8 @@ import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerStoryRoutes } from "./routes/stories.js";
 import { startStoryWorker } from "./stories.js";
+import { registerFollowRoutes } from "./routes/follows.js";
+import { startFollowWorker } from "./follow.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
 import { createMediaGuard, mediaClaims } from "./media-access.js";
 import { metricsAllowed, registerRateLimits, trustProxyFromEnv } from "./rate-limit.js";
@@ -344,7 +346,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     if (!req.access) return;
     checkRoute(req);
     const route = `${req.method} ${req.routeOptions.url}`;
-    if ((route === "POST /v1/sources/:id/ask" || route === "POST /v1/watches" || route === "POST /v1/watches/test" || route === "POST /v1/conversations/:id/messages") && (await over(req.accountId!, (m) => m === "ai_checks"))) {
+    if ((route === "POST /v1/sources/:id/ask" || route === "POST /v1/watches" || route === "POST /v1/watches/test" || route === "POST /v1/conversations/:id/messages" || route === "POST /v1/follows") && (await over(req.accountId!, (m) => m === "ai_checks"))) {
       throw new ApiError(429, "allowance_exhausted", "This account has used its AI checks for now.");
     }
   });
@@ -560,6 +562,9 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     // Stories (ADR 0070): rendered by a background job, played through the same signed links.
     registerStoryRoutes(app, { data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900, keyRefs, bus, audit });
     if (options.workers !== false) stoppers.push(startStoryWorker({ data, storage, keys: keyRing, bus }, app.log));
+    // Following an object or a pet (ADR 0070): a background job reads the recordings, a brain looks.
+    registerFollowRoutes(app, { data, storage, keys: keyRing, bus, audit, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900, keyRefs });
+    if (options.workers !== false) stoppers.push(startFollowWorker({ data, storage, keys: keyRing, bus, audit }, app.log));
   }
   if (options.workers !== false) {
     // Housekeeping, each job once per interval across every API process (ADR 0058).

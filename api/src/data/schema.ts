@@ -210,6 +210,10 @@ export interface SpeakMessagesTable {
   watch_id: string | null;
   event_id: string | null;
   live_session_id: string | null;
+  /** A person's press: its talkback track on the media plane (ADR 0074). */
+  producer_id: string | null;
+  /** A press to a box's camera: how long the camera's speaker carried it, as the box reported. */
+  heard_ms: number | null;
   text: string | null;
   status: SpeakStatus;
   message: string | null;

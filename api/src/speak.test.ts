@@ -370,11 +370,11 @@ describe("talk-back", () => {
     const cmds = (await call(bridge.token, "GET", "/v1/bridge/commands")).json().data as { id: string; kind: string; args: Record<string, string> }[];
     expect(cmds).toHaveLength(1);
     const cmd = cmds[0]!;
-    expect(cmd).toMatchObject({ kind: "talk", args: { source_id: ipcam, session_id: live.session_id, whep_url: "https://media.test/whep/talkback" } });
+    expect(cmd).toMatchObject({ kind: "talk", args: { source_id: ipcam, session_id: live.session_id, producer_id: "p-ip", whep_url: "https://media.test/whep/talkback" } });
     const lc = claimsOf(cmd.args.token!);
     expect(lc).toMatchObject({
       aud: "media", room: `sp-${ipcam}`, identity: `${ipcam}:speaker`, kind: "agent", transport: "webrtc",
-      grants: { canPublish: false, canSubscribe: true, canPublishData: false, subscribeKinds: ["audio"], maxSubscriptions: 1 },
+      grants: { canPublish: false, canSubscribe: true, canPublishData: false, subscribeKinds: ["audio"], maxSubscriptions: 1, listenTo: "p-ip" },
     });
     // Exactly the join token's claim set (spec/media/signalling.json joinClaims), so the media plane takes it.
     expect(Object.keys(lc).sort()).toEqual(["aud", "exp", "grants", "iat", "identity", "iss", "jti", "kind", "room", "transport", "v"]);
@@ -391,7 +391,7 @@ describe("talk-back", () => {
 
     // The box couldn't reach the speaker: the press ends with the reason, for the person to read, and it's kept.
     expect((await call(bridge.token, "POST", `/v1/bridge/commands/${cmd.id}`, { ok: false, error: "the camera's speaker takes MPEG4-GENERIC, and the box can only send G.711 (PCMU or PCMA) to it" })).statusCode).toBe(204);
-    expect(plane.talkStopped.at(-1)).toMatchObject({ room: `sp-${ipcam}`, identity, reason: "speaker_unavailable", message: expect.stringMatching(/MPEG4-GENERIC/) });
+    expect(plane.talkStopped.at(-1)).toMatchObject({ room: `sp-${ipcam}`, identity, reason: "speaker_unavailable", producerId: "p-ip", message: expect.stringMatching(/MPEG4-GENERIC/) });
     const said = (await call(owner, "GET", `/v1/speak-messages?source=${ipcam}`)).json().data as { kind: string; status: string; message: string }[];
     expect(said.find((m) => m.kind === "person")).toMatchObject({ status: "failed", message: expect.stringMatching(/speaker couldn't be reached/) });
     const log = await audit();
@@ -418,6 +418,80 @@ describe("talk-back", () => {
     const missed = (await call(owner, "GET", `/v1/speak-messages?source=${ipcam}`)).json().data as { kind: string; status: string; message: string }[];
     expect(missed.find((m) => m.kind === "person" && m.status === "offline")).toMatchObject({ message: expect.stringMatching(/nobody heard it/) });
     await clear();
+  });
+
+  describe("presses to an IP camera, one by one (ADR 0074)", () => {
+    let identity = "";
+    const press = (event: "producer.added" | "producer.removed", producerId: string) =>
+      roomEvent(ipcam, event, { identity, producerId, kind: "audio", source: "talkback" });
+    const rows = () => api.data.withAccount(acc, (s) => s.db.selectFrom("speak_messages").select(["producer_id", "status", "heard_ms", "duration_ms", "message"])
+      .where("source_id", "=", ipcam).where("kind", "=", "person").orderBy("created_at").execute());
+    const commands = async () => (await call(bridge.token, "GET", "/v1/bridge/commands")).json().data as { id: string; kind: string; args: Record<string, string> }[];
+    beforeAll(async () => {
+      await call(bridge.token, "POST", "/v1/bridge/health", { cameras: [{ source_id: ipcam, state: "online", speaker: true, talk: true }] });
+      plane.publish(ipcam, `${ipcam}:whip`);
+      const live = (await call(member, "POST", `/v1/sources/${ipcam}/live`, { talk: true })).json();
+      identity = `${ipcam}:viewer:${live.session_id}`;
+    });
+
+    it("keeps each press to its own track: a box late for the first doesn't touch the second", async () => {
+      await clear();
+      await press("producer.added", "p-a");
+      const cmds = await commands(); // the box takes it and starts connecting
+      await press("producer.removed", "p-a"); // let go before the box connected
+      await press("producer.added", "p-b");
+      cmds.push(...(await commands()));
+      expect(cmds.map((c) => c.args.producer_id)).toEqual(["p-a", "p-b"]);
+      const stops = plane.talkStopped.length;
+      // The box found the first press gone (its token names p-a only): nobody heard it.
+      await call(bridge.token, "POST", `/v1/bridge/commands/${cmds[0]!.id}`, { ok: true, result: { talked_ms: 0, ended: "released" } });
+      // The second is heard; then it's let go.
+      await call(bridge.token, "POST", `/v1/bridge/commands/${cmds[1]!.id}`, { ok: true, result: { talked_ms: 900, ended: "released" } });
+      await press("producer.removed", "p-b");
+      expect(plane.talkStopped.length).toBe(stops);
+      expect(await rows()).toMatchObject([
+        { producer_id: "p-a", status: "late", heard_ms: 0, message: expect.stringMatching(/nobody heard it/) },
+        { producer_id: "p-b", status: "played", heard_ms: 900 },
+      ]);
+      // A box failure reported for a press already over ends nothing.
+      await press("producer.added", "p-c");
+      const c = (await commands())[0]!;
+      await press("producer.removed", "p-c");
+      await press("producer.added", "p-d");
+      await commands();
+      await call(bridge.token, "POST", `/v1/bridge/commands/${c.id}`, { ok: false, error: "camera connect: refused" });
+      expect(plane.talkStopped.length).toBe(stops);
+      await press("producer.removed", "p-d");
+    });
+
+    it("takes callbacks in any order: an end before its start leaves the press over, and sends the box nothing", async () => {
+      await clear();
+      await press("producer.removed", "p-e");
+      await press("producer.added", "p-e");
+      await press("producer.added", "p-e"); // retried
+      expect(await commands()).toEqual([]);
+      expect(await rows()).toMatchObject([{ producer_id: "p-e", status: "played" }]);
+      expect((await speak(agents.Concierge!.api_key, ipcam, "Hello?")).json().error?.code).not.toBe("speaker_busy");
+      await clear();
+    });
+
+    it("finishes a press whose end was lost: at the next press, at the cap, and when the viewer leaves", async () => {
+      await clear();
+      await press("producer.added", "p-f"); // its producer.removed never comes
+      await commands();
+      await press("producer.added", "p-g");
+      await commands();
+      expect((await rows()).map((r) => [r.producer_id, r.status])).toEqual([["p-f", "played"], ["p-g", "playing"]]);
+      // Past the 10-minute cap with no end: settled as played when the list is read.
+      await api.data.withAccount(acc, (s) => s.db.updateTable("speak_messages").set({ ends_at: new Date(Date.now() - 1000) }).where("producer_id", "=", "p-g").execute());
+      await call(owner, "GET", `/v1/speak-messages?source=${ipcam}`);
+      expect((await rows()).map((r) => r.status)).toEqual(["played", "played"]);
+      await press("producer.added", "p-h");
+      await commands();
+      await roomEvent(ipcam, "participant.left", { identity, kind: "human", sessionId: "x", reason: "socket_closed" });
+      expect((await rows()).at(-1)).toMatchObject({ producer_id: "p-h", status: "played" });
+      await clear();
+    });
   });
 
   it("ends a person's live views when they may no longer talk", async () => {

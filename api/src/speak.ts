@@ -298,10 +298,13 @@ const clipKey = (accountId: string, sourceId: string, id: string) => `speak/${ac
 export const clipPath = (signer: PlaybackSigner, accountId: string, key: string, ttl = CLIP_LINK_S) =>
   `/media/${signer.sign({ kind: "object", accountId, key }, ttl).token}/speak.wav`;
 
-/** Messages a phone stopped playing by now are played; nothing else moves on by itself. */
+/**
+ * Messages a phone stopped playing by now are played; a person's press past its cap whose end never came
+ * (a lost callback) is over too. Nothing else moves on by itself.
+ */
 export async function settleSpeech(s: AccountScope) {
   await s.db.updateTable("speak_messages").set((eb) => ({ status: "played", finished_at: eb.ref("ends_at") }))
-    .where("status", "=", "playing").where("kind", "!=", "person").where("ends_at", "<", new Date()).execute();
+    .where("status", "=", "playing").where("ends_at", "<", new Date()).execute();
 }
 
 export function createSpeech(deps: SpeakDeps) {
@@ -476,14 +479,36 @@ export function createSpeech(deps: SpeakDeps) {
   /**
    * Push-to-talk (the media plane's producer events for a viewer's `talkback` track): a person starts
    * talking, which cuts off any agent's message on that camera, or stops, which records how long.
+   * Each press is keyed on its producer: callbacks come at least once and in any order, so a retried
+   * start is a no-op, an end that came first leaves a finished press that a late start doesn't reopen
+   * (and sends nothing to a box), and a press of the same viewer still open with another producer lost
+   * its end and is finished. Without a producer (the viewer left), every open press of the session ends.
    */
-  async function personTalk(accountId: string, sourceId: string, sessionId: string, event: "start" | "end", at: Date) {
+  async function personTalk(accountId: string, sourceId: string, sessionId: string, event: "start" | "end", at: Date, producerId?: string) {
     const source = await data.withAccount(accountId, (s) => s.sources.get(sourceId));
     const name = source?.name ?? sourceId;
     if (event === "start") {
       const started = await data.withAccount(accountId, async (s) => {
-        const already = await s.db.selectFrom("speak_messages").select("id").where("live_session_id", "=", sessionId).where("status", "=", "playing").executeTakeFirst();
-        if (already) return undefined;
+        // One callback at a time per camera: a start and an end of one press racing each other.
+        await s.db.selectFrom("sources").select("id").where("id", "=", sourceId).forUpdate().executeTakeFirst();
+        if (producerId) {
+          const seen = await s.db.selectFrom("speak_messages").select(["id", "status", "finished_at", "duration_ms"]).where("source_id", "=", sourceId)
+            .where("producer_id", "=", producerId).executeTakeFirst();
+          if (seen) {
+            // Its end came first: the press is over. Record how long it was, and start nothing.
+            if (seen.status !== "playing" && seen.finished_at && seen.duration_ms == null) {
+              await s.db.updateTable("speak_messages").set({ duration_ms: Math.max(0, new Date(seen.finished_at).getTime() - at.getTime()), created_at: at })
+                .where("id", "=", seen.id).execute();
+            }
+            return undefined;
+          }
+        } else {
+          const already = await s.db.selectFrom("speak_messages").select("id").where("live_session_id", "=", sessionId).where("status", "=", "playing").executeTakeFirst();
+          if (already) return undefined;
+        }
+        // The same viewer's press still open with another producer: its end was lost.
+        const stale = producerId ? await s.db.selectFrom("speak_messages").selectAll().where("live_session_id", "=", sessionId).where("status", "=", "playing")
+          .where("producer_id", "is distinct from", producerId).execute() : [];
         const session = await s.db.selectFrom("live_sessions").select("actor").where("id", "=", sessionId).executeTakeFirst();
         const actor = session?.actor ?? "unknown";
         const user = actor.startsWith("user:")
@@ -492,24 +517,42 @@ export function createSpeech(deps: SpeakDeps) {
         const row = await s.db.insertInto("speak_messages").values({
           id: newId("spk"), account_id: accountId, source_id: sourceId, kind: "person", actor, actor_kind: actor.startsWith("user:") ? "user" : "account_key",
           actor_name: user?.name ?? user?.email ?? null, via: "live", live_session_id: sessionId, status: "playing",
-          ends_at: new Date(at.getTime() + PERSON_MAX_MS), created_at: at,
+          producer_id: producerId ?? null, ends_at: new Date(at.getTime() + PERSON_MAX_MS), created_at: at,
         }).returningAll().executeTakeFirstOrThrow();
         const cut = await s.db.selectFrom("speak_messages").selectAll().where("source_id", "=", sourceId).where("kind", "!=", "person")
           .where("status", "in", ["playing", "sent"]).where("ends_at", ">", new Date()).execute();
-        return { row, cut };
+        return { row, cut, stale };
       });
       if (!started) return;
+      for (const old of started.stale) await endPress(accountId, old, at, name);
       for (const m of started.cut) {
         await Promise.resolve(deps.media?.stopSpeak?.(sourceId, m.id)).catch(() => undefined);
         await finish(accountId, m.id, "interrupted", "A person started talking through the camera, which cut this message off.", 200, undefined, name);
       }
       await audit(accountId, started.row, 200, name);
       // A camera behind a box: the box pulls this one press from the media plane (ADR 0074).
-      if (source && source.type === "rtsp" && source.bridge_id) await sendTalkToBox(accountId, source, started.row, sessionId, at);
+      if (source && source.type === "rtsp" && source.bridge_id) await sendTalkToBox(accountId, source, started.row, sessionId, at, producerId);
       return;
     }
-    const open = await data.withAccount(accountId, (s) => s.db.selectFrom("speak_messages").selectAll().where("live_session_id", "=", sessionId).where("status", "=", "playing").executeTakeFirst());
-    if (!open) return;
+    const open = await data.withAccount(accountId, async (s) => {
+      await s.db.selectFrom("sources").select("id").where("id", "=", sourceId).forUpdate().executeTakeFirst();
+      if (!producerId) return s.db.selectFrom("speak_messages").selectAll().where("live_session_id", "=", sessionId).where("status", "=", "playing").execute();
+      const row = await s.db.selectFrom("speak_messages").selectAll().where("source_id", "=", sourceId).where("producer_id", "=", producerId).executeTakeFirst();
+      if (row) return row.status === "playing" ? [row] : [];
+      // The end came before the start: keep the press, finished, so its start (when it comes) reopens nothing.
+      const session = await s.db.selectFrom("live_sessions").select("actor").where("id", "=", sessionId).executeTakeFirst();
+      const actor = session?.actor ?? "unknown";
+      await s.db.insertInto("speak_messages").values({
+        id: newId("spk"), account_id: accountId, source_id: sourceId, kind: "person", actor, actor_kind: actor.startsWith("user:") ? "user" : "account_key",
+        via: "live", live_session_id: sessionId, producer_id: producerId, status: "played", created_at: at, finished_at: at, ends_at: null,
+      }).onConflict((oc) => oc.columns(["source_id", "producer_id"]).where("producer_id", "is not", null).doNothing()).execute();
+      return [];
+    });
+    for (const row of open) await endPress(accountId, row, at, name);
+  }
+
+  /** A press is over: how long it was, and whether anybody could have heard it. */
+  async function endPress(accountId: string, open: SpeakRow, at: Date, name: string) {
     const ms = Math.max(0, at.getTime() - new Date(open.created_at).getTime());
     if (open.bridge_command_id) {
       // A press for a box that never took it: nobody heard it, and the box won't get it later.
@@ -527,15 +570,17 @@ export function createSpeech(deps: SpeakDeps) {
    * A `talk` command for the camera's box: the media plane's WHEP URL and a listener token good for this
    * press only, taken within takeMs or never (the console then says the camera didn't answer).
    */
-  async function sendTalkToBox(accountId: string, source: Source, row: SpeakRow, sessionId: string, at: Date) {
+  async function sendTalkToBox(accountId: string, source: Source, row: SpeakRow, sessionId: string, at: Date, producerId?: string) {
     const name = source.name;
-    if (!deps.talkback) {
-      await finish(accountId, row.id, "failed", "This server can't carry push-to-talk to IP cameras (no media plane public URL).", 503, undefined, name);
-      await Promise.resolve(deps.media?.stopTalkback?.(source.id, sessionId, "speaker_unavailable", `This server can't carry push-to-talk to ${name}.`)).catch(() => undefined);
+    if (!deps.talkback || !producerId) {
+      const why = producerId ? "This server can't carry push-to-talk to IP cameras (no media plane public URL)." : "The media plane didn't say which track the press is.";
+      await finish(accountId, row.id, "failed", why, 503, undefined, name);
+      await Promise.resolve(deps.media?.stopTalkback?.(source.id, sessionId, "speaker_unavailable", `This server can't carry push-to-talk to ${name}.`, producerId)).catch(() => undefined);
       return;
     }
     const until = new Date(at.getTime() + PERSON_MAX_MS);
-    const { token } = await deps.talkback.signer.signListener({ sourceId: source.id }, Math.ceil(Math.max(1000, until.getTime() - Date.now()) / 1000));
+    // The token is for this press's track only: a box that gets it late hears nothing of a later press.
+    const { token } = await deps.talkback.signer.signListener({ sourceId: source.id, producerId }, Math.ceil(Math.max(1000, until.getTime() - Date.now()) / 1000));
     const bcId = `bcm_${randomBytes(9).toString("base64url")}`;
     const expires = new Date(Date.now() + takeMs);
     await data.withAccount(accountId, async (s) => {
@@ -543,7 +588,7 @@ export function createSpeech(deps: SpeakDeps) {
         id: bcId, account_id: accountId, bridge_id: source.bridge_id!, kind: "talk", created_by: `talk:${row.id}`, expires_at: expires,
         // Sealed like every command's arguments, and cleared once the box takes it: the token is good for one press.
         args_sealed: data.box().encrypt(JSON.stringify({
-          message_id: row.id, source_id: source.id, session_id: sessionId, whep_url: deps.talkback!.whepUrl, token,
+          message_id: row.id, source_id: source.id, session_id: sessionId, producer_id: producerId, whep_url: deps.talkback!.whepUrl, token,
           until: until.toISOString(), run_by: new Date(expires.getTime() + RUN_BY_GRACE_MS).toISOString(),
         })),
       }).execute();
@@ -559,15 +604,25 @@ export function createSpeech(deps: SpeakDeps) {
     const source = await data.withAccount(accountId, (s) => s.sources.get(row.source_id));
     const name = source?.name ?? row.source_id;
     if (ok) {
-      deps.log?.info({ sourceId: row.source_id, talkedMs: result?.talked_ms, ended: result?.ended }, "a box carried a person's push-to-talk");
+      const heard = typeof result?.talked_ms === "number" ? Math.max(0, Math.round(result.talked_ms)) : null;
+      deps.log?.info({ sourceId: row.source_id, talkedMs: heard, ended: result?.ended }, "a box carried a person's push-to-talk");
+      if (heard === 0 && (row.status === "playing" || row.status === "played")) {
+        // The box got there after the person let go (or another press took the speaker first): nobody heard it.
+        const why = result?.ended === "stopped"
+          ? `A newer press took ${name}'s speaker before this one was heard.`
+          : `The person let go before ${name}'s box connected, so nobody heard it.`;
+        await finish(accountId, row.id, "late", why, 200, undefined, name, { heard_ms: 0, ...(row.status === "playing" ? { duration_ms: Math.max(0, Date.now() - new Date(row.created_at).getTime()) } : {}) });
+      } else if (heard !== null) {
+        await update(accountId, row.id, { heard_ms: heard });
+      }
       return;
     }
     const why = /too late/i.test(error ?? "") ? `${cap(name)}'s box got the press too late, so it didn't play it.`
       : `${cap(name)}'s speaker couldn't be reached: ${(error ?? "the box failed").slice(0, 200)}`;
-    if (row.status === "playing") {
-      await finish(accountId, row.id, "failed", why, 502, undefined, name, { duration_ms: Math.max(0, Date.now() - new Date(row.created_at).getTime()) });
-    }
-    await Promise.resolve(deps.media?.stopTalkback?.(row.source_id, row.live_session_id, "speaker_unavailable", why)).catch((err) => {
+    // Only a press still being held is ended, and only that track: a newer press by the same person goes on.
+    if (row.status !== "playing") return;
+    await finish(accountId, row.id, "failed", why, 502, undefined, name, { heard_ms: 0, duration_ms: Math.max(0, Date.now() - new Date(row.created_at).getTime()) });
+    await Promise.resolve(deps.media?.stopTalkback?.(row.source_id, row.live_session_id, "speaker_unavailable", why, row.producer_id ?? undefined)).catch((err) => {
       deps.log?.warn({ err, sourceId: row.source_id }, "could not end a press the box couldn't carry");
     });
   }

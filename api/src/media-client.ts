@@ -39,7 +39,7 @@ export interface ControlClient {
   /** Stops a clip that participant is playing (a person's push-to-talk cut it off). */
   stopSpeak?(roomId: string, identity: string, id: string): Promise<void>;
   /** Push-to-talk (ADR 0074): closes the participant's talkback track and tells it why; false when it wasn't talking. */
-  stopTalkback?(roomId: string, identity: string, body: { reason: string; message?: string }): Promise<boolean>;
+  stopTalkback?(roomId: string, identity: string, body: { reason: string; message?: string; producerId?: string }): Promise<boolean>;
 }
 
 export class MediaControlError extends Error {

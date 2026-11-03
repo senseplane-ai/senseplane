@@ -485,7 +485,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   const maxResolutionFor = async (id: string) => (await quotaFor(id)).maxResolution ?? "720p";
   registerMediaCallbacks(app, {
     data, signer, storage, media: mediaControl, masks, log: app.log, keys: keyRing,
-    onTalk: (accountId, sourceId, sessionId, event, at) => speech.personTalk(accountId, sourceId, sessionId, event, at),
+    onTalk: (accountId, sourceId, sessionId, event, at, producerId) => speech.personTalk(accountId, sourceId, sessionId, event, at, producerId),
     ...(valkeyBus ? {
       publishMedia: (a: string, s: string, kind: "frame" | "audio", meta: Record<string, unknown>, buf: Buffer) => valkeyBus.publishMedia(a, s, kind, meta, buf),
       releaseCamera: (a: string, s: string) => valkeyBus.balancer.release(`${a}.${s}`),

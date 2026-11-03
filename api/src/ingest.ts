@@ -70,7 +70,7 @@ export interface IngestSigner {
    * The box's listener for one press of push-to-talk (ADR 0074, spec/media/whep.md): `{source_id}:speaker`,
    * audio in only, single use, for at most `ttlSeconds` (the press's cap).
    */
-  signListener(t: { sourceId: string }, ttlSeconds: number): Promise<{ token: string; expiresAt: Date }>;
+  signListener(t: { sourceId: string; producerId: string }, ttlSeconds: number): Promise<{ token: string; expiresAt: Date }>;
   /** The camera's feed egress: kind egress over a plain transport. */
   signFeed(t: { sourceId: string; recordAudio: boolean }, ttlSeconds?: number): Promise<string>;
   signControl(): Promise<string>;
@@ -201,7 +201,8 @@ export async function createIngestSigner(
       const iat = now();
       const claims = {
         v: 1, iss: issuer, aud: "media", room: roomFor(t.sourceId), identity: `${t.sourceId}:speaker`, kind: "agent", transport: "webrtc",
-        grants: { canPublish: false, canSubscribe: true, canPublishData: false, subscribeKinds: ["audio"], maxSubscriptions: 1 },
+        // listenTo: this press's track only (spec/media/whep.md).
+        grants: { canPublish: false, canSubscribe: true, canPublishData: false, subscribeKinds: ["audio"], maxSubscriptions: 1, listenTo: t.producerId },
         jti: jti(), iat, exp: iat + ttlSeconds,
       };
       return { token: await sign(claims), expiresAt: new Date(claims.exp * 1000) };

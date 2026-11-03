@@ -34,7 +34,7 @@ export interface CallbackDeps {
   /** Account keys: a media plane that offers to encrypt segments gets each one's key (ADR 0066). */
   keys?: KeyRing;
   /** A person started or stopped talking through the camera in live view (push-to-talk, ADR 0069). */
-  onTalk?(accountId: string, sourceId: string, sessionId: string, event: "start" | "end", at: Date): Promise<void>;
+  onTalk?(accountId: string, sourceId: string, sessionId: string, event: "start" | "end", at: Date, producerId?: string): Promise<void>;
 }
 
 const FEED_EVENTS = new Set(["source.online", "source.offline", "segment.written", "recording.gap", "resolution_rejected"]);
@@ -101,16 +101,18 @@ export function registerMediaCallbacks(app: FastifyInstance, deps: CallbackDeps)
       // Room callbacks: viewers joining and leaving (live view), the room ending.
       if (typeof body.roomId === "string") {
         if (body.roomId !== roomFor(sourceId)) throw new ApiError(403, "forbidden", "this token is for another room");
-        const d = (body.data ?? {}) as { identity?: string; reason?: string; source?: string };
+        const d = (body.data ?? {}) as { identity?: string; reason?: string; source?: string; producerId?: string };
         // A viewer's microphone track (push-to-talk): who talked through the camera, and for how long.
         if ((event === "producer.added" || event === "producer.removed") && d.source === "talkback" && d.identity && isViewer(d.identity)) {
           const sid = viewerSession(d.identity);
-          if (sid) await deps.onTalk?.(accountId, sourceId, sid, event === "producer.added" ? "start" : "end", at);
+          if (sid) await deps.onTalk?.(accountId, sourceId, sid, event === "producer.added" ? "start" : "end", at, typeof d.producerId === "string" ? d.producerId : undefined);
           return { ok: true };
         }
         if ((event === "participant.joined" || event === "participant.left") && d.identity && isViewer(d.identity)) {
           const sid = viewerSession(d.identity);
           if (sid) await handleViewerEvent(deps.data, accountId, event === "participant.joined" ? "joined" : "left", sid, at, d.reason);
+          // A viewer gone ends any press of theirs whose own end was lost.
+          if (sid && event === "participant.left") await deps.onTalk?.(accountId, sourceId, sid, "end", at);
         } else if (event === "participant.left" && d.identity && CAMERA_IDENTITIES(sourceId).includes(d.identity) && d.reason !== "replaced") {
           // The camera left the room: offline now, on any media plane (its feed says so too, a moment later).
           // A newer status (the camera back already) is never overridden.

@@ -148,7 +148,15 @@ In Senseplane:
 Senseplane detects that *a person* is present. It does **not** recognise who
 someone is: there's no face recognition and no identification of named
 people. Blurring finds faces only to hide them, and keeps nothing about
-them. Identifying people from their faces or bodies is biometric processing,
+them. Following works only for objects and pets ("how did this box move
+through the house?"), never people: a description that names a person, or a
+box drawn on one, is refused, nothing about a person is compared across
+cameras, and no face crop or person embedding is kept. Following a person
+from camera to camera is not planned ([ADR
+0070](decisions/0070-stories-and-following-objects.md)). A story (one video
+from several cameras) shows recordings as they were recorded, with people in
+them, so share its link only with people who may see that footage.
+Identifying people from their faces or bodies is biometric processing,
 which the GDPR treats as a special category of data with much stricter rules,
 and which the EU AI Act restricts further. Don't add it on top of Senseplane
 without legal advice.

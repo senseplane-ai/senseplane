@@ -2,7 +2,7 @@
 
 # MCP tools
 
-Senseplane's MCP server exposes 13 tools (tool spec version 0.5.0).
+Senseplane's MCP server exposes 15 tools (tool spec version 0.6.0).
 Each call runs with the agent's grants: a tool that needs a sense the agent
 isn't granted fails with `forbidden_sense`. See [MCP setup](../mcp-setup.md)
 to connect a client.
@@ -171,3 +171,35 @@ Say something out loud through a camera's speaker: text to speech, after a short
 | `text` | string | yes | What to say, in plain words (at most 30 seconds of speech); up to 500 characters |
 
 **Returns:** The message: status (playing, played, sent, refused, offline, late, failed, interrupted), a message when it wasn't said, how long it took to say, and a link to hear the clip.
+
+## `make_story`
+
+Make one video from many moments across cameras, in time order: each piece labelled with its camera and time, long gaps shown as a short card. Give moments (events or time ranges) or a search ('the courier'). Waits for it to be ready (up to a minute or two) and returns its playback link. At most 20 pieces and 10 minutes of video; needs video on every camera in it.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `moments` | array of object | no |  |
+| `search` | string | no | Find the moments by meaning instead, like what_happened |
+| `from` | string | no | With search: default 24 h ago |
+| `to` | string | no | With search: default now |
+| `sources` | array of string | no | With search: only these sources (ids or names) |
+| `title` | string | no | up to 200 characters |
+| `fast` | boolean | no | Copy the recordings untouched (no labels or cards), quicker; default `false` |
+
+**Returns:** The story id, its status, its pieces in order and, once ready, a signed HLS playback URL.
+
+## `follow_object`
+
+Follow an object or a pet across cameras over a time range ('how did this box move through the house?'): where it was seen, in order, the handovers between cameras and the gaps where it was not seen. Point at it with a box on an event's snapshot, or describe it. Never a person: a person is refused. Looks at a limited number of frames (each vision model check is an AI check); waits up to two minutes.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `event` | string | no | The event whose snapshot shows the thing |
+| `box` | array of number | no | x1, y1, x2, y2 around the thing, as fractions of the snapshot |
+| `description` | string | no | Instead of a box: 'the brown cardboard box with red tape' (needs a vision model) |
+| `from` | string | yes |  |
+| `to` | string | yes | At most 2 hours after from |
+| `sources` | array of string | no | Source ids or names; default every camera you may watch |
+| `make_story` | boolean | no | Also make a story video of the route; default `true` |
+
+**Returns:** The route (camera, from, to, confidence, playback link per visit), handovers, gaps with why, and the story id.

@@ -152,7 +152,9 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `TTS_API_KEY`, `TTS_MODEL`, `TTS_VOICE` | empty, `kokoro`, `af_heart` | Its bearer key, model and the one synthetic voice every message uses (a voice can't be chosen per message) |
 | `TELEGRAM_BOT_TOKEN` | empty | A bot from @BotFather: alerts and questions in Telegram ([Telegram](telegram.md)) |
 | `TELEGRAM_MODE`, `TELEGRAM_WEBHOOK_SECRET` | `polling`, empty | `webhook`: Telegram posts updates to `API_PUBLIC_URL/telegram/webhook` with this secret, instead of the server polling |
-| `API_WORKERS` | `true` | `false`: this API process only serves requests. Background work (housekeeping, scheduled watches, webhook deliveries, clips) runs in the processes that have it on, each piece in one of them ([ADR 0058](decisions/0058-background-work-in-postgres.md)) |
+| `API_WORKERS` | `true` | `false`: this API process only serves requests. Background work (housekeeping, scheduled watches, webhook deliveries, clips, stories, follows) runs in the processes that have it on, each piece in one of them ([ADR 0058](decisions/0058-background-work-in-postgres.md)) |
+| `FFMPEG_PATH` | `ffmpeg` (the image's LGPL build) | The ffmpeg that renders stories and reads frames for following objects ([ADR 0070](decisions/0070-stories-and-following-objects.md)) |
+| `STORY_H264_ENCODER` | the first of `libopenh264`, `libx264`, `h264_videotoolbox` that ffmpeg has | The H.264 encoder for labelled stories |
 | `QUOTA_MAX_SOURCES` | unlimited | Registered sources per account |
 | `QUOTA_MAX_ACTIVE_SOURCES` | unlimited | Sources streaming at once per account |
 | `QUOTA_MAX_RESOLUTION` | `720p` | Largest recording resolution (`720p` or `1080p`) |

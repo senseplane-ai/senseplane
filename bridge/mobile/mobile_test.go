@@ -259,10 +259,10 @@ func TestAPhoneAddsAMatterDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res, `"sensors":3`) {
+	if !strings.Contains(res, `"sensors":7`) { // the fake's plug, button, light, lock, blind and thermostat
 		t.Fatalf("added %s", res)
 	}
-	waitFor(t, "the plug's sensors listed", func() bool {
+	waitFor(t, "the device's sensors listed", func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		n := 0
@@ -271,7 +271,7 @@ func TestAPhoneAddsAMatterDevice(t *testing.T) {
 				n++
 			}
 		}
-		return n == 3
+		return n == 7
 	})
 	waitFor(t, "the device counted", func() bool { return st.seen(func(m map[string]any) bool { return m["matter"] == 1.0 }) })
 }

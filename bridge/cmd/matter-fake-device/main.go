@@ -1,7 +1,8 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command matter-fake-device runs a Matter plug written from the spec, for
+// Command matter-fake-device runs a Matter device written from the spec (a plug
+// with a button, a dimmable light, a door lock, a blind and a thermostat), for
 // developing and testing without hardware: add it to a box with the code it
 // prints. Type "on", "off" or "press" (its button) and Enter; its power
 // reading drifts every few seconds.

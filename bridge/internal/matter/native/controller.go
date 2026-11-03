@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/api"
+	"github.com/senseplane-ai/senseplane/bridge/internal/control"
 	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
 )
 
@@ -136,6 +137,10 @@ type Controller struct {
 	added chan uint64
 	wake  chan struct{}
 	dcl   *DCL
+	// live is each device's subscription session, reused for commands.
+	live map[uint64]*Session
+	// nodes are Run's devices, kept current by their reports (written under mu).
+	nodes map[uint64]*matter.Node
 }
 
 // Devices is how many devices have been added.
@@ -501,12 +506,22 @@ func (c *Controller) Run(ctx context.Context, h matter.Handler) {
 	c.mu.Unlock()
 
 	nodes := map[uint64]*matter.Node{}
+	c.mu.Lock()
+	c.nodes = nodes
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.nodes = nil
+		c.mu.Unlock()
+	}()
 	var wg sync.WaitGroup
 	start := func(id uint64) {
 		if _, ok := nodes[id]; ok {
 			return
 		}
+		c.mu.Lock()
 		nodes[id] = &matter.Node{NodeID: json.Number(strconv.FormatUint(id, 10)), Attributes: map[string]json.RawMessage{}}
+		c.mu.Unlock()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -541,12 +556,14 @@ func (c *Controller) Run(ctx context.Context, h matter.Handler) {
 				continue
 			}
 			before := len(n.Entities())
+			c.mu.Lock()
 			n.Available = ev.available
 			if ev.reset {
 				n.Attributes = attrMap(nil, ev.attrs)
 			} else {
 				n.Attributes = attrMap(n.Attributes, ev.attrs)
 			}
+			c.mu.Unlock()
 			if ev.reset || len(n.Entities()) != before {
 				publish()
 			}
@@ -671,6 +688,8 @@ func (c *Controller) session(ctx context.Context, t *Transport, f *fabric, id ui
 	all := first
 	mu.Unlock()
 	send(event{node: id, available: true, attrs: all, reset: true})
+	c.setLive(id, s, nil)
+	defer c.setLive(id, nil, s)
 	c.log().Info("Matter device connected", "node", id, "subscription", subID, "interval", maxInterval.String())
 	// Reports come at least every maxInterval; missing two means the device is gone.
 	if maxInterval <= 0 {
@@ -706,9 +725,33 @@ func (c *Controller) remember(f *fabric, id uint64, a netip.AddrPort) {
 	}
 }
 
-// SetOnOff turns a device's OnOff endpoint on or off (spec: OnOff cluster, commands 0 and 1).
-func (c *Controller) SetOnOff(ctx context.Context, node uint64, endpoint int, on bool) error {
-	f, err := c.load()
+func (c *Controller) setLive(id uint64, s, was *Session) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.live == nil {
+		c.live = map[uint64]*Session{}
+	}
+	if s != nil {
+		c.live[id] = s
+	} else if c.live[id] == was {
+		delete(c.live, id)
+	}
+}
+
+// with runs f on a session with the device: its live one, else a fresh CASE
+// session. A device's own refusal (a status) isn't tried again.
+func (c *Controller) with(ctx context.Context, node uint64, f func(*Session) error) error {
+	c.mu.Lock()
+	s := c.live[node]
+	c.mu.Unlock()
+	if s != nil {
+		err := f(s)
+		var st IMError
+		if err == nil || errors.As(err, &st) || ctx.Err() != nil {
+			return err
+		}
+	}
+	fab, err := c.load()
 	if err != nil {
 		return err
 	}
@@ -716,18 +759,96 @@ func (c *Controller) SetOnOff(ctx context.Context, node uint64, endpoint int, on
 	if err != nil {
 		return err
 	}
-	for _, a := range c.address(ctx, f, node) {
-		s, err := CASE(ctx, t, udpAddr(a), f.creds, node)
+	for _, a := range c.address(ctx, fab, node) {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		s, err := CASE(cctx, t, udpAddr(a), fab.creds, node)
+		cancel()
 		if err != nil {
 			continue
 		}
 		defer s.Close()
-		cmd := 0
-		if on {
-			cmd = 1
-		}
-		_, err = Invoke(ctx, s, endpoint, 6, cmd, nil)
-		return err
+		return f(s)
 	}
 	return errNotFound
+}
+
+// SetOnOff turns a device's OnOff endpoint on or off (spec: OnOff cluster, commands 0 and 1).
+func (c *Controller) SetOnOff(ctx context.Context, node uint64, endpoint int, on bool) error {
+	cmd := 0
+	if on {
+		cmd = 1
+	}
+	return c.with(ctx, node, func(s *Session) error {
+		_, err := Invoke(ctx, s, endpoint, 6, cmd, nil)
+		return err
+	})
+}
+
+// node is a copy of one of Run's devices, by an entity of it.
+func (c *Controller) node(entityID string) (uint64, matter.Node, int, string, error) {
+	idText, ep, sense, ok := matter.ParseEntityID(entityID)
+	id, err := strconv.ParseUint(idText, 10, 64)
+	if !ok || err != nil {
+		return 0, matter.Node{}, 0, "", fmt.Errorf("%s isn't a Matter device", entityID)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nodes == nil {
+		return 0, matter.Node{}, 0, "", errors.New("the box's Matter controller isn't running")
+	}
+	n := c.nodes[id]
+	if n == nil {
+		return 0, matter.Node{}, 0, "", fmt.Errorf("this box has no Matter device %d", id)
+	}
+	cp := *n
+	cp.Attributes = make(map[string]json.RawMessage, len(n.Attributes))
+	for k, v := range n.Attributes {
+		cp.Attributes[k] = v
+	}
+	return id, cp, ep, sense, nil
+}
+
+// DeviceState is an entity's state for a command's report, from the device's reports.
+func (c *Controller) DeviceState(entityID string) (control.State, error) {
+	_, n, ep, sense, err := c.node(entityID)
+	if err != nil {
+		return control.State{}, err
+	}
+	return n.DeviceState(ep, sense), nil
+}
+
+// Control runs an action on an entity (ADR 0067): a command (timed for a
+// door lock), or an attribute write for a thermostat setting.
+func (c *Controller) Control(ctx context.Context, entityID string, cmd control.Command) error {
+	id, n, ep, sense, err := c.node(entityID)
+	if err != nil {
+		return err
+	}
+	if !n.Available {
+		return errors.New("the device isn't answering this box")
+	}
+	inv, err := n.Invocation(ep, sense, cmd)
+	if err != nil {
+		return err
+	}
+	err = c.with(ctx, id, func(s *Session) error {
+		if inv.Write != nil {
+			v := inv.Write.Value
+			return Write(ctx, s, Path{inv.Endpoint, inv.Cluster, inv.Write.Tag}, func(w *TLV, tag int) { w.Int(tag, v) })
+		}
+		_, err := InvokeTimed(ctx, s, inv.Endpoint, inv.Cluster, inv.Command, func(w *TLV) {
+			for _, f := range inv.Fields {
+				w.Uint(f.Tag, uint64(f.Value))
+			}
+		}, time.Duration(inv.TimedMs)*time.Millisecond)
+		return err
+	})
+	var st IMError
+	switch {
+	case errors.As(err, &st):
+		return fmt.Errorf("the device refused it (%v)", st)
+	case errors.Is(err, errNotFound):
+		return errors.New("the device wasn't found on the network")
+	}
+	return err
 }

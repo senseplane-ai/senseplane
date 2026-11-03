@@ -27,6 +27,9 @@ var binary = map[string]string{
 // switches are the entity domains that are switched on and off.
 var switches = map[string]bool{"switch": true, "light": true, "fan": true, "input_boolean": true, "siren": true}
 
+// armed are the alarm panel states that count as armed (a triggered alarm is armed).
+var armed = map[string]bool{"armed_away": true, "armed_home": true, "armed_night": true, "armed_vacation": true, "armed_custom_bypass": true, "triggered": true}
+
 // events is event entity device class → Senseplane event sense.
 var events = map[string]string{"doorbell": "doorbell", "button": "button"}
 
@@ -89,6 +92,12 @@ func Sense(entityID string, attrs map[string]any) (sense, kind string) {
 		return "switch", "state"
 	case domain == "lock":
 		return "lock", "state"
+	case domain == "cover":
+		return "cover", "state"
+	case domain == "alarm_control_panel":
+		return "alarm", "state"
+	case domain == "climate":
+		return "setpoint", "number"
 	case domain == "event" && events[dc] != "":
 		return events[dc], "event"
 	case domain == "sensor" && numbers[dc].sense != "":
@@ -128,6 +137,28 @@ func ToReading(entityID, state string, attrs map[string]any, at time.Time, initi
 			return api.Reading{}, false
 		}
 		return state01("lock", state != "locked")
+	case domain == "cover":
+		if state != "open" && state != "closed" {
+			return api.Reading{}, false
+		}
+		return state01("cover", state == "open")
+	case domain == "alarm_control_panel":
+		if armed[state] {
+			return state01("alarm", true)
+		}
+		if state != "disarmed" {
+			return api.Reading{}, false
+		}
+		return state01("alarm", false)
+	case domain == "climate":
+		// The thermostat setting, in °C (State.Reading converts a Fahrenheit Home Assistant's).
+		v, ok := attrs["temperature"].(float64)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) {
+			return api.Reading{}, false
+		}
+		v = math.Round(v*100) / 100
+		r.Sense, r.Number, r.Unit = "setpoint", &v, "celsius"
+		return r, true
 	case domain == "event":
 		sense := events[dc]
 		if sense == "" || initial {

@@ -28,6 +28,9 @@ const (
 	clusterPowerMeasurement = 144
 	clusterDoorLock         = 257
 	clusterOnOff            = 6
+	clusterLevelControl     = 8
+	clusterWindowCovering   = 258
+	clusterThermostat       = 513
 	clusterIlluminance      = 1024
 	clusterTemperature      = 1026
 	clusterPressure         = 1027
@@ -80,6 +83,10 @@ var attributes = []attribute{
 	{cluster: clusterPowerMeasurement, attr: 5, sense: "current", unit: "ampere", number: scaled(0.001)},
 	// LockState: 1 locked; 0 not fully locked, 2 unlocked, 3 unlatched.
 	{cluster: clusterDoorLock, attr: 0, sense: "lock", state: func(v float64, _ endpoint) (bool, bool) { return v != 1, true }},
+	// CurrentPositionLiftPercent100ths is how far closed: open is anything but fully closed.
+	{cluster: clusterWindowCovering, attr: attrLiftPosition, sense: "cover", state: func(v float64, _ endpoint) (bool, bool) { return v < 10000, true }},
+	// OccupiedHeatingSetpoint, in 0.01 °C.
+	{cluster: clusterThermostat, attr: attrHeatingSetpoint, sense: "setpoint", unit: "celsius", number: scaled(0.01)},
 	{cluster: clusterSmokeCoAlarm, attr: 1, sense: "smoke", state: func(v float64, _ endpoint) (bool, bool) { return v > 0, true }},
 	{cluster: clusterSmokeCoAlarm, attr: 2, sense: "carbon_monoxide", state: func(v float64, _ endpoint) (bool, bool) { return v > 0, true }},
 	// In half percent.
@@ -208,7 +215,9 @@ func mapped(e endpoint, cluster, attr int) (attribute, bool) {
 	return attribute{}, false
 }
 
-// Entities lists what Senseplane can take from a node: one entity per endpoint and sense, and a button per Switch endpoint.
+// Entities lists what Senseplane can take from a node: one entity per
+// endpoint and sense, and a button per Switch endpoint, with the endpoint's
+// device type and what the box can do with it.
 func (n Node) Entities() []api.Entity {
 	eps := n.endpoints()
 	seen := map[string]bool{}
@@ -219,7 +228,7 @@ func (n Node) Entities() []api.Entity {
 			return
 		}
 		seen[id] = true
-		out = append(out, api.Entity{EntityID: id, Name: e.name, Sense: sense, Kind: kind})
+		out = append(out, api.Entity{EntityID: id, Name: e.name, DeviceClass: e.deviceClass(), Sense: sense, Kind: kind, Controls: n.controls(e, sense)})
 	}
 	for p := range n.Attributes {
 		ep, cluster, attr, ok := parsePath(p)

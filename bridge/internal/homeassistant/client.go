@@ -3,8 +3,8 @@
 
 // Package homeassistant reads a Home Assistant instance over its websocket
 // API (ADR 0061): which entities Senseplane can take (with their room), their
-// states at start-up and every change after. Read-only: the bridge never
-// calls a service. As a Home Assistant add-on the bridge reaches Home
+// states at start-up and every change after. It calls a service only to run a
+// command a person asked for (ADR 0067), through Client. As a Home Assistant add-on the bridge reaches Home
 // Assistant through the Supervisor (ws://supervisor/core/websocket with
 // SUPERVISOR_TOKEN); anywhere else with a long-lived access token.
 package homeassistant
@@ -32,6 +32,8 @@ type State struct {
 	State       string         `json:"state"`
 	Attributes  map[string]any `json:"attributes"`
 	LastUpdated time.Time      `json:"last_updated"`
+	// Fahrenheit is set when Home Assistant's unit system is imperial (a thermostat setting is then in °F).
+	Fahrenheit bool `json:"-"`
 }
 
 // Handler gets what Home Assistant has; calls come from one goroutine.
@@ -76,6 +78,8 @@ type Options struct {
 	MinBackoff, MaxBackoff time.Duration
 	// PingEvery is how often the connection is checked (default 30 s).
 	PingEvery time.Duration
+	// Client, when set, is given each session, to switch devices on it.
+	Client *Client
 }
 
 // ErrAuth means Home Assistant refused the token.
@@ -191,7 +195,7 @@ func (c *conn) call(ctx context.Context, cmd map[string]any) (json.RawMessage, e
 		}
 		if !m.Success && m.Type == "result" {
 			if m.Error != nil {
-				return nil, fmt.Errorf("%s: %s: %s", cmd["type"], m.Error.Code, m.Error.Message)
+				return nil, &haError{Type: fmt.Sprint(cmd["type"]), Code: m.Error.Code, Message: m.Error.Message}
 			}
 			return nil, fmt.Errorf("%s failed", cmd["type"])
 		}
@@ -200,6 +204,11 @@ func (c *conn) call(ctx context.Context, cmd map[string]any) (json.RawMessage, e
 		return nil, fmt.Errorf("%s: no answer", cmd["type"])
 	}
 }
+
+// haError is an error Home Assistant answered a command with.
+type haError struct{ Type, Code, Message string }
+
+func (e *haError) Error() string { return e.Type + ": " + e.Code + ": " + e.Message }
 
 func session(ctx context.Context, o Options, h Handler) error {
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
@@ -283,13 +292,26 @@ func session(ctx context.Context, o Options, h Handler) error {
 	if err != nil {
 		return err
 	}
+	// Its unit system: a thermostat's setting is in its units.
+	var config struct {
+		UnitSystem struct {
+			Temperature string `json:"temperature"`
+		} `json:"unit_system"`
+	}
+	if raw, err := c.call(sctx, map[string]any{"type": "get_config"}); err == nil {
+		_ = json.Unmarshal(raw, &config)
+	}
+	l := &live{c: c, states: map[string]State{}, fahrenheit: strings.Contains(config.UnitSystem.Temperature, "F")}
 	o.Log.Info("connected to Home Assistant", "entities", len(states))
 	h.Connected(true)
 	defer h.Connected(false)
-	current := map[string]State{}
-	for _, s := range states {
-		current[s.EntityID] = s
+	current := l.states // written under l.mu (Client reads it); read here freely, this is the only writer
+	for i := range states {
+		states[i].Fahrenheit = l.fahrenheit
+		l.set(states[i])
 	}
+	o.Client.attach(l)
+	defer o.Client.detach(l)
 	reg.list(h, current)
 	for _, s := range states {
 		h.State(s, true)
@@ -324,11 +346,12 @@ func session(ctx context.Context, o Options, h Handler) error {
 			case "state_changed":
 				ns := m.Event.Data.NewState
 				if ns == nil { // removed
-					delete(current, m.Event.Data.EntityID)
+					l.remove(m.Event.Data.EntityID)
 					continue
 				}
+				ns.Fahrenheit = l.fahrenheit
 				_, known := current[ns.EntityID]
-				current[ns.EntityID] = *ns
+				l.set(*ns)
 				if !known && relist == nil {
 					relist = time.After(2 * time.Second) // a new entity: list it
 				}
@@ -447,7 +470,7 @@ func (r *registry) entities(states map[string]State) []api.Entity {
 		if name == "" {
 			name = id
 		}
-		out = append(out, api.Entity{EntityID: id, Name: name, Area: r.areas[area], DeviceClass: str(s.Attributes, "device_class"), Sense: sense, Kind: kind})
+		out = append(out, api.Entity{EntityID: id, Name: name, Area: r.areas[area], DeviceClass: str(s.Attributes, "device_class"), Sense: sense, Kind: kind, Controls: Controls(id, s.Attributes)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].EntityID < out[j].EntityID })
 	return out

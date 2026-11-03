@@ -22,9 +22,11 @@ import (
 
 // FakeDevice is a Matter device written from the spec, for tests and for
 // developing without hardware (cmd/matter-fake-device): a plug with OnOff
-// and power measurement, and a two-position switch (a button). It is strict
-// where devices are (the fail-safe must be armed; CASE checks the
-// destination id and the controller's certificate chain) unless Lenient.
+// and power measurement (endpoint 1), a two-position switch (a button, 2), a
+// dimmable light (3), a door lock (4), a blind (5) and a thermostat (6). It
+// is strict where devices are (the fail-safe must be armed; CASE checks the
+// destination id and the controller's certificate chain; a door lock command
+// must be timed) unless Lenient.
 type FakeDevice struct {
 	logf     func(string, ...any)
 	tr       *Transport
@@ -54,6 +56,11 @@ type FakeDevice struct {
 	attrs     map[Path]func(w *TLV, tag int)
 	on        bool
 	powerMW   int64
+	light     bool
+	level     uint64 // 1–254
+	lockState uint64 // 1 locked, 2 unlocked
+	lift      uint64 // percent closed, in hundredths
+	setpoint  int64  // 0.01 °C
 	subs      []*fakeSub
 	eventNo   uint64
 	sessions  int
@@ -73,7 +80,8 @@ func NewFakeDevice(port int, passcode uint32, discriminator uint16, logf func(st
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	d := &FakeDevice{logf: logf, tr: tr, passcode: passcode, disc: discriminator, salt: random(32), iter: 1000, powerMW: 12300}
+	d := &FakeDevice{logf: logf, tr: tr, passcode: passcode, disc: discriminator, salt: random(32), iter: 1000, powerMW: 12300,
+		level: 1, lockState: 2, lift: 10000, setpoint: 2000}
 	if d.att, err = newFakeAttestation(); err != nil {
 		tr.Close()
 		return nil, err
@@ -104,6 +112,37 @@ func (d *FakeDevice) On() bool {
 	return d.on
 }
 
+// Light is whether the light is on, and its level (1–254).
+func (d *FakeDevice) Light() (bool, uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.light, d.level
+}
+
+// Locked is whether the door lock is locked.
+func (d *FakeDevice) Locked() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lockState == 1
+}
+
+// Lift is how far closed the blind is, in hundredths of a percent.
+func (d *FakeDevice) Lift() uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lift
+}
+
+// Setpoint is the thermostat's heating setting in 0.01 °C.
+func (d *FakeDevice) Setpoint() int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.setpoint
+}
+
+// fakeParts are the endpoints after the root (its PartsList).
+var fakeParts = []uint64{1, 2, 3, 4, 5, 6}
+
 func (d *FakeDevice) attributes() map[Path]func(*TLV, int) {
 	devType := func(types ...uint64) func(*TLV, int) {
 		return func(w *TLV, tag int) {
@@ -118,9 +157,22 @@ func (d *FakeDevice) attributes() map[Path]func(*TLV, int) {
 		}
 	}
 	str := func(s string) func(*TLV, int) { return func(w *TLV, tag int) { w.String(tag, s) } }
+	u := func(v *uint64) func(*TLV, int) {
+		return func(w *TLV, tag int) {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			w.Uint(tag, *v)
+		}
+	}
 	return map[Path]func(*TLV, int){
 		{0, 29, 0}: devType(22), // root node
-		{0, 29, 3}: func(w *TLV, tag int) { w.Array(tag); w.Uint(Anon, 1); w.Uint(Anon, 2); w.End() },
+		{0, 29, 3}: func(w *TLV, tag int) {
+			w.Array(tag)
+			for _, ep := range fakeParts {
+				w.Uint(Anon, ep)
+			}
+			w.End()
+		},
 		{0, 40, 1}: str("Senseplane Test"),
 		{0, 40, 2}: func(w *TLV, tag int) { w.Uint(tag, fakeVID) },
 		{0, 40, 4}: func(w *TLV, tag int) { w.Uint(tag, fakePID) },
@@ -139,6 +191,25 @@ func (d *FakeDevice) attributes() map[Path]func(*TLV, int) {
 		},
 		{2, 29, 0}: devType(15), // generic switch
 		{2, 59, 0}: func(w *TLV, tag int) { w.Uint(tag, 2) },
+		{3, 29, 0}: devType(257), // dimmable light
+		{3, 6, 0}: func(w *TLV, tag int) {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			w.Bool(tag, d.light)
+		},
+		{3, 8, 0}:    u(&d.level),
+		{4, 29, 0}:   devType(10), // door lock
+		{4, 257, 0}:  u(&d.lockState),
+		{5, 29, 0}:   devType(514), // window covering
+		{5, 258, 14}: u(&d.lift),
+		{5, 258, 10}: func(w *TLV, tag int) { w.Uint(tag, 0) }, // not moving
+		{6, 29, 0}:   devType(769),                             // thermostat
+		{6, 513, 18}: func(w *TLV, tag int) {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			w.Int(tag, d.setpoint)
+		},
+		{6, 513, 28}: func(w *TLV, tag int) { w.Uint(tag, 4) }, // heat
 	}
 }
 
@@ -328,7 +399,78 @@ func (d *FakeDevice) serve(ex *Exchange, operational bool) {
 		d.mu.Unlock()
 		_ = ex.Send(protoIM, opSubscribeResp, w.Bytes())
 	case opInvokeRequest:
-		d.invoke(ex, req, operational)
+		d.invoke(ex, req, operational, false)
+	case opWriteRequest:
+		d.write(ex, req, false)
+	case opTimedRequest:
+		// The action that follows comes on this exchange.
+		next, err := ex.Request(ctx, protoIM, opStatusResponse, statusResponse(0))
+		if err != nil || next.Protocol != protoIM {
+			return
+		}
+		r, err := DecodeTLV(next.Payload)
+		if err != nil {
+			return
+		}
+		switch next.Opcode {
+		case opInvokeRequest:
+			d.invoke(ex, r, operational, true)
+		case opWriteRequest:
+			d.write(ex, r, true)
+		}
+	}
+}
+
+// write takes attribute writes: the thermostat's heating setting.
+func (d *FakeDevice) write(ex *Exchange, req Elem, timed bool) {
+	list, _ := req.Field(2)
+	var w TLV
+	w.Struct(Anon)
+	w.Array(0)
+	var changed []Path
+	for _, it := range list.Items {
+		pe, _ := it.Field(1)
+		var p Path
+		v, _ := pe.FieldU(2)
+		p.Endpoint = int(v)
+		v, _ = pe.FieldU(3)
+		p.Cluster = int(v)
+		v, _ = pe.FieldU(4)
+		p.ID = int(v)
+		data, _ := it.Field(2)
+		status := uint64(0x88) // UNSUPPORTED_WRITE
+		if p == (Path{6, 513, 18}) {
+			val := data.Int
+			if data.Kind == KindUint {
+				val = int64(data.Uint)
+			}
+			if val < 700 || val > 3000 {
+				status = 0x87 // CONSTRAINT_ERROR
+			} else {
+				d.mu.Lock()
+				d.setpoint = val
+				d.mu.Unlock()
+				status = 0
+				changed = append(changed, p)
+			}
+		}
+		w.Struct(Anon)
+		w.List(0)
+		w.Uint(2, uint64(p.Endpoint))
+		w.Uint(3, uint64(p.Cluster))
+		w.Uint(4, uint64(p.ID))
+		w.End()
+		w.Struct(1)
+		w.Uint(0, status)
+		w.End()
+		w.End()
+	}
+	w.End()
+	w.Uint(tagIMRev, imRevision)
+	w.End()
+	_ = ex.Send(protoIM, opWriteResponse, w.Bytes())
+	if len(changed) > 0 {
+		go d.push(changed, nil)
 	}
 }
 
@@ -393,10 +535,10 @@ func (d *FakeDevice) report(ctx context.Context, ex *Exchange, paths []Path, sub
 	var items []item
 	for _, p := range paths {
 		if p == (Path{0, 29, 3}) { // PartsList: sent the way long lists are
-			items = append(items,
-				item{p, false, func(w *TLV, tag int) { w.Array(tag); w.End() }},
-				item{p, true, func(w *TLV, tag int) { w.Uint(tag, 1) }},
-				item{p, true, func(w *TLV, tag int) { w.Uint(tag, 2) }})
+			items = append(items, item{p, false, func(w *TLV, tag int) { w.Array(tag); w.End() }})
+			for _, ep := range fakeParts {
+				items = append(items, item{p, true, func(w *TLV, tag int) { w.Uint(tag, ep) }})
+			}
 			continue
 		}
 		items = append(items, item{p, false, d.attrs[p]})
@@ -480,10 +622,11 @@ func invokeResult(ex *Exchange, path Elem, respCmd int, fields func(*TLV), statu
 	return ex.Send(protoIM, opInvokeResponse, w.Bytes())
 }
 
-func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
+func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 	cmdData, _ := req.At(2, 0)
 	path, _ := cmdData.Field(0)
 	fields, _ := cmdData.Field(1)
+	ep, _ := path.FieldU(0)
 	cl, _ := path.FieldU(1)
 	cmd, _ := path.FieldU(2)
 	d.mu.Lock()
@@ -593,9 +736,45 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational bool) {
 		d.armed, d.done = false, true
 		d.mu.Unlock()
 		_ = invokeResult(ex, path, 5, func(w *TLV) { w.Uint(0, 0) }, -1)
+	case cl == 6 && ep == 3 && (cmd == 0 || cmd == 1):
+		d.setLight(cmd == 1, 0)
+		_ = invokeResult(ex, path, 0, nil, 0)
 	case cl == 6 && (cmd == 0 || cmd == 1):
 		d.Set(cmd == 1)
 		_ = invokeResult(ex, path, 0, nil, 0)
+	case cl == 8 && ep == 3 && cmd == 4: // MoveToLevelWithOnOff
+		level, ok := fields.FieldU(0)
+		if !ok || level > 254 {
+			_ = invokeResult(ex, path, 0, nil, 0x87)
+			return
+		}
+		d.setLight(level > 0, max(level, 1))
+		_ = invokeResult(ex, path, 0, nil, 0)
+	case cl == 257 && ep == 4 && (cmd == 0 || cmd == 1): // LockDoor, UnlockDoor
+		if !timed && !lenient {
+			_ = ex.Send(protoIM, opStatusResponse, statusResponse(0xC6)) // NEEDS_TIMED_INTERACTION
+			return
+		}
+		d.mu.Lock()
+		d.lockState = 1 + cmd
+		d.mu.Unlock()
+		_ = invokeResult(ex, path, 0, nil, 0)
+		go d.push([]Path{{4, 257, 0}}, nil)
+	case cl == 258 && ep == 5 && (cmd == 0 || cmd == 1 || cmd == 5): // UpOrOpen, DownOrClose, GoToLiftPercentage
+		lift := map[uint64]uint64{0: 0, 1: 10000}[cmd]
+		if cmd == 5 {
+			v, ok := fields.FieldU(0)
+			if !ok || v > 10000 {
+				_ = invokeResult(ex, path, 0, nil, 0x87)
+				return
+			}
+			lift = v
+		}
+		d.mu.Lock()
+		d.lift = lift
+		d.mu.Unlock()
+		_ = invokeResult(ex, path, 0, nil, 0)
+		go d.push([]Path{{5, 258, 14}}, nil)
 	default:
 		_ = invokeResult(ex, path, 0, nil, 0x81)
 	}
@@ -607,6 +786,17 @@ func (d *FakeDevice) Set(on bool) {
 	d.on = on
 	d.mu.Unlock()
 	d.push([]Path{{1, 6, 0}}, nil)
+}
+
+// setLight changes the light (level 0: as it was) and reports it.
+func (d *FakeDevice) setLight(on bool, level uint64) {
+	d.mu.Lock()
+	d.light = on
+	if level > 0 {
+		d.level = level
+	}
+	d.mu.Unlock()
+	go d.push([]Path{{3, 6, 0}, {3, 8, 0}}, nil)
 }
 
 // SetPower changes the measured power (milliwatts) and reports it.

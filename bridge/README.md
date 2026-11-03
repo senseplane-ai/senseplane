@@ -47,9 +47,14 @@ Passwords in RTSP URLs never appear in logs or in what the bridge reports.
 With `--ha-url` and `--ha-token` (or as the Home Assistant add-on), the bridge
 reads Home Assistant's websocket API: it lists the entities Senseplane can
 take (numbers such as temperature and power, door, motion and leak sensors,
-switches, lights and locks, doorbells and buttons; `spec/home-assistant/readings.json`)
-with their room, and sends readings only of the ones a person chose in the
-console. It never calls a Home Assistant service.
+switches, lights and locks, covers, alarm panels and thermostat settings,
+doorbells and buttons; `spec/home-assistant/readings.json`) with their room,
+and sends readings only of the ones a person chose in the console. It calls a
+Home Assistant service only for a `device_control` command a person asked for
+(turn a light on, lock a door; ADR 0067), on a device it lists with that
+action; water heaters and anything heating or cooking are never switched.
+Matter devices are switched the same way, through the Matter Server or the
+built-in controller.
 
 ## Cameras on the network
 

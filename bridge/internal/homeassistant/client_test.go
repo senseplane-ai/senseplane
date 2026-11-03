@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,12 @@ type fakeHA struct {
 	mu    sync.Mutex
 	conns []*websocket.Conn
 	subs  map[*websocket.Conn]map[string]int
+	// extra are more states for get_states; config answers get_config.
+	extra  []map[string]any
+	config map[string]any
+	// service answers call_service: an error message, or "" when it went (it may push a change).
+	service func(m map[string]any) string
+	calls   []map[string]any
 }
 
 func (f *fakeHA) handler(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +73,22 @@ func (f *fakeHA) handler(w http.ResponseWriter, r *http.Request) {
 				{"entity_id": "camera.front_door", "state": "streaming", "attributes": map[string]any{"friendly_name": "Front door", "frontend_stream_type": "hls"}, "last_updated": "2026-10-16T08:00:00Z"},
 				{"entity_id": "camera.nest_doorbell", "state": "idle", "attributes": map[string]any{"friendly_name": "Doorbell", "brand": "Google Nest", "model_name": "Doorbell (battery)"}, "last_updated": "2026-10-16T08:00:00Z"},
 			}
+			result = append(result.([]map[string]any), f.extra...)
+		case "get_config":
+			result = f.config
+		case "call_service":
+			f.mu.Lock()
+			f.calls = append(f.calls, m)
+			f.mu.Unlock()
+			if f.service != nil {
+				if msg := f.service(m); msg != "" {
+					f.mu.Lock()
+					_ = ws.WriteJSON(map[string]any{"id": id, "type": "result", "success": false, "error": map[string]any{"code": "home_assistant_error", "message": msg}})
+					f.mu.Unlock()
+					continue
+				}
+			}
+			result = map[string]any{"context": map[string]any{"id": "ctx"}}
 		case "config/area_registry/list":
 			result = []map[string]any{{"area_id": "kitchen", "name": "Kitchen"}}
 		case "config/device_registry/list":
@@ -162,7 +185,7 @@ func TestReadsEntitiesWithRoomsStatesAndChangesAndReconnects(t *testing.T) {
 		{EntityID: "binary_sensor.fridge", Name: "Fridge door", Area: "Kitchen", DeviceClass: "door", Sense: "contact", Kind: "state"},
 		{EntityID: "sensor.kitchen_temp", Name: "Kitchen temperature", Area: "Kitchen", DeviceClass: "temperature", Sense: "temperature", Kind: "number"},
 	}
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("entities = %+v (the TV isn't a sensor and the disabled plug is left out)", got)
 	}
 	// Its cameras, with the room, maker, model and address from the device registry (or the entity's own attributes).

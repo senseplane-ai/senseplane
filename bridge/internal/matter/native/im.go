@@ -21,7 +21,10 @@ const (
 	opSubscribeResp  = 0x04
 	opReportData     = 0x05
 	opInvokeRequest  = 0x08
+	opWriteRequest   = 0x06
+	opWriteResponse  = 0x07
 	opInvokeResponse = 0x09
+	opTimedRequest   = 0x0A
 
 	imRevision = 11
 	tagIMRev   = 0xFF
@@ -71,6 +74,10 @@ func (e IMError) Error() string {
 		return "matter: constraint error"
 	case 0xC3:
 		return "matter: unsupported cluster"
+	case 0xC6:
+		return "matter: the command must be timed"
+	case 0x88:
+		return "matter: unsupported write"
 	}
 	return fmt.Sprintf("matter: status 0x%02x", e.Status)
 }
@@ -257,14 +264,46 @@ func Read(ctx context.Context, s *Session, attrs, events []Path) ([]AttrValue, [
 	return av, ev, err
 }
 
+// timed opens a timed interaction on the exchange: the action that follows
+// must reach the device within the timeout (spec 8.7). Door locks require it.
+func timed(ctx context.Context, ex *Exchange, timeout time.Duration) error {
+	var w TLV
+	w.Struct(Anon)
+	w.Uint(0, uint64(timeout/time.Millisecond))
+	w.Uint(tagIMRev, imRevision)
+	w.End()
+	m, err := ex.Request(ctx, protoIM, opTimedRequest, w.Bytes())
+	if err != nil {
+		return err
+	}
+	var st IMError
+	if err := imStatus(m); !errors.As(err, &st) {
+		return fmt.Errorf("matter: expected a status, got 0x%02x", m.Opcode)
+	}
+	if st.Status != 0 {
+		return st
+	}
+	return nil
+}
+
 // Invoke sends a command; fields writes the command's fields (nil: none). It returns the response's fields.
 func Invoke(ctx context.Context, s *Session, endpoint, cluster, command int, fields func(*TLV)) (Elem, error) {
+	return InvokeTimed(ctx, s, endpoint, cluster, command, fields, 0)
+}
+
+// InvokeTimed sends a command as a timed interaction when timeout is set.
+func InvokeTimed(ctx context.Context, s *Session, endpoint, cluster, command int, fields func(*TLV), timeout time.Duration) (Elem, error) {
 	ex := s.NewExchange()
 	defer ex.Close()
+	if timeout > 0 {
+		if err := timed(ctx, ex, timeout); err != nil {
+			return Elem{}, err
+		}
+	}
 	var w TLV
 	w.Struct(Anon)
 	w.Bool(0, false)
-	w.Bool(1, false)
+	w.Bool(1, timeout > 0)
 	w.Array(2)
 	w.Struct(Anon)
 	w.List(0)
@@ -311,6 +350,50 @@ func Invoke(ctx context.Context, s *Session, endpoint, cluster, command int, fie
 		return Elem{}, IMError{code}
 	}
 	return Elem{}, errors.New("matter: an invoke response without a result")
+}
+
+// Write writes one attribute; value writes its data at the tag it is given.
+func Write(ctx context.Context, s *Session, p Path, value func(w *TLV, tag int)) error {
+	ex := s.NewExchange()
+	defer ex.Close()
+	var w TLV
+	w.Struct(Anon)
+	w.Bool(0, false)
+	w.Bool(1, false)
+	w.Array(2)
+	w.Struct(Anon)
+	w.List(1)
+	w.Uint(2, uint64(p.Endpoint))
+	w.Uint(3, uint64(p.Cluster))
+	w.Uint(4, uint64(p.ID))
+	w.End()
+	value(&w, 2)
+	w.End()
+	w.End()
+	w.Uint(tagIMRev, imRevision)
+	w.End()
+	m, err := ex.Request(ctx, protoIM, opWriteRequest, w.Bytes())
+	if err != nil {
+		return err
+	}
+	if err := imStatus(m); err != nil {
+		return err
+	}
+	if m.Opcode != opWriteResponse {
+		return fmt.Errorf("matter: expected a write response, got 0x%02x", m.Opcode)
+	}
+	e, err := DecodeTLV(m.Payload)
+	if err != nil {
+		return err
+	}
+	// One AttributeStatusIB per path written.
+	if st, ok := e.At(0, 0, 1); ok {
+		if code, _ := st.FieldU(0); code != 0 {
+			return IMError{code}
+		}
+		return nil
+	}
+	return errors.New("matter: a write response without a status")
 }
 
 // Subscriber receives a session's subscription reports.

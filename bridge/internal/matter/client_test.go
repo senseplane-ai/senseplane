@@ -6,6 +6,7 @@ package matter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,49 @@ type fakeServer struct {
 	mu   sync.Mutex
 	ws   *websocket.Conn
 	code string
+	// nodes, when set, are the server's nodes instead of the three above.
+	nodes string
+	// commands are the device commands and writes it took.
+	commands []map[string]any
+}
+
+// command does a device command or attribute write on the fake devices: it
+// answers, and reports the changed attribute as a device would (node 13 takes
+// commands and changes nothing; a door lock command must be timed).
+func (f *fakeServer) command(m map[string]any) (map[string]any, []string) {
+	id := m["message_id"]
+	args := m["args"].(map[string]any)
+	f.commands = append(f.commands, args)
+	node := args["node_id"].(float64)
+	if node == 13 {
+		return map[string]any{"message_id": id, "result": nil}, nil
+	}
+	if m["command"] == "write_attribute" {
+		return map[string]any{"message_id": id, "result": []any{}}, []string{fmt.Sprintf(`[%v, %q, %v]`, node, args["attribute_path"], args["value"])}
+	}
+	ep := args["endpoint_id"]
+	at := func(cluster int, attr int, v any) string {
+		return fmt.Sprintf(`[%v, "%v/%d/%d", %v]`, node, ep, cluster, attr, v)
+	}
+	switch args["command_name"] {
+	case "On":
+		return map[string]any{"message_id": id, "result": nil}, []string{at(6, 0, true)}
+	case "Off":
+		return map[string]any{"message_id": id, "result": nil}, []string{at(6, 0, false)}
+	case "MoveToLevelWithOnOff":
+		level := args["payload"].(map[string]any)["level"]
+		return map[string]any{"message_id": id, "result": nil}, []string{at(8, 0, level), at(6, 0, true)}
+	case "LockDoor", "UnlockDoor":
+		if args["timed_request_timeout_ms"] == nil {
+			return map[string]any{"message_id": id, "error_code": 0, "details": "NeedsTimedInteraction"}, nil
+		}
+		state := 1
+		if args["command_name"] == "UnlockDoor" {
+			state = 2
+		}
+		return map[string]any{"message_id": id, "result": nil}, []string{at(257, 0, state)}
+	}
+	return map[string]any{"message_id": id, "error_code": 0, "details": "UnsupportedCommand"}, nil
 }
 
 func (f *fakeServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +105,21 @@ func (f *fakeServer) handler(w http.ResponseWriter, r *http.Request) {
 		var reply map[string]any
 		switch m["command"] {
 		case "start_listening":
-			reply = map[string]any{"message_id": id, "result": json.RawMessage(nodes)}
+			list := nodes
+			if f.nodes != "" {
+				list = f.nodes
+			}
+			reply = map[string]any{"message_id": id, "result": json.RawMessage(list)}
+		case "device_command", "write_attribute":
+			var updates []string
+			f.mu.Lock()
+			reply, updates = f.command(m)
+			_ = ws.WriteJSON(reply)
+			for _, u := range updates {
+				_ = ws.WriteJSON(map[string]any{"event": "attribute_updated", "data": json.RawMessage(u)})
+			}
+			f.mu.Unlock()
+			continue
 		case "server_info":
 			reply = map[string]any{"message_id": id, "result": map[string]any{"schema_version": 14}}
 		case "commission_with_code":

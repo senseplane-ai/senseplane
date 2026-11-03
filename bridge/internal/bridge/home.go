@@ -112,7 +112,7 @@ func (s source) Nodes(n int) {
 
 // State takes a Home Assistant state.
 func (s source) State(st homeassistant.State, initial bool) {
-	if r, ok := homeassistant.ToReading(st.EntityID, st.State, st.Attributes, st.LastUpdated, initial); ok {
+	if r, ok := st.Reading(initial); ok {
 		s.Reading(r)
 	}
 }

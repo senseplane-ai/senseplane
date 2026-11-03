@@ -240,6 +240,7 @@ func (b *Box) run(ctx context.Context, token string) bool {
 		Sensors: map[string]bridge.SensorLink{"phone": b.phone, "bluetooth": b.bt},
 		Finder:  &bridge.Finder{Discover: discover},
 		Matter:  b.matter,
+		// bridge.New adds device_control (ADR 0067): the Matter controller switches what a person asks.
 		Commands: map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			code, _ := args["code"].(string)
 			if code == "" {

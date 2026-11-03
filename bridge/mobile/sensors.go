@@ -5,6 +5,7 @@ package mobile
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -57,7 +58,7 @@ func (l *link) add(entities []api.Entity, readings []api.Reading) {
 	l.mu.Lock()
 	grew := false
 	for _, e := range entities {
-		if old, ok := l.entities[e.EntityID]; !ok || old != e {
+		if old, ok := l.entities[e.EntityID]; !ok || !reflect.DeepEqual(old, e) {
 			l.entities[e.EntityID] = e
 			grew = true
 		}

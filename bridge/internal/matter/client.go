@@ -5,8 +5,8 @@
 // or python-matter-server: the WebSocket API Home Assistant's Matter
 // integration uses), for boxes without Home Assistant (ADR 0062). It lists the
 // devices' sensors, turns their attributes and button presses into readings,
-// and commissions a device with a code shared from its own app. It never
-// sends a device command.
+// and commissions a device with a code shared from its own app. It sends a
+// device command only for one a person asked for (ADR 0067).
 package matter
 
 import (
@@ -22,6 +22,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/senseplane-ai/senseplane/bridge/internal/api"
+	"github.com/senseplane-ai/senseplane/bridge/internal/control"
 )
 
 // Handler is what the controller tells the bridge; calls come from one goroutine.
@@ -40,8 +41,9 @@ type Controller struct {
 	// MinBackoff and MaxBackoff bound the wait between reconnects (default 1 s and 60 s).
 	MinBackoff, MaxBackoff time.Duration
 
-	mu  sync.Mutex
-	cur *conn
+	mu    sync.Mutex
+	cur   *conn
+	nodes map[string]Node // the session's nodes, kept current by attribute_updated (written under mu)
 }
 
 // ErrNotConnected means there is no session with the Matter Server right now.
@@ -134,6 +136,67 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 		return nil, err
 	}
 	return map[string]any{"node_id": n.NodeID.String(), "sensors": len(n.Entities())}, nil
+}
+
+// node is one of the session's nodes, by an entity of it.
+func (c *Controller) node(entityID string) (*conn, Node, int, string, error) {
+	id, ep, sense, ok := ParseEntityID(entityID)
+	if !ok {
+		return nil, Node{}, 0, "", fmt.Errorf("%s isn't a Matter device", entityID)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cur == nil {
+		return nil, Node{}, 0, "", ErrNotConnected
+	}
+	n, ok := c.nodes[id]
+	if !ok {
+		return nil, Node{}, 0, "", fmt.Errorf("the Matter controller has no device %s", id)
+	}
+	// A copy of its attributes, so it can be read while the session updates them.
+	cp := n
+	cp.Attributes = make(map[string]json.RawMessage, len(n.Attributes))
+	for k, v := range n.Attributes {
+		cp.Attributes[k] = v
+	}
+	return c.cur, cp, ep, sense, nil
+}
+
+// DeviceState is an entity's state for a command's report.
+func (c *Controller) DeviceState(entityID string) (control.State, error) {
+	_, n, ep, sense, err := c.node(entityID)
+	if err != nil {
+		return control.State{}, err
+	}
+	return n.DeviceState(ep, sense), nil
+}
+
+// Control runs an action on an entity: a device_command, or a write_attribute for a thermostat setting.
+func (c *Controller) Control(ctx context.Context, entityID string, cmd control.Command) error {
+	cn, n, ep, sense, err := c.node(entityID)
+	if err != nil {
+		return err
+	}
+	if !n.Available {
+		return errors.New("the device isn't answering the Matter controller")
+	}
+	inv, err := n.Invocation(ep, sense, cmd)
+	if err != nil {
+		return err
+	}
+	if inv.Write != nil {
+		_, err = cn.call(ctx, "write_attribute", map[string]any{"node_id": n.NodeID, "attribute_path": inv.Path(), "value": inv.Write.Value}, 30*time.Second)
+	} else {
+		args := map[string]any{"node_id": n.NodeID, "endpoint_id": inv.Endpoint, "cluster_id": inv.Cluster, "command_name": inv.Name, "payload": inv.Payload()}
+		if inv.TimedMs > 0 {
+			args["timed_request_timeout_ms"] = inv.TimedMs
+		}
+		_, err = cn.call(ctx, "device_command", args, 30*time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("the device refused it: %w", err)
+	}
+	return nil
 }
 
 // Run keeps a session open until ctx ends, reconnecting with backoff.
@@ -235,11 +298,11 @@ func (c *Controller) session(ctx context.Context, h Handler) error {
 		nodes[n.NodeID.String()] = n
 	}
 	c.mu.Lock()
-	c.cur = cn
+	c.cur, c.nodes = cn, nodes
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
-		c.cur = nil
+		c.cur, c.nodes = nil, nil
 		c.mu.Unlock()
 	}()
 	c.Log.Info("connected to the Matter controller", "devices", len(nodes))
@@ -289,7 +352,9 @@ func (c *Controller) session(ctx context.Context, h Handler) error {
 					continue
 				}
 				_, known := nodes[n.NodeID.String()]
+				c.mu.Lock()
 				nodes[n.NodeID.String()] = n
+				c.mu.Unlock()
 				publish()
 				if !known && n.Available {
 					for _, r := range n.Readings(time.Now()) {
@@ -299,7 +364,9 @@ func (c *Controller) session(ctx context.Context, h Handler) error {
 			case "node_removed":
 				var id json.Number
 				if json.Unmarshal(m.Data, &id) == nil {
+					c.mu.Lock()
 					delete(nodes, id.String())
+					c.mu.Unlock()
 					publish()
 				}
 			case "attribute_updated":
@@ -316,11 +383,10 @@ func (c *Controller) session(ctx context.Context, h Handler) error {
 				if !ok {
 					continue
 				}
-				if n.Attributes == nil {
-					n.Attributes = map[string]json.RawMessage{}
-				}
-				n.Attributes[p] = upd[2]
+				c.mu.Lock()
+				n.SetAttribute(p, upd[2])
 				nodes[id.String()] = n
+				c.mu.Unlock()
 				if r, ok := n.Reading(p, upd[2], time.Now()); ok {
 					h.Reading(r)
 				}

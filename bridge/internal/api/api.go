@@ -77,7 +77,7 @@ func (r Reading) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// Entity is one Home Assistant entity the bridge can send, as listed for a person to choose from.
+// Entity is one entity the bridge can send (Home Assistant's, a Matter device's), as listed for a person to choose from.
 type Entity struct {
 	EntityID    string `json:"entity_id"`
 	Name        string `json:"name"`
@@ -85,6 +85,8 @@ type Entity struct {
 	DeviceClass string `json:"device_class,omitempty"`
 	Sense       string `json:"sense"`
 	Kind        string `json:"kind"`
+	// Controls are the actions the box can run on it (ADR 0067); none for a sensor.
+	Controls []string `json:"controls,omitempty"`
 }
 
 // CameraHealth is one camera's state in a health report.

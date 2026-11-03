@@ -4,7 +4,8 @@
 // Package bridge runs the bridge: it polls the API for the cameras assigned
 // to this bridge, keeps one relay per camera, and reports every camera's
 // state as a heartbeat and whenever a state changes. With a Home Assistant
-// it also lists its sensors and sends the ones a person chose. Outbound only.
+// it also lists its sensors and sends the ones a person chose, and switches a
+// device only for a command a person asked for (ADR 0067). Outbound only.
 package bridge
 
 import (
@@ -42,7 +43,9 @@ type Options struct {
 	SendEvery time.Duration
 	// OnRefused is called when the API refuses the bridge token (a paired box pairs again).
 	OnRefused func()
-	// Commands are the kinds of work this box can do (ADR 0062); nil: it takes none.
+	// Commands are the kinds of work this box can do (ADR 0062); nil: it takes
+	// none. device_control is added when Home Assistant or a Matter controller
+	// that can switch devices (a Controllable) is set.
 	Commands map[string]Handler
 	// Matter, when set, is a Matter controller whose devices are sensors too (ADR 0062).
 	Matter MatterLink
@@ -86,6 +89,11 @@ type Bridge struct {
 	home    *home
 	found   *found
 	maxRes  string // the plan's largest stream, from the config
+	// ha switches Home Assistant's devices on the session Run keeps (nil without one).
+	ha *homeassistant.Client
+	// controls are the links that switch devices, by link name.
+	controls map[string]Controllable
+	settle   time.Duration // how long device_control waits for the state
 }
 
 // New returns a bridge; call Run.
@@ -93,7 +101,8 @@ func New(o Options) *Bridge {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1)}
+	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1),
+		controls: map[string]Controllable{}, settle: settleFor}
 	if o.HomeAssistant != nil || o.Matter != nil || len(o.Sensors) > 0 {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
 	}
@@ -103,6 +112,21 @@ func New(o Options) *Bridge {
 			b.home.cameras = b.found.cameras // Home Assistant's cameras name the ones found
 		}
 		cmds := map[string]Handler{"onvif_add_camera": b.addONVIF, "onvif_search": b.searchONVIF}
+		for k, h := range o.Commands {
+			cmds[k] = h
+		}
+		o.Commands = cmds
+	}
+	if o.HomeAssistant != nil {
+		b.ha = &homeassistant.Client{}
+		b.controls[linkHomeAssistant] = b.ha
+	}
+	if c, ok := o.Matter.(Controllable); ok {
+		b.controls[linkMatter] = c
+	}
+	if b.home != nil && len(b.controls) > 0 {
+		// Switching a device a person asked to (ADR 0067).
+		cmds := map[string]Handler{"device_control": b.deviceControl}
 		for k, h := range o.Commands {
 			cmds[k] = h
 		}
@@ -161,7 +185,7 @@ func (b *Bridge) Cameras() []api.CameraHealth {
 func (b *Bridge) Run(ctx context.Context) {
 	if b.home != nil {
 		if ha := b.o.HomeAssistant; ha != nil {
-			go homeassistant.Run(ctx, homeassistant.Options{URL: homeassistant.WebsocketURL(ha.URL), Token: ha.Token, Log: b.o.Log}, b.home.source(linkHomeAssistant))
+			go homeassistant.Run(ctx, homeassistant.Options{URL: homeassistant.WebsocketURL(ha.URL), Token: ha.Token, Log: b.o.Log, Client: b.ha}, b.home.source(linkHomeAssistant))
 		}
 		for name, l := range b.o.Sensors {
 			go l.Run(ctx, b.home.source(name))

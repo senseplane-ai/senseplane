@@ -223,6 +223,7 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 			mc = &matter.Controller{URL: matterURL, Log: log}
 		}
 		o.Matter = mc
+		// bridge.New adds device_control (ADR 0067) for Home Assistant and Matter, with or without this.
 		o.Commands = map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			code, _ := args["code"].(string)
 			if code == "" {

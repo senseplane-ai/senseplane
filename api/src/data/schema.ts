@@ -566,7 +566,7 @@ export interface FollowsTable {
   finished_at: Nullable<Date>;
 }
 
-export type WorkflowRunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed";
+export type WorkflowRunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
 export type WorkflowStepStatus = "running" | "waiting" | "succeeded" | "failed" | "skipped";
 type Json<T> = ColumnType<T, string, string>;
 
@@ -584,6 +584,8 @@ export interface WorkflowsTable {
   fire_claimed_until: Nullable<Date>;
   last_fired_at: Nullable<Date>;
   runs_dropped: ColumnType<number, number | undefined, number>;
+  hook_failures: ColumnType<number, number | undefined, number>;
+  last_hook_failure_at: Nullable<Date>;
   last_run_at: Nullable<Date>;
   created_by: string;
   updated_by: string;
@@ -594,7 +596,7 @@ export interface WorkflowsTable {
 export interface WorkflowRunsTable {
   id: string;
   account_id: string;
-  workflow_id: string;
+  workflow_id: string | null;
   definition: Json<WorkflowDefinition>;
   source_ids: string[];
   workflow_name: string;

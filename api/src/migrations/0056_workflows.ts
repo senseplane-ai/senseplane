@@ -35,6 +35,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("fire_claimed_until", "timestamptz")
     .addColumn("last_fired_at", "timestamptz")
     .addColumn("runs_dropped", "integer", (c) => c.notNull().defaultTo(0))
+    // Webhook requests whose signature didn't verify: counted, and audited at most once a minute (no body kept).
+    .addColumn("hook_failures", "integer", (c) => c.notNull().defaultTo(0))
+    .addColumn("last_hook_failure_at", "timestamptz")
     .addColumn("last_run_at", "timestamptz")
     .addColumn("created_by", "text", (c) => c.notNull())
     .addColumn("updated_by", "text", (c) => c.notNull())
@@ -48,7 +51,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createTable("workflow_runs")
     .addColumn("id", "text", (c) => c.primaryKey())
     .addColumn("account_id", "uuid", (c) => c.notNull().references("accounts.id").onDelete("cascade"))
-    .addColumn("workflow_id", "text", (c) => c.notNull().references("workflows.id").onDelete("cascade"))
+    // A deleted workflow's runs stay (cancelled, said why) until they are pruned.
+    .addColumn("workflow_id", "text", (c) => c.references("workflows.id").onDelete("set null"))
     // What this run follows, as it was when it started: edits never change a run under way.
     .addColumn("definition", "jsonb", (c) => c.notNull())
     .addColumn("source_ids", sql`text[]`, (c) => c.notNull())
@@ -56,12 +60,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // What started it: { type, event_id?, input?, scheduled_for?, by? }.
     .addColumn("trigger", "jsonb", (c) => c.notNull())
     .addColumn("event_id", "text")
-    .addColumn("status", "text", (c) => c.notNull().defaultTo("queued").check(sql`status IN ('queued', 'running', 'waiting', 'succeeded', 'failed')`))
+    .addColumn("status", "text", (c) => c.notNull().defaultTo("queued").check(sql`status IN ('queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled')`))
     .addColumn("error", "text")
     .addColumn("failed_step", "text")
     .addColumn("due_at", "timestamptz", (c) => c.defaultTo(sql`now()`))
     .addColumn("claimed_until", "timestamptz")
     .addColumn("claim_token", "text")
+    // Times another process took the run over from one whose lease ran out (not resumes after a wait).
     .addColumn("claims", "integer", (c) => c.notNull().defaultTo(0))
     .addColumn("created_at", "timestamptz", (c) => c.notNull().defaultTo(sql`now()`))
     .addColumn("started_at", "timestamptz")
@@ -114,7 +119,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     RETURNS TABLE(id text, account_id uuid, token text)
     LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public SET row_security = off AS $$
       UPDATE workflow_runs r SET claimed_until = at + make_interval(secs => lease_s), claim_token = gen_random_uuid()::text,
-        claims = r.claims + 1, status = 'running', started_at = coalesce(r.started_at, at)
+        claims = r.claims + CASE WHEN r.claimed_until IS NOT NULL THEN 1 ELSE 0 END, status = 'running', started_at = coalesce(r.started_at, at)
       WHERE r.id IN (
         SELECT d.id FROM workflow_runs d JOIN accounts a ON a.id = d.account_id
         WHERE d.due_at IS NOT NULL AND d.due_at <= at AND (d.claimed_until IS NULL OR d.claimed_until < at) AND a.deleted_at IS NULL
@@ -141,12 +146,37 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       SELECT w.account_id, w.hook_secret, w.enabled, w.trigger_type FROM workflows w JOIN accounts a ON a.id = w.account_id
       WHERE w.id = workflow AND a.deleted_at IS NULL
     $$`.execute(db);
-  // Finished runs older than the days given go, with their steps.
+  // Finished runs go after the days given (30), or sooner: never kept longer than the shortest retention of
+  // their cameras and sensors (or the account's), since a step's output and a webhook's input describe footage.
   await sql`CREATE FUNCTION prune_workflow_runs(days integer) RETURNS integer
     LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public SET row_security = off AS $$
-      WITH gone AS (DELETE FROM workflow_runs WHERE due_at IS NULL AND created_at < now() - make_interval(days => days) RETURNING 1)
+      WITH keep AS (
+        SELECT r.id, least(days, coalesce((SELECT min(coalesce(s.retention_days, a.retention_days, days)) FROM sources s WHERE s.id = ANY(r.source_ids)),
+          a.retention_days, days)) AS d
+        FROM workflow_runs r JOIN accounts a ON a.id = r.account_id
+        WHERE r.due_at IS NULL
+      ), gone AS (
+        DELETE FROM workflow_runs w USING keep k WHERE w.id = k.id AND w.created_at < now() - make_interval(days => k.d) RETURNING 1
+      )
       SELECT count(*)::integer FROM gone
     $$`.execute(db);
+  // When the event that started a run, or one of its sources, is deleted, what the run kept about it goes too:
+  // step outputs and the webhook's input. The run's statuses and errors stay.
+  await sql`CREATE FUNCTION workflow_runs_forget() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public SET row_security = off AS $$
+    BEGIN
+      IF TG_TABLE_NAME = 'events' THEN
+        UPDATE workflow_run_steps SET output = NULL WHERE run_id IN (SELECT id FROM workflow_runs WHERE account_id = OLD.account_id AND event_id = OLD.id);
+        UPDATE workflow_runs SET trigger = trigger - 'input' WHERE account_id = OLD.account_id AND event_id = OLD.id;
+      ELSE
+        UPDATE workflow_run_steps SET output = NULL WHERE run_id IN (SELECT id FROM workflow_runs WHERE account_id = OLD.account_id AND OLD.id = ANY(source_ids));
+        UPDATE workflow_runs SET trigger = trigger - 'input' WHERE account_id = OLD.account_id AND OLD.id = ANY(source_ids);
+      END IF;
+      RETURN OLD;
+    END $$`.execute(db);
+  await sql`REVOKE ALL ON FUNCTION workflow_runs_forget() FROM PUBLIC`.execute(db);
+  await sql`CREATE TRIGGER workflow_runs_forget_event AFTER DELETE ON events FOR EACH ROW EXECUTE FUNCTION workflow_runs_forget()`.execute(db);
+  await sql`CREATE TRIGGER workflow_runs_forget_source AFTER DELETE ON sources FOR EACH ROW EXECUTE FUNCTION workflow_runs_forget()`.execute(db);
 
   for (const f of FUNCTIONS) await sql.raw(`REVOKE ALL ON FUNCTION ${f} FROM PUBLIC`).execute(db);
   await sql`DO $$ BEGIN
@@ -158,6 +188,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
 }
 
 export async function down(db: Kysely<unknown>): Promise<void> {
+  await sql`DROP TRIGGER workflow_runs_forget_event ON events`.execute(db);
+  await sql`DROP TRIGGER workflow_runs_forget_source ON sources`.execute(db);
+  await sql`DROP FUNCTION workflow_runs_forget()`.execute(db);
   for (const f of FUNCTIONS) await sql.raw(`DROP FUNCTION ${f}`).execute(db);
   await sql`DELETE FROM speak_messages WHERE kind = 'workflow'`.execute(db);
   await sql`ALTER TABLE speak_messages DROP CONSTRAINT speak_messages_kind_check`.execute(db);

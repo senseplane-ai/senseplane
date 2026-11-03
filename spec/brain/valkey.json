@@ -106,7 +106,7 @@
       ],
       "value": {
         "type": "object",
-        "description": "{id, sources, mode, compiled, status, active_hours} (active_hours: spec/schemas/watch-schedule.json or null, ADR 0043)"
+        "description": "{id, sources, mode, compiled, status, active_hours, blur?} (active_hours: spec/schemas/watch-schedule.json or null, ADR 0043; blur: {faces, plates} when the agent that made the watch, or an agent or chat it notifies, only sees one of its cameras blurred: its model checks and snapshots are blurred whatever the camera's setting, ADR 0068)"
       }
     },
     "views": {

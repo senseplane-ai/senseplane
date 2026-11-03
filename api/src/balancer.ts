@@ -31,7 +31,7 @@ export interface BrainLoad {
 
 export class Balancer {
   private cache = new Map<string, { brain: string; at: number }>();
-  private live?: { at: number; brains: Map<string, { cpu: number }> };
+  private live?: { at: number; brains: Map<string, { cpu: number; features?: string[] }> };
   private timer?: NodeJS.Timeout;
 
   constructor(private readonly r: Redis, private readonly log?: FastifyBaseLogger, private readonly o: { cacheMs?: number; rebalanceEveryMs?: number; skew?: number } = {}) {}
@@ -46,10 +46,10 @@ export class Balancer {
   }
 
   /** Live brains and their heartbeat load, cached for a second. */
-  async liveBrains(): Promise<Map<string, { cpu: number }>> {
+  async liveBrains(): Promise<Map<string, { cpu: number; features?: string[] }>> {
     if (this.live && Date.now() - this.live.at < 1000) return this.live.brains;
     const ids = await this.r.smembers(BRAINS);
-    const brains = new Map<string, { cpu: number }>();
+    const brains = new Map<string, { cpu: number; features?: string[] }>();
     if (ids.length) {
       const beats = await this.r.mget(...ids.map(brainKey));
       const dead: string[] = [];
@@ -57,7 +57,8 @@ export class Balancer {
         const b = beats[i];
         if (!b) return void dead.push(id);
         try {
-          brains.set(id, { cpu: Number(JSON.parse(b).cpu ?? 0) || 0 });
+          const beat = JSON.parse(b);
+          brains.set(id, { cpu: Number(beat.cpu ?? 0) || 0, features: Array.isArray(beat.features) ? beat.features.map(String) : [] });
         } catch {
           brains.set(id, { cpu: 0 });
         }
@@ -66,6 +67,15 @@ export class Balancer {
     }
     this.live = { at: Date.now(), brains };
     return brains;
+  }
+
+  /**
+   * Does every live brain support this (its heartbeat's `features`)? A request goes to any free brain, so
+   * one brain from before a feature is enough to say no (ADR 0068: a brain without "blur" answers raw).
+   */
+  async allSupport(feature: string): Promise<boolean> {
+    const live = [...(await this.liveBrains()).values()];
+    return live.length > 0 && live.every((b) => b.features?.includes(feature));
   }
 
   /** Cameras per live brain, from the assignment hash (the source of truth). */

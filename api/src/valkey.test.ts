@@ -167,6 +167,20 @@ describe.skipIf(!up)("valkey bus and balancer", () => {
     await r.del("sp:balancer:lock");
     expect(await b.rebalance()).toBeUndefined(); // 2 vs 1: within the skew
   });
+
+  it("knows whether every live brain can blur (ADR 0068)", async () => {
+    await r.del("sp:brains");
+    const beat = (id: string, features?: string[]) =>
+      r.multi().set(`sp:brain:${id}`, JSON.stringify({ id, cameras: 0, cpu: 0, ...(features ? { features } : {}) }), "EX", 6).sadd("sp:brains", id).exec();
+    const fresh = () => new Balancer(r, undefined, { cacheMs: 0 });
+    expect(await fresh().allSupport("blur")).toBe(false); // no brain at all
+    await beat("n1", ["blur"]);
+    expect(await fresh().allSupport("blur")).toBe(true);
+    await beat("old1"); // a brain from before blurring
+    expect(await fresh().allSupport("blur")).toBe(false);
+    await r.del("sp:brain:old1");
+    expect(await fresh().allSupport("blur")).toBe(true);
+  });
 });
 
 describe("leastBusy", () => {

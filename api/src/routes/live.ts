@@ -185,15 +185,18 @@ export async function sweepLiveSessions(
 }
 
 /** Ends an account's live viewers (allowance used up, access revoked). Returns how many. */
-export async function closeViewers(data: DataAccess, media: MediaControl | undefined, accountId: string, reason: string, filter: { sourceId?: string; sessionId?: string } = {}) {
+export async function closeViewers(data: DataAccess, media: MediaControl | undefined, accountId: string, reason: string,
+  filter: { sourceId?: string; sessionId?: string; actor?: string } = {}) {
   const rows = await data.withAccount(accountId, (s) => {
     let q = s.db.selectFrom("live_sessions").select(["id", "source_id"]).where("ended_at", "is", null);
     if (filter.sourceId) q = q.where("source_id", "=", filter.sourceId);
+    if (filter.actor) q = q.where("actor", "=", filter.actor);
     if (filter.sessionId) q = q.where("id", "=", filter.sessionId);
     return q.execute();
   });
   for (const r of rows) {
-    await media?.removeViewer?.(r.source_id, r.id, reason);
+    // The session ends here even when telling the media plane fails.
+    await Promise.resolve(media?.removeViewer?.(r.source_id, r.id, reason)).catch(() => undefined);
     await endSession(data, accountId, r.id, new Date(), reason);
   }
   return rows.length;

@@ -83,7 +83,11 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
   data: DataAccess; storage?: ObjectStorage; urls: (req: { protocol: string; host: string }) => EventUrls;
   /** The account's footage keys (ADR 0066): deleting the account deletes them, so what is stored can't be read. */
   keys?: KeyRing;
+  /** A grant was added or removed (ADR 0068): watches are published again, and a new blurred-only grant ends the agent's live view there. */
+  onGrantsChanged?(accountId: string, change: { agentId?: string; blurredOnlySources?: string[] }): Promise<void>;
 }) {
+  const grantsChanged = (accountId: string, change: { agentId?: string; blurredOnlySources?: string[] }) =>
+    deps.onGrantsChanged?.(accountId, change).catch((err) => app.log.warn({ err }, "grant change follow-up failed"));
   // --- agents ------------------------------------------------------------------
   app.post<{ Body: { name: string } }>(
     "/v1/agents",
@@ -159,6 +163,7 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
         if (!agent) throw new ApiError(404, "not_found", "agent not found");
         return insertGrant(s.db, () => s.sources.list(), req.accountId!, req.body.agent_id, req.body);
       });
+      await grantsChanged(req.accountId!, { agentId: row.agent_id, ...(row.blurred_only ? { blurredOnlySources: row.source_ids } : {}) });
       return reply.code(201).send(toGrant(row));
     },
   );
@@ -169,6 +174,7 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
   app.delete<{ Params: { id: string } }>("/v1/grants/:id", async (req, reply) => {
     const r = await deps.data.withAccount(req.accountId!, (s) => s.db.deleteFrom("grants").where("id", "=", req.params.id).executeTakeFirst());
     if (!r.numDeletedRows) throw new ApiError(404, "not_found", "grant not found");
+    await grantsChanged(req.accountId!, {});
     return reply.code(204).send();
   });
 

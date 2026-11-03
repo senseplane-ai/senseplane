@@ -179,6 +179,7 @@ export async function startBus(
       await main.publish(KEYS.changed, JSON.stringify({ bucket: "watches", key, op: watch ? "put" : "del" }));
     },
     request,
+    supports: (feature) => balancer.allSupport(feature),
     stream: (subject, payload, on, limits) => brainStream(main, request, subject, payload, on, limits),
     async latestSnapshot(accountId, sourceId) {
       const b = await main.getBuffer(KEYS.snapshot(`${accountId}.${sourceId}`));

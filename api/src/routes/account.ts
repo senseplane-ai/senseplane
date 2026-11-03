@@ -149,9 +149,8 @@ export function registerAccountRoutes(
           .where("id", "=", accountId)
           .execute();
       });
-      if ((b.blur_faces !== undefined && b.blur_faces !== current!.blur_faces) || (b.blur_plates !== undefined && b.blur_plates !== current!.blur_plates)) {
-        await deps.onBlurChanged?.(accountId);
-      }
+      // Sent again even when unchanged: a save is how someone makes sure it reached the brain (ADR 0068).
+      if (b.blur_faces !== undefined || b.blur_plates !== undefined) await deps.onBlurChanged?.(accountId);
       return show(accountId);
     },
   );

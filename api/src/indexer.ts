@@ -59,6 +59,8 @@ export interface ApiBus {
   putWatch(accountId: string, watchId: string, watch: Record<string, unknown> | null): Promise<void>;
   /** A request to any free brain (spec/brain/valkey.json "requests"; subject rpc.brain.<method>). */
   request<T>(subject: string, payload: unknown, timeoutMs?: number): Promise<T>;
+  /** Does every live brain support this feature (its heartbeat's `features`, e.g. "blur", ADR 0068)? */
+  supports?(feature: string): Promise<boolean>;
   latestSnapshot(accountId: string, sourceId: string): Promise<Uint8Array | undefined>;
   /**
    * A streamed brain request (rpc.brain.chat, ADR 0041): the brain pushes events and tool calls onto

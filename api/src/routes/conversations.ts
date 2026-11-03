@@ -9,7 +9,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { sql } from "kysely";
 import type { Selectable } from "kysely";
 import { canSense, grantFilter, seesSource } from "../access.js";
-import { blurFor } from "../blur.js";
+import { blurFor, effectiveBlur, requireBlurringBrains } from "../blur.js";
 import type { AccountScope, DataAccess } from "../data/access.js";
 import { newId } from "../data/ids.js";
 import type { ConversationsTable, Database, MessagesTable, StoredMoment } from "../data/schema.js";
@@ -113,6 +113,8 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         const clip = { kind: "range" as const, accountId: s.accountId, sourceId: m.source_id, from: t - 5000, to: end + 5000, ...claims };
         const e = m.event_id ? events.get(m.event_id) : undefined;
         const snapshot_url = e ? toEvent(e, src, u).media.snapshot_url ?? null : null;
+        // Blurred only (ADR 0068): the snapshot, never the recording.
+        if (claims.bo) return { ...base, until: m.until, snapshot_url };
         return { ...base, until: m.until, snapshot_url, clip_url: `${u.base}/playback/${u.signer.sign(clip, u.ttlSeconds).token}/index.m3u8` };
       }
       const claims = u.claims ? u.claims(m.source_id, t - 10_000, t + 10_000) : {};
@@ -121,6 +123,7 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         ? `${u.base}/media/${u.signer.sign({ kind: "object", accountId: s.accountId, key: m.snapshot_key, ...claims }, u.ttlSeconds).token}/snapshot.jpg`
         : null;
       const clip = { kind: "range" as const, accountId: s.accountId, sourceId: m.source_id, from: t - 10_000, to: t + 10_000, ...claims };
+      if (claims.bo) return { ...base, snapshot_url };
       return { ...base, snapshot_url, clip_url: `${u.base}/playback/${u.signer.sign(clip, u.ttlSeconds).token}/index.m3u8` };
     }));
   }
@@ -228,6 +231,12 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         return { conversation, chosen, history };
       });
       const allowed = new Map(chosen.map((x) => [x.id, x]));
+      // An answer may look at these cameras: if any of them is blurred, every brain must be able to blur (ADR 0068).
+      const workspace = await deps.data.withAccount(accountId, (s) => s.account.get());
+      await requireBlurringBrains(deps.bus, chosen.some((x) => {
+        const b = effectiveBlur(x, workspace);
+        return b.faces || b.plates || !!blurFor(req, x.id).blur;
+      }));
       const brainSources = chosen.map((x) => ({
         id: x.id, name: x.name, location: x.location, type: x.type, status: x.status, site: x.site ?? null,
         zones: (x.zones ?? []).map((z) => z.name),

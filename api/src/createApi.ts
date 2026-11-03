@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import { Counter, Registry, collectDefaultMetrics } from "prom-client";
 import { logMixin } from "@senseplane/telemetry";
 import { DataAccess } from "./data/access.js";
@@ -18,13 +18,13 @@ import { registerConversationRoutes } from "./routes/conversations.js";
 import { expireWatches, registerWatchRoutes } from "./routes/watches.js";
 import { registerInboxRoutes } from "./routes/inbox.js";
 import { checkRoute } from "./access.js";
-import { effectiveBlur } from "./blur.js";
+import { effectiveBlur, requireBlurringBrains } from "./blur.js";
 import { checkRole } from "./roles.js";
 import { purgeDeletedAccounts } from "./purge.js";
 import { registerTrustRoutes } from "./routes/trust.js";
 import { registerAppRoutes } from "./routes/apps.js";
 import { enforceLimits, isIngestMeter, overLimits, registerUsageRoutes, sampleStorage } from "./routes/usage.js";
-import { kvValue } from "./routes/watches.js";
+import { republishWatches, watchKv } from "./routes/watches.js";
 import { demoConfig, registerDemoRoutes, sweepDemos } from "./routes/demo.js";
 import { registerSourceConfigRoutes } from "./routes/source-config.js";
 import { startClipWorker, startWebhookWorker } from "./workers.js";
@@ -37,7 +37,7 @@ import { MaskCache } from "./frames.js";
 import type { ApiModule, AuditLog, ModuleContext, Quota, UsageRecord } from "./module.js";
 import { registerAccountRoutes } from "./routes/account.js";
 import { registerSourceRoutes } from "./routes/sources.js";
-import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
+import { closeViewers, registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
 import { markSilentBridges, registerBridgeAdminRoutes, registerBridgeRoutes } from "./routes/bridges.js";
 import { registerPairingRoutes } from "./routes/pairing.js";
 import { expireConfirmations, registerDeviceRoutes, sweepLostCommands } from "./routes/devices.js";
@@ -384,10 +384,22 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   };
   /** The account's blurring changed: every camera that follows it gets its new effective setting. */
   const publishAllConfigs = async (accountId: string) => {
-    for (const src of await data.withAccount(accountId, (s) => s.sources.list())) await publishConfig(accountId, src);
+    for (const src of await data.withAccount(accountId, (s) => s.sources.list())) {
+      await publishConfig(accountId, src).catch((err) => app.log.warn({ err, account: accountId, source: src.id }, "source config publish failed; the next sweep sends it again"));
+    }
+  };
+  /**
+   * Every camera's config again (on start and every few minutes, ADR 0068): blurring that failed to reach
+   * the brain once (Valkey down during a PATCH) never stays off there. Cheap: one hash write per camera.
+   */
+  const republishAllConfigs = async () => {
+    if (!bus) return;
+    const rows = (await sql<{ account_id: string }>`select * from accounts_with_cameras()`.execute(data.db())).rows;
+    for (const r of rows) await publishAllConfigs(r.account_id);
   };
   /** A stored snapshot blurred by a brain, for a blurred-only agent (rpc.brain.redact). */
   const redactSnapshot = async (accountId: string, sourceId: string, jpeg: Buffer) => {
+    await requireBlurringBrains(bus, true);
     const out = await bus?.request<{ jpeg_b64?: string; error?: string }>("rpc.brain.redact", { account_id: accountId, source_id: sourceId, jpeg_b64: jpeg.toString("base64") }, 20_000)
       .catch(() => undefined);
     if (!out?.jpeg_b64) throw new ApiError(503, "service_unavailable", "this snapshot can only be served blurred, and the brain did not answer");
@@ -447,11 +459,20 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     },
   });
   const ipSalt = (await data.secrets.get("demo_ip_salt")) ?? (await data.secrets.putIfAbsent("demo_ip_salt", newPlaybackSecret()));
-  registerTrustRoutes(app, { data, storage, urls: eventUrls, keys: keyRing });
+  registerTrustRoutes(app, {
+    data, storage, urls: eventUrls, keys: keyRing,
+    onGrantsChanged: async (accountId, change) => {
+      // Live video is raw: a new blurred-only grant ends that agent's viewers there now, not at their idle timeout.
+      for (const sourceId of change.blurredOnlySources ?? []) {
+        await closeViewers(data, mediaControl, accountId, "blurred_only", { sourceId, actor: `agent:${change.agentId}` });
+      }
+      await republishWatches(data, bus, accountId);
+    },
+  });
   // Telegram chats: alerts and questions (ADR 0059).
   const telegramConfig = options.telegram === false ? undefined : options.telegram ?? telegramConfigFromEnv();
   const channels: ChannelDeps = {
-    data, app, storage, audit, log: app.log, consoleUrl: auth.consoleUrls[0],
+    data, app, storage, audit, log: app.log, consoleUrl: auth.consoleUrls[0], redact: redactSnapshot,
     ...(telegramConfig ? { bot: new TelegramBot(telegramConfig, options.telegramFetch) } : {}),
   };
   registerChannelRoutes(channels);
@@ -533,6 +554,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       ...(mediaDriver ? [{ name: "media.feeds", everyS: 30, run: () => mediaDriver.sweepFeeds() }] : []),
       { name: "storage.sample", everyS: 3600, run: () => sampleStorage(data) },
       { name: "idempotency.expire", everyS: 3600, run: () => expireIdempotencyKeys(data) },
+      { name: "sources.republish", everyS: 300, run: () => republishAllConfigs() },
       {
         name: "usage.limits", everyS: 30,
         run: async (state) => {
@@ -542,7 +564,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
           for (const id of (state as { over?: string[] } | null)?.over ?? []) {
             if (now.has(id)) continue;
             const rows = await data.withAccount(id, (s) => s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute());
-            for (const w of rows) await bus?.putWatch(id, w.id, kvValue(w));
+            for (const w of rows) await bus?.putWatch(id, w.id, await watchKv(data, id, w));
           }
           return { over: [...now.keys()] };
         },
@@ -570,6 +592,9 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     const workerBase = options.apiPublicUrl ?? `http://localhost:${process.env.PORT ?? 8080}`;
     stoppers.push(startWebhookWorker(data, { signer: playbackSigner, base: workerBase, ttlSeconds: options.playbackTtlSeconds ?? 900 }, app.log));
   }
+  // Blurring settings reach the brain on every start, whatever happened while no API was up (ADR 0068);
+  // the sources.republish job keeps sending them every few minutes.
+  if (bus) void republishAllConfigs().catch((err) => app.log.warn({ err }, "republishing source configs on start failed"));
   // Any other /v1 route answers 501.
   app.all("/v1/*", async (req, reply) =>
     reply.code(501).send(errorBody("not_implemented", "this endpoint is not implemented", String(req.id))),

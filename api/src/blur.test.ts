@@ -55,11 +55,15 @@ describe("privacy blurring", () => {
   let end = base;
   const configs = new Map<string, Record<string, unknown>>();
   const requests: { subject: string; payload: Record<string, unknown> }[] = [];
+  const watches = new Map<string, Record<string, unknown> | null>();
+  let brainsBlur = true; // every live brain advertises "blur"
+  let appUrl = "";
   const bus: ApiBus = {
     async putSourceConfig(a, s, config) { configs.set(`${a}.${s}`, config); },
     async latestSnapshot() { return RAW; },
-    async putWatch() {},
+    async putWatch(a, w, watch) { watches.set(`${a}.${w}`, watch); },
     async close() {},
+    async supports() { return brainsBlur; },
     async request<T>(subject: string, payload: unknown): Promise<T> {
       requests.push({ subject, payload: payload as Record<string, unknown> });
       if (subject === "rpc.brain.redact") return { jpeg_b64: BLURRED.toString("base64") } as T;
@@ -81,6 +85,7 @@ describe("privacy blurring", () => {
   beforeAll(async () => {
     const t = await createTestDatabase();
     drop = t.drop;
+    appUrl = t.appUrl;
     api = await createApi({
       database: t.appUrl, logger: false, captureUrl: "https://c/capture.html", workers: false, bus, storage: S3, sweepIntervalSeconds: 0,
       media: { async createIngestSession() { return { id: "s", publish_url: "ws://m/" }; } },
@@ -201,5 +206,78 @@ describe("privacy blurring", () => {
     const asks = requests.filter((r) => r.subject === "rpc.brain.ask");
     expect(asks[0]!.payload.blur).toEqual({ faces: true, plates: true });
     expect(asks[1]!.payload.blur).toBeUndefined();
+  });
+
+  it("sends every camera's blurring again on every save and on start", async () => {
+    configs.clear();
+    await call(owner, "PATCH", "/v1/account", { blur_faces: false }); // the value it already has
+    expect(configs.get(`${acc}.${cam}`)?.blur).toEqual({ faces: false, plates: false });
+    expect(configs.get(`${acc}.${cam2}`)?.blur).toEqual({ faces: false, plates: false });
+    configs.clear();
+    const again = await createApi({ database: appUrl, logger: false, captureUrl: "https://c/capture.html", workers: false, bus, storage: S3, sweepIntervalSeconds: 0 });
+    try {
+      for (let i = 0; i < 50 && !configs.has(`${acc}.${cam2}`); i++) await new Promise((r) => setTimeout(r, 100));
+      expect(configs.get(`${acc}.${cam}`)?.blur).toEqual({ faces: false, plates: false });
+      expect(configs.get(`${acc}.${cam2}`)?.blur).toEqual({ faces: false, plates: false });
+    } finally {
+      await again.close();
+    }
+  });
+
+  it("refuses what needs blurring while a running brain can't blur", async () => {
+    const bo = await agentWith({ blurred_only: true });
+    const now = (await call(bo.api_key, "GET", `/v1/sources/${cam}/now`)).json();
+    brainsBlur = false;
+    try {
+      expect((await call(bo.api_key, "POST", `/v1/sources/${cam}/ask`, { question: "Who is at the door?" })).statusCode).toBe(503);
+      expect((await api.public.inject({ url: path(now.snapshot_url) })).statusCode).toBe(503);
+      expect((await call(owner, "POST", `/v1/sources/${cam}/ask`, { question: "Who is at the door?" })).statusCode).toBe(200); // nothing to blur
+      await call(owner, "PATCH", `/v1/sources/${cam}`, { blur_faces: true });
+      expect((await call(owner, "POST", `/v1/sources/${cam}/ask`, { question: "Who is at the door?" })).statusCode).toBe(503);
+      const conv = (await call(owner, "POST", "/v1/conversations", {})).json();
+      expect((await call(owner, "POST", `/v1/conversations/${conv.id}/messages`, { content: "Who came by?", sources: [cam] })).statusCode).toBe(503);
+    } finally {
+      brainsBlur = true;
+      await call(owner, "PATCH", `/v1/sources/${cam}`, { blur_faces: null });
+    }
+    expect((await call(bo.api_key, "POST", `/v1/sources/${cam}/ask`, { question: "Who is at the door?" })).statusCode).toBe(200);
+  });
+
+  it("publishes a watch blurred when the agent that made it or one it notifies only sees blurred media", async () => {
+    const compiled = { trigger: { type: "objects", label: "person", on: "present" }, verify: { prompt: "Is someone at the door?", min_confidence: 0.7 }, cooldown_s: 0, active_hours: null };
+    const bo = await agentWith({ blurred_only: true });
+    const made = await call(bo.api_key, "POST", "/v1/watches", { instruction: "Someone at the door", sources: [cam], compiled });
+    expect(made.statusCode, made.body).toBe(201);
+    const mine = made.json();
+    expect(watches.get(`${acc}.${mine.id}`)?.blur).toEqual({ faces: true, plates: true });
+    const plain = await agentWith({});
+    const owners = (await call(owner, "POST", "/v1/watches", { instruction: "Someone at the door", sources: [cam], compiled, notify: [{ type: "agent", id: plain.id }] })).json();
+    expect(watches.get(`${acc}.${owners.id}`)?.blur).toBeUndefined();
+    // The agent it notifies is made blurred-only: the watch is published again, blurred.
+    await call(owner, "POST", "/v1/grants", { agent_id: plain.id, source_ids: [cam], senses: ["video"], blurred_only: true });
+    expect(watches.get(`${acc}.${owners.id}`)?.blur).toEqual({ faces: true, plates: true });
+  });
+
+  it("gives a blurred-only agent's chat moments no recording link, and ends its live view when its grant becomes blurred-only", async () => {
+    const bo = await agentWith({ blurred_only: true });
+    const conv = (await call(bo.api_key, "POST", "/v1/conversations", {})).json();
+    const at = new Date(base + 1000).toISOString();
+    await api.data.withAccount(acc, (s) => s.db.insertInto("messages").values({
+      id: "msg_blurtest1", account_id: acc, conversation_id: conv.id, role: "assistant", content: "Twice.",
+      moments: JSON.stringify([{ kind: "range", source_id: cam, at, until: new Date(base + 3000).toISOString(), label: "Someone" },
+        { kind: "look", source_id: cam, at, label: "Live look", snapshot_key: null }]),
+    }).execute());
+    const moments = (await call(bo.api_key, "GET", `/v1/conversations/${conv.id}`)).json().messages.flatMap((m: { moments: unknown[] }) => m.moments);
+    expect(moments).toHaveLength(2);
+    for (const m of moments) expect(m).not.toHaveProperty("clip_url");
+
+    const viewer = await agentWith({});
+    await api.data.withAccount(acc, (s) => s.db.insertInto("live_sessions").values({
+      id: "lvs_blurtest1", account_id: acc, source_id: cam, actor: `agent:${viewer.id}`, expires_at: new Date(Date.now() + 600_000),
+    }).execute());
+    await call(owner, "POST", "/v1/grants", { agent_id: viewer.id, source_ids: [cam], senses: ["video"], blurred_only: true });
+    const session = await api.data.withAccount(acc, (s) => s.db.selectFrom("live_sessions").selectAll().where("id", "=", "lvs_blurtest1").executeTakeFirstOrThrow());
+    expect(session.ended_at).not.toBeNull();
+    expect(session.end_reason).toBe("blurred_only");
   });
 });

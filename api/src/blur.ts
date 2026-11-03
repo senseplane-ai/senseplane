@@ -46,6 +46,18 @@ export function blurFor(req: Pick<FastifyRequest, "access">, sourceId: string): 
   return blur ? { blur } : {};
 }
 
+/**
+ * A request that needs blurring (the camera's setting, or a blurred-only caller) goes to any free brain;
+ * a brain from before blurring would answer it with raw frames. Refused unless every live brain says it
+ * blurs (its heartbeat's `features`). Upgrade brains before the API (ADR 0068).
+ */
+export async function requireBlurringBrains(bus: { supports?(feature: string): Promise<boolean> } | undefined, needed: boolean) {
+  if (!needed || !bus?.supports) return;
+  if (!(await bus.supports("blur").catch(() => false))) {
+    throw new ApiError(503, "service_unavailable", "this needs blurring, and not every brain running can blur yet; upgrade the brains, then try again");
+  }
+}
+
 /** Recordings, clips and live view are raw video: refused to a blurred-only agent. */
 export function refuseRawFor(req: Pick<FastifyRequest, "access">, sourceId: string) {
   if (blurredOnly(req.access?.grants, sourceId)) {

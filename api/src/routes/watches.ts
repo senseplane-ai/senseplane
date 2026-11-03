@@ -4,7 +4,7 @@
 // Watches: compiled by the brain once at creation (rpc.brain.compile), stored
 // here, shared with the brain through KV `watches`. Also look/ask and memory search.
 import { canSense, grantFilter, seesSource } from "../access.js";
-import { blurFor } from "../blur.js";
+import { BLUR_ALL, blurFor, blurredOnly, effectiveBlur, requireBlurringBrains } from "../blur.js";
 import type { Database } from "../data/schema.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormatsModule from "ajv-formats";
@@ -115,6 +115,34 @@ export async function expireWatches(data: DataAccess, bus: ApiBus | undefined) {
 
 export const kvValue = (w: WatchRow) => ({ id: w.id, sources: w.sources, mode: w.mode, compiled: w.compiled, status: w.status, active_hours: w.active_hours ?? null });
 
+/**
+ * The watch as the brain gets it (spec/brain/valkey.json kv `watches`), with `blur` when whoever it reports
+ * to only sees some of its cameras blurred (ADR 0068): the agent that made it, or an agent or chat it
+ * notifies. Its model checks are then blurred whatever the cameras' own setting, so their summaries
+ * describe no faces or plates. Worked out at publish time; grant changes publish the watches again.
+ */
+export async function watchKv(data: DataAccess, accountId: string, w: WatchRow) {
+  const notify = (w.notify ?? []) as { type: string; id: string }[];
+  const blurred = await data.withAccount(accountId, async (s) => {
+    const agents = new Set([...(w.created_by_agent ? [w.created_by_agent] : []), ...notify.filter((d) => d.type === "agent").map((d) => d.id)]);
+    const channels = notify.filter((d) => d.type === "channel").map((d) => d.id);
+    if (channels.length) {
+      for (const c of await s.db.selectFrom("channels").select("agent_id").where("id", "in", channels).execute()) agents.add(c.agent_id);
+    }
+    if (!agents.size) return false;
+    const grants = await s.db.selectFrom("grants").select(["source_ids", "blurred_only"]).where("agent_id", "in", [...agents]).where("blurred_only", "=", true).execute();
+    return w.sources.some((id) => blurredOnly(grants, id));
+  });
+  return { ...kvValue(w), ...(blurred ? { blur: BLUR_ALL } : {}) };
+}
+
+/** Publishes an account's watches again (a grant changed: who sees what blurred may have too). */
+export async function republishWatches(data: DataAccess, bus: ApiBus | undefined, accountId: string) {
+  if (!bus) return;
+  const rows = await data.withAccount(accountId, (s) => s.db.selectFrom("watches").selectAll().where("status", "=", "active").execute());
+  for (const w of rows) await bus.putWatch(accountId, w.id, await watchKv(data, accountId, w));
+}
+
 interface CompileReply {
   compiled: Record<string, unknown>;
   estimate: Record<string, unknown>;
@@ -194,9 +222,10 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
         status: c.needs_zone ? "needs_zone" : "active", compiler: c.compiler,
         expires_at: b.duration_minutes ? new Date(Date.now() + b.duration_minutes * 60_000) : null,
         notify: JSON.stringify(notify), active_hours: schedule ? JSON.stringify(schedule) : null,
+        created_by_agent: req.access?.agentId ?? null,
       }).returningAll().executeTakeFirstOrThrow(),
     );
-    await bus().putWatch(accountId, row.id, kvValue(row));
+    await bus().putWatch(accountId, row.id, await watchKv(deps.data, accountId, row));
     return row;
   }
 
@@ -254,7 +283,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       const row = await deps.data.withAccount(accountId, (s) =>
         s.db.updateTable("watches").set(set).where("id", "=", req.params.id).returningAll().executeTakeFirstOrThrow(),
       );
-      await bus().putWatch(accountId, row.id, kvValue(row));
+      await bus().putWatch(accountId, row.id, await watchKv(deps.data, accountId, row));
       return toWatch(row);
     },
   );
@@ -323,8 +352,12 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
         ? await s.db.selectFrom("sensor_readings").select(["source_id", "sense", "kind", "value", "unit", "detail", "device_id", "device_name", "measured_at"]).where("source_id", "in", sources)
           .where("sense", "=", sensor).where("measured_at", ">=", new Date(from)).where("measured_at", "<=", new Date(to)).orderBy("measured_at").limit(MAX_EVENTS).execute()
         : [];
-      return { srcs, events, readings };
+      return { srcs, events, readings, account: await s.account.get() };
     });
+    if (compiled.verify) {
+      const blurs = [...loaded.srcs.values()].map((x) => effectiveBlur(x, loaded.account));
+      await requireBlurringBrains(deps.bus, blurs.some((x) => x.faces || x.plates) || sources.some((id) => !!blurFor(req, id).blur));
+    }
     const bySource = new Map(sources.map((id) => [id, {
       events: loaded.events.filter((e) => e.source_id === id),
       readings: loaded.readings.filter((r) => r.source_id === id && canSense(req, id, r.sense, new Date(r.measured_at))) as Reading[],
@@ -474,6 +507,8 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       const accountId = req.accountId!;
       const src = await deps.data.withAccount(accountId, (s) => s.sources.get(req.params.id));
       if (!src) throw new ApiError(404, "not_found", "source not found");
+      const camera = effectiveBlur(src, await deps.data.withAccount(accountId, (s) => s.account.get()));
+      await requireBlurringBrains(deps.bus, camera.faces || camera.plates || !!blurFor(req, src.id).blur);
       type AskReply = { answer?: string; yes?: boolean | null; confidence?: number; snapshot_jpeg_b64?: string; error?: string };
       const out: AskReply = await bus()
         .request<AskReply>("rpc.brain.ask", { account_id: accountId, source_id: src.id, question: req.body.question, ...blurFor(req, src.id) }, 45_000)

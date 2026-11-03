@@ -472,6 +472,8 @@ export interface WatchesTable {
   /** Destinations for watch.triggered (ADR 0043); empty = every subscribed webhook. */
   notify: ColumnType<Destination[], string | undefined, string>;
   active_hours: ColumnType<WatchSchedule | null, string | null | undefined, string | null>;
+  /** The agent that made it, if one did (ADR 0068: a blurred-only creator gets blurred checks). */
+  created_by_agent: ColumnType<string | null, string | null | undefined, string | null>;
   created_at: Timestamp;
   updated_at: Timestamp;
   /** Condition and digest watches (ADR 0057): when last checked, and whether the condition held then. */
@@ -540,6 +542,8 @@ export interface ChannelBody {
   buttons?: { text: string; url?: string; data?: string }[];
   /** A stored snapshot to send as a photo, with the text as its caption. */
   photo_key?: string;
+  /** The camera the photo is from, so it is blurred when the chat's agent only sees it blurred (ADR 0068). */
+  photo_source?: string;
 }
 export type WatchSchedule = { days?: string[]; from: string; to: string; time_zone?: string };
 

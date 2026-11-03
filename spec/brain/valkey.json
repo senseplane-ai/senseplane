@@ -37,7 +37,8 @@
         "ask",
         "embed",
         "chat",
-        "check"
+        "check",
+        "redact"
       ]
     },
     "changes": {
@@ -68,7 +69,7 @@
       "writer": "api",
       "readers": [
         "api (privacy masks for frames)",
-        "brain (zones)"
+        "brain (zones, blurring)"
       ],
       "value": {
         "type": "object",
@@ -81,6 +82,18 @@
           },
           "record_audio": {
             "type": "boolean"
+          },
+          "blur": {
+            "type": "object",
+            "description": "Privacy blurring (ADR 0068), the source's effective setting (the source's own, else the account's; off by default): faces and/or number plates are pixelated in snapshots and in every frame sent to a model",
+            "properties": {
+              "faces": {
+                "type": "boolean"
+              },
+              "plates": {
+                "type": "boolean"
+              }
+            }
           }
         }
       }
@@ -608,6 +621,18 @@
           },
           "describe": {
             "type": "boolean"
+          },
+          "blur": {
+            "type": "object",
+            "description": "Blur this answer's frame and snapshot whatever the source's setting: the caller is an agent that only sees blurred media",
+            "properties": {
+              "faces": {
+                "type": "boolean"
+              },
+              "plates": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -756,6 +781,18 @@
                     "type": "string"
                   },
                   "description": "Zone names, for questions about a place in the view"
+                },
+                "blur": {
+                  "type": "object",
+                  "description": "The caller only sees this camera blurred: looks and event snapshots given to the model are blurred",
+                  "properties": {
+                    "faces": {
+                      "type": "boolean"
+                    },
+                    "plates": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
@@ -1069,6 +1106,18 @@
           "jpeg_b64": {
             "type": "string",
             "description": "A stored (already masked) event snapshot"
+          },
+          "blur": {
+            "type": "object",
+            "description": "As for ask; the snapshot is also blurred by the source's own setting",
+            "properties": {
+              "faces": {
+                "type": "boolean"
+              },
+              "plates": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -1090,6 +1139,54 @@
           "error": {
             "type": "string",
             "description": "no_model when no vision model is configured"
+          }
+        }
+      }
+    },
+    "redact": {
+      "direction": "api \u2192 brain (ADR 0068)",
+      "description": "Blurs a stored snapshot for an agent that only sees blurred media, by the source's setting and `blur`",
+      "request": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "source_id",
+          "jpeg_b64"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "jpeg_b64": {
+            "type": "string",
+            "description": "A stored (already masked) snapshot"
+          },
+          "blur": {
+            "type": "object",
+            "description": "What to blur; faces and plates when absent",
+            "properties": {
+              "faces": {
+                "type": "boolean"
+              },
+              "plates": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "properties": {
+          "jpeg_b64": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string",
+            "description": "bad_image"
           }
         }
       }

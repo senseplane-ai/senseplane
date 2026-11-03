@@ -9,7 +9,9 @@ Cooldowns and "already announced" live in `markers` (shared in Valkey by the
 worker, ADR 0052), so a camera moved to another brain never alerts twice."""
 
 import base64
+import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -24,6 +26,8 @@ from .sound import SoundClassifier
 from .telemetry import child_span
 from .tracker import Track, Tracker, iou
 from .zones import zones_for
+
+log = logging.getLogger("senseplane.brain.pipeline")
 
 SOUND_TEXT = {"crying": "crying", "glass_break": "glass breaking", "alarm": "an alarm", "dog": "a dog barking", "speech_present": "people talking"}
 # A confirmed track becomes an event only once its best score reaches this (spec/labels.json).
@@ -119,6 +123,14 @@ class SourcePipeline:
         self.loudness = -120.0
         self.last_sound_scores: dict[str, float] = {}
         self.spans = Spans(account_id, source_id)
+        # Privacy blurring (ADR 0068): set by the worker when the source asks for it; every snapshot goes through it.
+        self.redact: Callable[[np.ndarray], np.ndarray] | None = None
+
+    def track_boxes(self, max_age_s: float = 1.0) -> tuple[list, list]:
+        """People and vehicles the tracker has seen in the last second, where they are now (for blurring)."""
+        t = self.last_frame_t
+        recent = [tr for tr in self.tracker.tracks if t - tr.last_seen <= max_age_s]
+        return ([tr.predicted(t) for tr in recent if tr.label == "person"], [tr.predicted(t) for tr in recent if tr.label == "vehicle"])
 
     @property
     def _key(self) -> str:
@@ -305,6 +317,12 @@ class SourcePipeline:
         })]
 
     def _snapshot(self, rgb: np.ndarray, box=None) -> str:
+        if self.redact is not None:
+            try:
+                rgb = self.redact(rgb)
+            except Exception:  # noqa: BLE001 - no snapshot rather than an unblurred one
+                log.exception("blurring a snapshot failed; it is left out")
+                return ""
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         if box is not None:
             x1, y1, x2, y2 = (int(v) for v in box)
@@ -313,7 +331,8 @@ class SourcePipeline:
         return base64.b64encode(jpg.tobytes()).decode() if ok else ""
 
     def latest_jpeg(self) -> bytes | None:
-        return base64.b64decode(self._snapshot(self.last_frame)) if self.last_frame is not None else None
+        snap = self._snapshot(self.last_frame) if self.last_frame is not None else ""
+        return base64.b64decode(snap) if snap else None
 
     def tick(self, t: float) -> list[tuple[str, dict]]:
         out = self.spans.tick(t)

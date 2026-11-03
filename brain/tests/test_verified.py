@@ -11,7 +11,7 @@ from senseplane_brain.worker import Worker
 def _worker(model):
     w = Worker.__new__(Worker)  # skip model loading; only verify_and_publish is exercised
     w.model = model
-    w.engine, w.watch_spans = WatchEngine(), {}
+    w.engine, w.watch_spans, w.configs = WatchEngine(), {}, {}
     w.sent = []
 
     async def publish(_js, items):

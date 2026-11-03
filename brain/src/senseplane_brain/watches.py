@@ -42,6 +42,7 @@ class Fire:
     frame: np.ndarray | None = None
     mode: str = "alert"
     before: np.ndarray | None = None  # sequences: the frame when the first step happened, for a before/after check
+    boxes: tuple | None = None  # (people, vehicles) in `frame`, for privacy blurring (ADR 0068); set by the worker
 
 
 class _State:

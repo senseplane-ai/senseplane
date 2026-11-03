@@ -118,7 +118,7 @@ class _Yes:
 
 def test_a_tracking_watch_records_a_span_while_it_holds_and_posts_no_event():
     w = Worker.__new__(Worker)
-    w.model, w.engine, w.watch_spans, w.sent = _Yes(), WatchEngine(), {}, []
+    w.model, w.engine, w.watch_spans, w.sent, w.configs = _Yes(), WatchEngine(), {}, [], {}
 
     async def publish(_sink, items):
         w.sent.extend(items)

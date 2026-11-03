@@ -39,6 +39,7 @@ from .compiler import compile_watch
 from .activity import Spans
 from .markers import Markers, MemoryMarkers, ValkeyMarkers
 from .pipeline import SourcePipeline, iso
+from .redact import Blur, Redactor
 from .view import Reference, ViewMonitor
 from .watches import Fire, WatchEngine
 
@@ -79,6 +80,11 @@ def _ts(meta: dict) -> float:
 
 def _s(v) -> str:
     return v.decode() if isinstance(v, bytes) else str(v)
+
+
+def encode_jpeg(rgb: np.ndarray) -> bytes | None:
+    ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return jpg.tobytes() if ok else None
 
 
 def decode_jpeg(data: bytes) -> np.ndarray | None:
@@ -124,7 +130,7 @@ _DEFAULT = object()
 
 class Worker:
     def __init__(self, valkey_url: str, brain_id: str | None = None, *, detector=_DEFAULT, sound=_DEFAULT, embedder=_DEFAULT,
-                 model=_DEFAULT, rpc_slots: int | None = None, confirm=_DEFAULT):
+                 model=_DEFAULT, rpc_slots: int | None = None, confirm=_DEFAULT, redactor: Redactor | None = None):
         self.valkey_url = valkey_url
         self.brain_id = brain_id or os.environ.get("BRAIN_ID") or default_brain_id()
         if detector is _DEFAULT:
@@ -165,6 +171,7 @@ class Worker:
             model = vlm.ModelClient(on_call=self._count, on_cost=self._cost) if vlm.configured() else None
         self.model = model
         self.monitors: dict[str, ViewMonitor] = {}
+        self.redactor = redactor or Redactor()  # its models load the first time a source asks for blurring
         self._cpu = (time.process_time(), time.monotonic())
         self.cpu_percent = 0.0
         self.started_at = iso(time.time())
@@ -189,8 +196,32 @@ class Worker:
             acc, src = key.split(".", 1)
             p = SourcePipeline(acc, src, self.detector, self.sound, markers=self.markers, confirm=self.confirm)
             p.zones = self.configs.get(key, {}).get("zones", [])
+            p.redact = functools.partial(self.redact, key)
             self.pipelines[key] = p
         return self.pipelines[key]
+
+    # --- privacy blurring (ADR 0068) ------------------------------------------
+    def redact(self, key: str, rgb: np.ndarray, extra: Blur = Blur(), boxes: tuple | None = None) -> np.ndarray:
+        """The frame as it may leave the brain: faces and plates blurred when the source's settings (`blur`
+        in its config, source over account) or the request (`extra`: an agent that only sees blurred media)
+        ask for it. Raises if blurring fails, so an unblurred frame never goes out instead."""
+        blur = Blur.of(self.configs.get(key)) | extra
+        if not blur:
+            return rgb
+        p = self.pipelines.get(key)
+        if boxes is None and p is not None and rgb is p.last_frame:
+            boxes = p.track_boxes()
+        people, vehicles = boxes or ([], [])
+        return self.redactor.apply(rgb, blur, people, vehicles)
+
+    def do_redact(self, req):
+        """A stored snapshot blurred for an agent that only sees blurred media (the API serving it, ADR 0068)."""
+        rgb = decode_jpeg(base64.b64decode(req["jpeg_b64"]))
+        if rgb is None:
+            return {"error": "bad_image"}
+        extra = Blur.of(req) if req.get("blur") else Blur(faces=True, plates=True)
+        jpg = encode_jpeg(self.redact(f"{req['account_id']}.{req['source_id']}", rgb, extra))
+        return {"jpeg_b64": base64.b64encode(jpg).decode()} if jpg else {"error": "bad_image"}
 
     # --- connection --------------------------------------------------------
     def connect(self):
@@ -416,7 +447,7 @@ class Worker:
             if reply_to:
                 await self.r.publish(reply_to, json.dumps(out))
             return
-        fn = {"compile": self.do_compile, "ask": self.do_ask, "embed": self.do_embed, "check": self.do_check}.get(method)
+        fn = {"compile": self.do_compile, "ask": self.do_ask, "embed": self.do_embed, "check": self.do_check, "redact": self.do_redact}.get(method)
         loop = asyncio.get_running_loop()
         # The API's request span is the parent; model calls inside are children.
         with telemetry.tracer().start_as_current_span(f"rpc.brain.{method}", context=parent, kind=telemetry.SpanKind.SERVER,
@@ -439,17 +470,20 @@ class Worker:
         return {"compiled": c.compiled, "estimate": c.estimate, "warnings": c.warnings, "compiler": c.compiler, "needs_zone": c.needs_zone}
 
     def do_ask(self, req):
-        p = self.pipelines.get(f"{req['account_id']}.{req['source_id']}")
+        key = f"{req['account_id']}.{req['source_id']}"
+        p = self.pipelines.get(key)
         if p is None or p.last_frame is None or time.time() - p.last_frame_t > 30:
             return {"error": "no_live_frame"}
-        snap = p.latest_jpeg()
+        # The model and the caller see the same frame, blurred as the source and the caller need (ADR 0068).
+        frame = self.redact(key, p.last_frame, Blur.of(req))
+        snap = encode_jpeg(frame)
         b64 = base64.b64encode(snap).decode() if snap else None
         if self.model is None:
             return {"error": "no_model", "snapshot_jpeg_b64": b64}
         if req.get("describe"):
-            a = self.model.describe(p.last_frame, {"account": req["account_id"], "purpose": "look"})
+            a = self.model.describe(frame, {"account": req["account_id"], "purpose": "look"})
         else:
-            a = self.model.ask(p.last_frame, req["question"], {"account": req["account_id"], "purpose": "ask"})
+            a = self.model.ask(frame, req["question"], {"account": req["account_id"], "purpose": "ask"})
         return {"answer": a.answer, "yes": a.yes, "confidence": a.confidence, "snapshot_jpeg_b64": b64}
 
     def do_check(self, req):
@@ -459,6 +493,9 @@ class Worker:
         rgb = decode_jpeg(base64.b64decode(req["jpeg_b64"]))
         if rgb is None:
             return {"error": "bad_image"}
+        # A snapshot stored before blurring was turned on is blurred now, before the model sees it.
+        if req.get("source_id"):
+            rgb = self.redact(f"{req['account_id']}.{req['source_id']}", rgb, Blur.of(req))
         a = self.model.ask(rgb, req["prompt"], {"account": req["account_id"], "purpose": "backtest"})
         return {"yes": a.yes, "answer": a.answer, "confidence": a.confidence}
 
@@ -471,6 +508,8 @@ class Worker:
         """Runs chat.answer in a thread; its events and tool calls go through the API's lists (spec/brain rpc chat)."""
         stream, account = req["stream"], req["account_id"]
         meta = {"account": account, "purpose": "chat"}
+        # Sources this caller only sees blurred (an agent's grant, ADR 0068): looks at them are blurred anyway.
+        extra = {s["id"]: Blur.of(s) for s in req.get("sources") or [] if isinstance(s, dict) and s.get("id")}
         events = f"{stream}:events"
         r = self.sync
 
@@ -498,10 +537,11 @@ class Worker:
                 return call("list_events", args)
 
             def look(self, source_id, question):
-                return worker.chat_look(account, source_id, question, meta)
+                return worker.chat_look(account, source_id, question, meta, extra.get(source_id, Blur()))
 
             def view_event(self, event_id, question):
-                return worker.chat_view_event(call("event_snapshot", {"event_id": event_id}), question, meta)
+                snap = call("event_snapshot", {"event_id": event_id})
+                return worker.chat_view_event(snap, question, meta, account, extra.get(str(snap.get("source_id")), Blur()))
 
             def query_activity(self, args):
                 return call("query_activity", args)
@@ -526,19 +566,21 @@ class Worker:
                                                       attributes={"senseplane.account_id": account}):
             await loop.run_in_executor(None, telemetry.in_context(run))
 
-    def chat_look(self, account: str, source_id: str, question: str, meta: dict) -> dict:
-        """The latest frame of a source (masked by the API) to the vision model."""
-        p = self.pipelines.get(f"{account}.{source_id}")
+    def chat_look(self, account: str, source_id: str, question: str, meta: dict, extra: Blur = Blur()) -> dict:
+        """The latest frame of a source (masked by the API, blurred here when asked for) to the vision model."""
+        key = f"{account}.{source_id}"
+        p = self.pipelines.get(key)
         if p is None or p.last_frame is None or time.time() - p.last_frame_t > 30:
             return {"error": "this camera is not streaming right now"}
         if self.model is None:
             return {"error": "no vision model is configured"}
-        frame, t = p.last_frame, p.last_frame_t
-        snap = p.latest_jpeg()
+        t = p.last_frame_t
+        frame = self.redact(key, p.last_frame, extra)
+        snap = encode_jpeg(frame)
         a = self.model.ask(frame, question, meta)
         return {"answer": a.answer, "at": iso(t), **({"jpeg_b64": base64.b64encode(snap).decode()} if snap else {})}
 
-    def chat_view_event(self, snap: dict, question: str, meta: dict) -> dict:
+    def chat_view_event(self, snap: dict, question: str, meta: dict, account: str | None = None, extra: Blur = Blur()) -> dict:
         """A past event's stored snapshot (from the API, within the caller's grants) to the vision model."""
         if snap.get("error"):
             return {"error": snap["error"]}
@@ -547,6 +589,8 @@ class Worker:
         rgb = decode_jpeg(base64.b64decode(snap.get("jpeg_b64") or ""))
         if rgb is None:
             return {"error": "the snapshot could not be read"}
+        if account and snap.get("source_id"):
+            rgb = self.redact(f"{account}.{snap['source_id']}", rgb, extra)  # it may predate blurring
         return {"answer": self.model.ask(rgb, question, meta).answer}
 
     # --- the main pass ------------------------------------------------------
@@ -626,6 +670,8 @@ class Worker:
                 if p.last_frame is not None and now - p.last_frame_t < 30:
                     acc, src = key.split(".", 1)
                     for fire in self.engine.on_tick(acc, src, now, p.last_frame):
+                        if fire.frame is p.last_frame:
+                            fire.boxes = p.track_boxes()
                         asyncio.create_task(self.verify_and_publish(self.sink, fire))
         await self.flush_usage(self.sink)
 
@@ -639,6 +685,9 @@ class Worker:
         acc, src = key.split(".", 1)
         out = p.on_frame(frame, t)
         fires = self.engine.on_frame(acc, src, p.tracker.active, p.motion.last_mask, p.zones, frame, t)
+        for fire in fires:
+            if fire.frame is frame:
+                fire.boxes = p.track_boxes()
         return frame, out, fires
 
     def watch_activity(self, key: str, t: float) -> list[tuple[str, dict]]:
@@ -657,6 +706,17 @@ class Worker:
         """VLM check (only if the watch has one), then a watch activity, and for alerts a watch.triggered event."""
         summary, confidence, labels = f"Watch triggered: {fire.description}.", None, []
         verified = None  # no check on this watch
+        key = f"{fire.account_id}.{fire.source_id}"
+        if fire.frame is not None and Blur.of(self.configs.get(key)):
+            # What the model checks and the event's snapshot are the blurred frames (ADR 0068).
+            loop = asyncio.get_running_loop()
+            try:
+                fire.frame = await loop.run_in_executor(None, self.redact, key, fire.frame, Blur(), fire.boxes or ([], []))
+                if fire.before is not None:
+                    fire.before = await loop.run_in_executor(None, self.redact, key, fire.before, Blur(), ([], []))
+            except Exception:  # noqa: BLE001 - neither the model nor the event gets an unblurred frame
+                log.exception("blurring a watch frame failed", extra={"fields": {"watch": fire.watch_id}})
+                fire.frame, fire.before = None, None
         if fire.verify:
             if self.model is None or fire.frame is None:
                 summary += " Not verified: no vision model is configured."
@@ -674,7 +734,6 @@ class Worker:
                     self.engine.check_failed(fire.account_id, fire.watch_id, fire.source_id, time.time())
                     return
                 summary, confidence, verified = a.answer or summary, round(a.confidence, 3), True
-        key = f"{fire.account_id}.{fire.source_id}"
         ws = self.watch_spans.setdefault(key, Spans(fire.account_id, fire.source_id))
         activity = ws.seen("watch", fire.watch_id, None, fire.t, WATCH_GAP_S, confidence=confidence or 0.0, watch_id=fire.watch_id,
                            verified=verified, summary=summary)

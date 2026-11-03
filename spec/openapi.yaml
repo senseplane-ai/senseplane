@@ -20,6 +20,10 @@ security:
 tags:
   - name: sources
   - name: clips
+  - name: stories
+    description: One video from many moments across cameras, in time order (ADR 0070).
+  - name: follows
+    description: Following an object or a pet across cameras, never a person (ADR 0070).
   - name: watches
   - name: events
   - name: memory
@@ -1671,6 +1675,191 @@ paths:
         '204':
           description: No content
         default: {$ref: '#/components/responses/Error'}
+  /stories:
+    post:
+      operationId: createStory
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      summary: Make one video from many moments across cameras
+      description: >-
+        Moments (events, or time ranges on cameras) or a search are put in time order and
+        made into one video: each piece labelled with its camera and time, a gap over a
+        minute shown as a short "+3 min" card (labelled mode, 720p H.264), or the recordings
+        copied untouched without labels (fast mode). It is rendered in the background: poll
+        GET /stories/{id} until `ready`. At most 20 pieces and 10 minutes of video. The caller
+        needs a video grant covering every piece (with history for older ones); sound only
+        from cameras it has an audio grant on; a blurred-only agent is refused (recordings
+        aren't blurred). Kept like a saved clip: raw retention doesn't delete it.
+      tags: [stories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StoryCreate'}
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Story'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listStories
+      summary: List stories
+      tags: [stories]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–200, default 50)
+          schema: {type: integer}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Story'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /stories/{id}:
+    get:
+      operationId: getStory
+      summary: Get a story; once ready, with a fresh signed playback URL
+      tags: [stories]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Story'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteStory
+      summary: Delete a story and its video
+      tags: [stories]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /stories/{id}/link:
+    post:
+      operationId: createStoryLink
+      summary: A longer-lived signed link to share a ready story
+      description: >-
+        For sending to a person: up to 7 days (default 1 day). Like every media link it is
+        checked on each request against the key that made it, so revoking that key or its
+        grants, or deleting the story, ends it sooner (ADR 0036). Recorded in the audit log.
+      tags: [stories]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                expires_in_s: {type: integer, minimum: 60, maximum: 604800}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_at]
+                properties:
+                  url: {type: string, format: uri}
+                  expires_at: {type: string, format: date-time}
+        default: {$ref: '#/components/responses/Error'}
+  /follows:
+    post:
+      operationId: createFollow
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      summary: Follow an object or a pet across cameras (never a person)
+      description: >-
+        "How did this box move through the house?" Point at the thing (a box on an event's
+        snapshot, or on a camera's recorded frame at a time) or describe it, and give a time
+        range of at most 2 hours. A background job reads frames from each camera's
+        recordings (a frame a second around events, one every five seconds otherwise; at
+        most 240 frames and 12 vision model calls, metered as AI checks) and returns the
+        route: visits per camera in time order, handovers, and the gaps where it was not
+        seen. People are never followed: a description naming a person, or a box on one, is
+        refused with `forbidden` and `details.person`. Cameras default to every one the
+        caller may watch over the range; a blurred-only agent's are left out.
+      tags: [follows]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FollowCreate'}
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Follow'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listFollows
+      summary: List follows (an agent sees its own)
+      tags: [follows]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1–200, default 50)
+          schema: {type: integer}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Follow'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /follows/{id}:
+    get:
+      operationId: getFollow
+      summary: Get a follow and the route it found, each visit with a signed playback URL
+      tags: [follows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Follow'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteFollow
+      summary: Delete a follow (its story stays)
+      tags: [follows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
   /watches:
     post:
       operationId: createWatch
@@ -3008,6 +3197,192 @@ components:
     Watch: {$ref: './schemas/watch.json'}
     Event: {$ref: './schemas/event.json'}
     Clip: {$ref: './schemas/clip.json'}
+    StoryCreate:
+      type: object
+      additionalProperties: false
+      description: Moments, a search, or both.
+      properties:
+        title: {type: string, maxLength: 200}
+        moments:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: {$ref: '#/components/schemas/StoryMoment'}
+        search: {$ref: '#/components/schemas/StorySearch'}
+        mode: {type: string, enum: [labelled, fast], description: 'labelled (default): re-encoded with labels and gap cards; fast: the recordings copied untouched'}
+    StoryMoment:
+      type: object
+      additionalProperties: false
+      description: An event (from a little before it to a little after it ended), or a source with from and to.
+      properties:
+        event: {type: string}
+        source: {type: string}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+    StorySearch:
+      type: object
+      additionalProperties: false
+      required: [q]
+      description: Events found by meaning, as memory search does ("the courier"), within from–to (default the last 24 hours).
+      properties:
+        q: {type: string, minLength: 2, maxLength: 500}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        sources: {type: array, items: {type: string}, maxItems: 50}
+        limit: {type: integer, minimum: 1, maximum: 20}
+    Story:
+      type: object
+      required: [id, mode, status, pieces, bytes, has_audio, created_at]
+      properties:
+        id: {type: string, pattern: '^sty_[0-9A-HJKMNP-TV-Z]{26}$'}
+        title: {type: string}
+        mode: {type: string, enum: [labelled, fast]}
+        status: {type: string, enum: [queued, rendering, ready, failed]}
+        error: {type: string}
+        pieces:
+          type: array
+          items: {$ref: '#/components/schemas/StoryPiece'}
+        duration_ms: {type: integer}
+        bytes: {type: integer}
+        has_audio: {type: boolean}
+        playback_url: {type: string, format: uri, description: 'Signed HLS URL, 15-minute expiry; only when ready.'}
+        playback_expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        ready_at: {type: string, format: date-time}
+    StoryPiece:
+      type: object
+      required: [source_id, source_name, from, to, audio]
+      properties:
+        source_id: {type: string}
+        source_name: {type: string}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        event_id: {type: string}
+        audio: {type: boolean, description: Its sound is in the story (an audio grant on that camera)}
+        recorded_ms: {type: integer, description: How much of it was recorded (after the render)}
+        offset_ms: {type: integer, description: Where it starts in the story (after the render)}
+        gap_before_ms: {type: integer, description: Time since the previous piece, when it is long enough for a card}
+    FollowCreate:
+      type: object
+      additionalProperties: false
+      required: [reference, from, to]
+      properties:
+        reference: {$ref: '#/components/schemas/FollowReference'}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        sources: {type: array, items: {type: string}, maxItems: 50, description: 'Cameras to look at; default every camera the caller may watch over the range (at most 8)'}
+        make_story: {type: boolean, description: Make a story of the route (default true)}
+    FollowReference:
+      type: object
+      additionalProperties: false
+      description: >-
+        What to follow: a box on an event's snapshot (`event`) or on a camera's recorded
+        frame (`source` and `at`), as fractions of the picture; or a `description` (needs a
+        vision model). Never a person.
+      properties:
+        event: {type: string}
+        source: {type: string}
+        at: {type: string, format: date-time}
+        box:
+          type: array
+          minItems: 4
+          maxItems: 4
+          description: x1, y1, x2, y2 as fractions of the picture (0–1)
+          items: {type: number, minimum: 0, maximum: 1}
+        description: {type: string, minLength: 3, maxLength: 300, description: 'e.g. "the brown cardboard box with red tape"'}
+    Follow:
+      type: object
+      required: [id, status, reference, sources, from, to, make_story, frames_examined, model_calls, created_at]
+      properties:
+        id: {type: string, pattern: '^fol_[0-9A-HJKMNP-TV-Z]{26}$'}
+        status: {type: string, enum: [queued, running, done, failed, refused]}
+        error: {type: string}
+        reference:
+          type: object
+          description: Where the reference is (no pixels, no embedding)
+          additionalProperties: true
+        sources: {type: array, items: {type: string}}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        make_story: {type: boolean}
+        story_id: {type: string}
+        result: {$ref: '#/components/schemas/FollowResult'}
+        frames_examined: {type: integer}
+        model_calls: {type: integer}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+    FollowResult:
+      type: object
+      properties:
+        route:
+          type: array
+          description: Visits in time order
+          items: {$ref: '#/components/schemas/FollowVisit'}
+        handovers:
+          type: array
+          items: {$ref: '#/components/schemas/FollowHandover'}
+        gaps:
+          type: array
+          items: {$ref: '#/components/schemas/FollowGap'}
+        first_seen: {type: string, format: date-time}
+        last_seen: {type: string, format: date-time}
+        sightings:
+          type: array
+          items: {$ref: '#/components/schemas/FollowSighting'}
+        cameras:
+          type: array
+          items: {$ref: '#/components/schemas/FollowCamera'}
+        limits: {$ref: '#/components/schemas/FollowLimits'}
+        story_note: {type: string}
+    FollowCamera:
+      type: object
+      properties:
+        source_id: {type: string}
+        source_name: {type: string}
+        frames_examined: {type: integer}
+    FollowLimits:
+      type: object
+      properties:
+        frames: {type: integer}
+        frames_examined: {type: integer}
+        frame_limit_reached: {type: boolean}
+        model_calls: {type: integer}
+        model_calls_cap: {type: integer}
+    FollowVisit:
+      type: object
+      required: [source_id, source_name, from, to, sightings, confidence]
+      properties:
+        source_id: {type: string}
+        source_name: {type: string}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        sightings: {type: integer}
+        confidence: {type: number}
+        confirmed_by_model: {type: boolean}
+        playback_url: {type: string, format: uri}
+        playback_expires_at: {type: string, format: date-time}
+    FollowHandover:
+      type: object
+      properties:
+        from_source: {type: string}
+        to_source: {type: string}
+        left_at: {type: string, format: date-time}
+        seen_at: {type: string, format: date-time}
+        gap_ms: {type: integer}
+    FollowGap:
+      type: object
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        note: {type: string, description: 'Why it was not seen: no camera recording, not looked at, or not there'}
+    FollowSighting:
+      type: object
+      properties:
+        source_id: {type: string}
+        at: {type: string, format: date-time}
+        box: {type: array, items: {type: number}}
+        confidence: {type: number}
+        confirmed: {type: [boolean, 'null']}
     Grant: {$ref: './schemas/grant.json'}
     Webhook: {$ref: './schemas/webhook.json'}
     Channel: {$ref: './schemas/channel.json'}

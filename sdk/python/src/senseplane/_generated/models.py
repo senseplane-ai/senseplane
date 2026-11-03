@@ -771,6 +771,166 @@ class Clip(BaseModel):
     playback_expires_at: AwareDatetime | None = None
 
 
+class StoryMoment(BaseModel):
+    """
+    An event (from a little before it to a little after it ended), or a source with from and to.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    event: str | None = None
+    source: str | None = None
+    from_: Annotated[AwareDatetime | None, Field(alias='from')] = None
+    to: AwareDatetime | None = None
+
+
+class StorySearch(BaseModel):
+    """
+    Events found by meaning, as memory search does ("the courier"), within from–to (default the last 24 hours).
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    q: Annotated[str, Field(max_length=500, min_length=2)]
+    from_: Annotated[AwareDatetime | None, Field(alias='from')] = None
+    to: AwareDatetime | None = None
+    sources: Annotated[list[str] | None, Field(max_length=50)] = None
+    limit: Annotated[int | None, Field(ge=1, le=20)] = None
+
+
+class StoryPiece(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    source_id: str
+    source_name: str
+    from_: Annotated[AwareDatetime, Field(alias='from')]
+    to: AwareDatetime
+    event_id: str | None = None
+    audio: bool
+    """
+    Its sound is in the story (an audio grant on that camera)
+    """
+    recorded_ms: int | None = None
+    """
+    How much of it was recorded (after the render)
+    """
+    offset_ms: int | None = None
+    """
+    Where it starts in the story (after the render)
+    """
+    gap_before_ms: int | None = None
+    """
+    Time since the previous piece
+    """
+
+
+class BoxItem(RootModel[float]):
+    root: Annotated[float, Field(ge=0.0, le=1.0)]
+
+
+class FollowReference(BaseModel):
+    """
+    What to follow: a box on an event's snapshot (`event`) or on a camera's recorded frame (`source` and `at`), as fractions of the picture; or a `description` (needs a vision model). Never a person.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    event: str | None = None
+    source: str | None = None
+    at: AwareDatetime | None = None
+    box: Annotated[list[BoxItem] | None, Field(max_length=4, min_length=4)] = None
+    """
+    x1, y1, x2, y2 as fractions of the picture (0–1)
+    """
+    description: Annotated[str | None, Field(max_length=300, min_length=3)] = None
+    """
+    e.g. "the brown cardboard box with red tape"
+    """
+
+
+class FollowCamera(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    source_id: str | None = None
+    source_name: str | None = None
+    frames_examined: int | None = None
+
+
+class FollowLimits(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    frames: int | None = None
+    frames_examined: int | None = None
+    frame_limit_reached: bool | None = None
+    model_calls: int | None = None
+    model_calls_cap: int | None = None
+
+
+class FollowVisit(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    source_id: str
+    source_name: str
+    from_: Annotated[AwareDatetime, Field(alias='from')]
+    to: AwareDatetime
+    sightings: int
+    confidence: float
+    confirmed_by_model: bool | None = None
+    playback_url: str | None = None
+    playback_expires_at: AwareDatetime | None = None
+
+
+class FollowHandover(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    from_source: str | None = None
+    to_source: str | None = None
+    left_at: AwareDatetime | None = None
+    seen_at: AwareDatetime | None = None
+    gap_ms: int | None = None
+
+
+class FollowGap(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    from_: Annotated[AwareDatetime | None, Field(alias='from')] = None
+    to: AwareDatetime | None = None
+    note: str | None = None
+    """
+    Why it was not seen: no camera recording, not looked at, or not there
+    """
+
+
+class FollowSighting(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    source_id: str | None = None
+    at: AwareDatetime | None = None
+    box: list[float] | None = None
+    confidence: float | None = None
+    confirmed: bool | None = None
+
+
 class Window(BaseModel):
     """
     Live access (look, ask, listen) only inside the window; recorded data only from inside it. Either end may be open.
@@ -3323,6 +3483,23 @@ class CaptureJoinPostResponse(BaseModel):
     """
 
 
+class StoriesIdLinkPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    expires_in_s: Annotated[int | None, Field(ge=60, le=604800)] = None
+
+
+class StoriesIdLinkPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    url: str
+    expires_at: AwareDatetime
+
+
 class InboxSeenPostResponse(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -3527,6 +3704,86 @@ class Reading(BaseModel):
     """
     device: ReadingDevice | None = None
     measured_at: AwareDatetime
+
+
+class StoryCreate(BaseModel):
+    """
+    Moments, a search, or both.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    title: Annotated[str | None, Field(max_length=200)] = None
+    moments: Annotated[list[StoryMoment] | None, Field(max_length=50, min_length=1)] = (
+        None
+    )
+    search: StorySearch | None = None
+    mode: Literal['labelled', 'fast'] | None = None
+    """
+    labelled (default): re-encoded with labels and gap cards; fast: the recordings copied untouched
+    """
+
+
+class Story(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(pattern='^sty_[0-9A-HJKMNP-TV-Z]{26}$')]
+    title: str | None = None
+    mode: Literal['labelled', 'fast']
+    status: Literal['queued', 'rendering', 'ready', 'failed']
+    error: str | None = None
+    pieces: list[StoryPiece]
+    duration_ms: int | None = None
+    bytes: int
+    has_audio: bool
+    playback_url: str | None = None
+    """
+    Signed HLS URL, 15-minute expiry; only when ready.
+    """
+    playback_expires_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+
+
+class FollowCreate(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    reference: FollowReference
+    from_: Annotated[AwareDatetime, Field(alias='from')]
+    to: AwareDatetime
+    sources: Annotated[list[str] | None, Field(max_length=50)] = None
+    """
+    Cameras to look at; default every camera the caller may watch over the range (at most 8)
+    """
+    make_story: bool | None = None
+    """
+    Make a story of the route (default true)
+    """
+
+
+class FollowResult(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    route: list[FollowVisit] | None = None
+    """
+    Visits in time order
+    """
+    handovers: list[FollowHandover] | None = None
+    gaps: list[FollowGap] | None = None
+    first_seen: AwareDatetime | None = None
+    last_seen: AwareDatetime | None = None
+    sightings: list[FollowSighting] | None = None
+    cameras: list[FollowCamera] | None = None
+    limits: FollowLimits | None = None
+    story_note: str | None = None
 
 
 class SourceNow(BaseModel):
@@ -3823,6 +4080,15 @@ class ClipsGetResponse(BaseModel):
     next_cursor: str | None
 
 
+class StoriesGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Story]
+    next_cursor: str | None
+
+
 class WebhooksGetResponse(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -3971,6 +4237,30 @@ class Event(BaseModel):
     feedback: Literal['relevant', 'not_relevant'] | None = None
 
 
+class Follow(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(pattern='^fol_[0-9A-HJKMNP-TV-Z]{26}$')]
+    status: Literal['queued', 'running', 'done', 'failed', 'refused']
+    error: str | None = None
+    reference: dict[str, Any]
+    """
+    Where the reference is (no pixels, no embedding)
+    """
+    sources: list[str]
+    from_: Annotated[AwareDatetime, Field(alias='from')]
+    to: AwareDatetime
+    make_story: bool
+    story_id: str | None = None
+    result: FollowResult | None = None
+    frames_examined: int
+    model_calls: int
+    created_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+
+
 class Conversation(BaseModel):
     """
     A chat about what the sources saw and heard. An account key sees the account's conversations; an agent key sees only its own.
@@ -3991,6 +4281,15 @@ class Conversation(BaseModel):
     """
     Only on GET /v1/conversations/{id}: every message, oldest first.
     """
+
+
+class FollowsGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Follow]
+    next_cursor: str | None
 
 
 class Datum(BaseModel):

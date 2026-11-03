@@ -1082,6 +1082,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List stories */
+        get: operations["listStories"];
+        put?: never;
+        /**
+         * Make one video from many moments across cameras
+         * @description Moments (events, or time ranges on cameras) or a search are put in time order and made into one video: each piece labelled with its camera and time, a gap over a minute shown as a short "+3 min" card (labelled mode, 720p H.264), or the recordings copied untouched without labels (fast mode). It is rendered in the background: poll GET /stories/{id} until `ready`. At most 20 pieces and 10 minutes of video. The caller needs a video grant covering every piece (with history for older ones); sound only from cameras it has an audio grant on; a blurred-only agent is refused (recordings aren't blurred). Kept like a saved clip: raw retention doesn't delete it.
+         */
+        post: operations["createStory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stories/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a story; once ready, with a fresh signed playback URL */
+        get: operations["getStory"];
+        put?: never;
+        post?: never;
+        /** Delete a story and its video */
+        delete: operations["deleteStory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stories/{id}/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A longer-lived signed link to share a ready story
+         * @description For sending to a person: up to 7 days (default 1 day). Like every media link it is checked on each request against the key that made it, so revoking that key or its grants, or deleting the story, ends it sooner (ADR 0036). Recorded in the audit log.
+         */
+        post: operations["createStoryLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/follows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List follows (an agent sees its own) */
+        get: operations["listFollows"];
+        put?: never;
+        /**
+         * Follow an object or a pet across cameras (never a person)
+         * @description "How did this box move through the house?" Point at the thing (a box on an event's snapshot, or on a camera's recorded frame at a time) or describe it, and give a time range of at most 2 hours. A background job reads frames from each camera's recordings (a frame a second around events, one every five seconds otherwise; at most 240 frames and 12 vision model calls, metered as AI checks) and returns the route: visits per camera in time order, handovers, and the gaps where it was not seen. People are never followed: a description naming a person, or a box on one, is refused with `forbidden` and `details.person`. Cameras default to every one the caller may watch over the range; a blurred-only agent's are left out.
+         */
+        post: operations["createFollow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/follows/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a follow and the route it found, each visit with a signed playback URL */
+        get: operations["getFollow"];
+        put?: never;
+        post?: never;
+        /** Delete a follow (its story stays) */
+        delete: operations["deleteFollow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/watches": {
         parameters: {
             query?: never;
@@ -1961,6 +2059,189 @@ export interface components {
         Watch: components["schemas"]["watch"];
         Event: components["schemas"]["event"];
         Clip: components["schemas"]["clip"];
+        /** @description Moments, a search, or both. */
+        StoryCreate: {
+            title?: string;
+            moments?: components["schemas"]["StoryMoment"][];
+            search?: components["schemas"]["StorySearch"];
+            /**
+             * @description labelled (default): re-encoded with labels and gap cards; fast: the recordings copied untouched
+             * @enum {string}
+             */
+            mode?: "labelled" | "fast";
+        };
+        /** @description An event (from a little before it to a little after it ended), or a source with from and to. */
+        StoryMoment: {
+            event?: string;
+            source?: string;
+            /** Format: date-time */
+            from?: string;
+            /** Format: date-time */
+            to?: string;
+        };
+        /** @description Events found by meaning, as memory search does ("the courier"), within from–to (default the last 24 hours). */
+        StorySearch: {
+            q: string;
+            /** Format: date-time */
+            from?: string;
+            /** Format: date-time */
+            to?: string;
+            sources?: string[];
+            limit?: number;
+        };
+        Story: {
+            id: string;
+            title?: string;
+            /** @enum {string} */
+            mode: "labelled" | "fast";
+            /** @enum {string} */
+            status: "queued" | "rendering" | "ready" | "failed";
+            error?: string;
+            pieces: components["schemas"]["StoryPiece"][];
+            duration_ms?: number;
+            bytes: number;
+            has_audio: boolean;
+            /**
+             * Format: uri
+             * @description Signed HLS URL, 15-minute expiry; only when ready.
+             */
+            playback_url?: string;
+            /** Format: date-time */
+            playback_expires_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            ready_at?: string;
+        };
+        StoryPiece: {
+            source_id: string;
+            source_name: string;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            event_id?: string;
+            /** @description Its sound is in the story (an audio grant on that camera) */
+            audio: boolean;
+            /** @description How much of it was recorded (after the render) */
+            recorded_ms?: number;
+            /** @description Where it starts in the story (after the render) */
+            offset_ms?: number;
+            /** @description Time since the previous piece */
+            gap_before_ms?: number;
+        };
+        FollowCreate: {
+            reference: components["schemas"]["FollowReference"];
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** @description Cameras to look at; default every camera the caller may watch over the range (at most 8) */
+            sources?: string[];
+            /** @description Make a story of the route (default true) */
+            make_story?: boolean;
+        };
+        /** @description What to follow: a box on an event's snapshot (`event`) or on a camera's recorded frame (`source` and `at`), as fractions of the picture; or a `description` (needs a vision model). Never a person. */
+        FollowReference: {
+            event?: string;
+            source?: string;
+            /** Format: date-time */
+            at?: string;
+            /** @description x1, y1, x2, y2 as fractions of the picture (0–1) */
+            box?: number[];
+            /** @description e.g. "the brown cardboard box with red tape" */
+            description?: string;
+        };
+        Follow: {
+            id: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "done" | "failed" | "refused";
+            error?: string;
+            /** @description Where the reference is (no pixels, no embedding) */
+            reference: {
+                [key: string]: unknown;
+            };
+            sources: string[];
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            make_story: boolean;
+            story_id?: string;
+            result?: components["schemas"]["FollowResult"];
+            frames_examined: number;
+            model_calls: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            finished_at?: string;
+        };
+        FollowResult: {
+            /** @description Visits in time order */
+            route?: components["schemas"]["FollowVisit"][];
+            handovers?: components["schemas"]["FollowHandover"][];
+            gaps?: components["schemas"]["FollowGap"][];
+            /** Format: date-time */
+            first_seen?: string;
+            /** Format: date-time */
+            last_seen?: string;
+            sightings?: components["schemas"]["FollowSighting"][];
+            cameras?: components["schemas"]["FollowCamera"][];
+            limits?: components["schemas"]["FollowLimits"];
+            story_note?: string;
+        };
+        FollowCamera: {
+            source_id?: string;
+            source_name?: string;
+            frames_examined?: number;
+        };
+        FollowLimits: {
+            frames?: number;
+            frames_examined?: number;
+            frame_limit_reached?: boolean;
+            model_calls?: number;
+            model_calls_cap?: number;
+        };
+        FollowVisit: {
+            source_id: string;
+            source_name: string;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            sightings: number;
+            confidence: number;
+            confirmed_by_model?: boolean;
+            /** Format: uri */
+            playback_url?: string;
+            /** Format: date-time */
+            playback_expires_at?: string;
+        };
+        FollowHandover: {
+            from_source?: string;
+            to_source?: string;
+            /** Format: date-time */
+            left_at?: string;
+            /** Format: date-time */
+            seen_at?: string;
+            gap_ms?: number;
+        };
+        FollowGap: {
+            /** Format: date-time */
+            from?: string;
+            /** Format: date-time */
+            to?: string;
+            /** @description Why it was not seen: no camera recording, not looked at, or not there */
+            note?: string;
+        };
+        FollowSighting: {
+            source_id?: string;
+            /** Format: date-time */
+            at?: string;
+            box?: number[];
+            confidence?: number;
+            confirmed?: boolean | null;
+        };
         Grant: components["schemas"]["grant"];
         Webhook: components["schemas"]["webhook"];
         Channel: components["schemas"]["channel"];
@@ -5864,6 +6145,243 @@ export interface operations {
         };
     };
     deleteClip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listStories: {
+        parameters: {
+            query?: {
+                /** @description Page size (1–200, default 50) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Story"][];
+                        next_cursor: string | null;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createStory: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes a create safe to retry. A repeat with the same key and the same body within 24 hours returns the first response (with `Idempotent-Replayed: true`) instead of creating again; the same key with a different body is refused with `idempotency_key_reused`. Keys are scoped to the account. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StoryCreate"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Story"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getStory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Story"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteStory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createStoryLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    expires_in_s?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uri */
+                        url: string;
+                        /** Format: date-time */
+                        expires_at: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listFollows: {
+        parameters: {
+            query?: {
+                /** @description Page size (1–200, default 50) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Follow"][];
+                        next_cursor: string | null;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createFollow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes a create safe to retry. A repeat with the same key and the same body within 24 hours returns the first response (with `Idempotent-Replayed: true`) instead of creating again; the same key with a different body is refused with `idempotency_key_reused`. Keys are scoped to the account. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FollowCreate"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Follow"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getFollow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Follow"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteFollow: {
         parameters: {
             query?: never;
             header?: never;

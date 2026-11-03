@@ -22,7 +22,7 @@ import type { ObjectStorage } from "./storage.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
 import type { EgressRequest } from "./egress.js";
-import { createWorkflowEngine } from "./workflows.js";
+import { createWorkflowEngine, workflowAccess } from "./workflows.js";
 
 const PW = "correct horse battery";
 const log = { warn() {}, error() {}, info() {} } as never;
@@ -480,6 +480,44 @@ describe("workflows", () => {
       const r2done = await runOf(r2.id);
       expect(r2done).toMatchObject({ status: "failed", failed_step: "say", error: expect.stringContaining("may or may not have happened") });
       expect(says).toEqual(["Hello there."]);
+    });
+
+    it("grants a run only its own sources: video and sensors, audio where the camera records it, speak where a step speaks, blurred where blurring is on", async () => {
+      await call(owner, "PATCH", `/v1/sources/${garden}`, { record_audio: true, blur_plates: true });
+      try {
+        const list = await api.data.withAccount(acc, (s) => s.sources.list());
+        const def = { trigger: { type: "webhook" as const }, steps: [{ id: "say", kind: "speak" as const, source: porch, text: "hi" }], edges: [{ from: "trigger", to: "say" }] };
+        const access = workflowAccess("wfl_x", list.filter((s) => [porch, garden, sensor].includes(s.id)), await api.data.withAccount(acc, (s) => s.account.get()), def);
+        expect(access.actor).toBe("workflow:wfl_x");
+        const by = Object.fromEntries(access.grants!.map((g) => [g.source_ids[0], g]));
+        expect(Object.keys(by).sort()).toEqual([porch, garden, sensor].sort());
+        expect(by[porch]).toMatchObject({ senses: ["video", "sensors", "speak"], blurred_only: false });
+        expect(by[garden]).toMatchObject({ senses: ["video", "audio", "sensors"], blurred_only: true });
+        expect(by[sensor]).toMatchObject({ senses: ["sensors"], blurred_only: false });
+        expect(access.grants!.flatMap((g) => g.senses)).not.toContain("control");
+      } finally {
+        await call(owner, "PATCH", `/v1/sources/${garden}`, { record_audio: false, blur_plates: null });
+      }
+    });
+
+    it("asks within the account's AI checks, and tries again when the brain doesn't answer", async () => {
+      const wf = await create({ name: "Ask", sources: [porch], trigger: { type: "event", sources: [porch] },
+        steps: [{ id: "look", kind: "ask", question: "Is there a parcel?" }], edges: [{ from: "trigger", to: "look" }] });
+      const usedUp = createWorkflowEngine({ data: api.data, bus, storage, send: sender, log, checksUsedUp: async () => true });
+      await event(porch);
+      for (const c of await usedUp.claim(5)) await usedUp.execute(acc, c.id, c.token);
+      const [first] = await runsOf(wf.id);
+      expect(await runOf(first!.id)).toMatchObject({ status: "failed", error: expect.stringContaining("allowance_exhausted") });
+      expect(asked).toHaveLength(0);
+      brainDown = true;
+      await event(porch);
+      await api.workflows.runDue();
+      const [second] = await runsOf(wf.id);
+      expect((await runOf(second!.id)).steps[0]).toMatchObject({ status: "waiting", attempts: 1, error: "the brain didn't answer" });
+      brainDown = false;
+      await due();
+      await api.workflows.runDue();
+      expect((await runOf(second!.id)).steps[0]).toMatchObject({ status: "succeeded", attempts: 2, output: { yes: true } });
     });
 
     it("waits without holding a claim, then goes on", async () => {

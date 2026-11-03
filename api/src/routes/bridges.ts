@@ -50,7 +50,7 @@ export interface BridgeDeps {
   /** Cuts a camera's live stream off at the media plane (a removed box's cameras). */
   disconnect?(sourceId: string): Promise<void>;
   /** The box played (or couldn't play) a message on a camera (ADR 0069). */
-  onSpeakReported?(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined): Promise<void>;
+  onSpeakReported?(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined, result?: Record<string, unknown>): Promise<void>;
 }
 
 const healthBody = {
@@ -451,7 +451,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         if (!done) throw new ApiError(404, "not_found", "no such command waiting for a result");
         await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: `bridge.${done.kind}_${req.body.ok ? "done" : "failed"}`, target: req.params.id, status: 200 });
         if (done.kind === "device_control") await finishDeviceCommand(deps.data, accountId, req.params.id, req.body.ok, req.body.result, req.body.error, deps.audit);
-        if (done.kind === "speak") await deps.onSpeakReported?.(accountId, req.params.id, req.body.ok, req.body.error);
+        if (done.kind === "speak") await deps.onSpeakReported?.(accountId, req.params.id, req.body.ok, req.body.error, req.body.result);
         return reply.code(204).send();
       },
     );

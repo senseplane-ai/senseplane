@@ -63,8 +63,8 @@ type Options struct {
 	// ready is asked just before the first packet (the message may have become too late).
 	PlaySpeaker func(ctx context.Context, rtspURL string, p speak.PCM, ready func() error) (time.Duration, error)
 	// LocalSpeaker, when set, plays messages for cameras that are this device itself (the phone in the
-	// Android app); it returns false for a camera it isn't.
-	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, error)
+	// Android app); it returns false for a camera it isn't, and "muted" when the phone's volume was off.
+	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, string, error)
 }
 
 // SensorLink feeds readings from somewhere else than Home Assistant or Matter.

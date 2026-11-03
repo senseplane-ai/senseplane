@@ -47,7 +47,7 @@ object BoxHolder {
             }
         })
         // Agents' and watches' messages for this phone's camera play here (ADR 0069).
-        b.setSpeaker(PhoneSpeaker())
+        b.setSpeaker(PhoneSpeaker(volume = PhoneSpeaker.mediaVolume(context.applicationContext)))
         if (prefs.whipBase.isNotEmpty()) b.setWHIPBase(prefs.whipBase)
         if (prefs.matterAddress.isNotEmpty()) runCatching { b.setMatterAddress(prefs.matterAddress) }
         box = b

@@ -207,12 +207,12 @@ func TestThePhonePlaysMessagesForItsOwnCamera(t *testing.T) {
 	f := &speakAPI{rtsp: "rtsp://this-phone.senseplane.invalid/camera", clip: message(500 * time.Millisecond)}
 	var got speak.PCM
 	b, stop := speakBox(t, f, Options{
-		LocalSpeaker: func(_ context.Context, source string, p speak.PCM) (bool, error) {
+		LocalSpeaker: func(_ context.Context, source string, p speak.PCM) (bool, string, error) {
 			if source != "src_gate" {
-				return false, nil
+				return false, "", nil
 			}
 			got = p
-			return true, nil
+			return true, "muted", nil
 		},
 		PlaySpeaker: func(context.Context, string, speak.PCM, func() error) (time.Duration, error) {
 			t.Error("the backchannel was used for the phone's own camera")
@@ -221,6 +221,9 @@ func TestThePhonePlaysMessagesForItsOwnCamera(t *testing.T) {
 	})
 	defer stop()
 	b.runCommand(context.Background(), f.take(t, b))
+	if res, _ := f.report["result"].(map[string]any); res["muted"] != true {
+		t.Fatalf("a muted phone's report: %v", f.report)
+	}
 	if f.report["ok"] != true || got.Rate != 24000 || len(got.Samples) != 12000 {
 		t.Fatalf("report %v, played %d Hz %d samples", f.report, got.Rate, len(got.Samples))
 	}

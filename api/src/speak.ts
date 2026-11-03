@@ -454,13 +454,16 @@ export function createSpeech(deps: SpeakDeps) {
   }
 
   /** The box's report on a `speak` command (POST /v1/bridge/commands/{id}). */
-  async function boxReported(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined) {
+  async function boxReported(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined, result?: Record<string, unknown>) {
     const row = await data.withAccount(accountId, (s) => s.db.selectFrom("speak_messages").selectAll().where("bridge_command_id", "=", bridgeCommandId).where("status", "=", "sent").executeTakeFirst());
     if (!row) return;
     const source = await data.withAccount(accountId, (s) => s.sources.get(row.source_id));
     const late = !ok && /too late/i.test(error ?? "");
     const status: SpeakStatus = ok ? "played" : late ? "late" : "failed";
-    const message = ok ? null : late ? "It reached the box too late, so it wasn't played." : `The box couldn't play it: ${(error ?? "failed").slice(0, 300)}`;
+    // A phone whose volume was off played it, but nobody heard it: said plainly, not just "played".
+    const muted = ok && result?.muted === true;
+    const message = muted ? "It played, but the phone's volume was off, so it may not have been heard."
+      : ok ? null : late ? "It reached the box too late, so it wasn't played." : `The box couldn't play it: ${(error ?? "failed").slice(0, 300)}`;
     await finish(accountId, row.id, status, message, ok ? 200 : late ? 503 : 502, undefined, source?.name ?? row.source_id);
   }
 

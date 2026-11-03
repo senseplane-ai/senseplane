@@ -393,6 +393,25 @@ describe("talk-back", () => {
     await clear();
   });
 
+  it("says plainly when a phone played a message with its volume off", async () => {
+    await clear();
+    let stop = false;
+    const box = (async () => {
+      while (!stop) {
+        const r = await call(bridge.token, "GET", "/v1/bridge/commands?wait=1");
+        for (const c of (r.json().data ?? []) as { id: string }[]) {
+          await call(bridge.token, "POST", `/v1/bridge/commands/${c.id}`, { ok: true, result: { played_ms: 900, muted: true } });
+        }
+      }
+    })();
+    const r = await speak(owner, ipcam, "Hello, volume check");
+    stop = true;
+    await box;
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ status: "played", message: expect.stringMatching(/volume was off/) });
+    await clear();
+  });
+
   it("records what the box says when a message arrived too late to play", async () => {
     await clear();
     let stop = false;

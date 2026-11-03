@@ -59,12 +59,16 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 		return nil, err
 	}
 	if b.o.LocalSpeaker != nil {
-		if ok, err := b.o.LocalSpeaker(ctx, sourceID, clip); ok || err != nil {
+		if ok, note, err := b.o.LocalSpeaker(ctx, sourceID, clip); ok || err != nil {
 			if err != nil {
 				return nil, fmt.Errorf("the phone couldn't play it: %w", err)
 			}
-			b.o.Log.Info("played a message on this phone", "source", sourceID, "ms", clip.Duration().Milliseconds())
-			return map[string]any{"played_ms": clip.Duration().Milliseconds()}, nil
+			b.o.Log.Info("played a message on this phone", "source", sourceID, "ms", clip.Duration().Milliseconds(), "note", note)
+			out := map[string]any{"played_ms": clip.Duration().Milliseconds()}
+			if note == "muted" {
+				out["muted"] = true // played, but the phone's volume was off: say so, not just "played"
+			}
+			return out, nil
 		}
 	}
 	played, err := b.o.PlaySpeaker(ctx, w.cam.RTSPURL, clip, ready)

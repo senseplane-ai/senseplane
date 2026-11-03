@@ -48,9 +48,10 @@ type Listener interface {
 
 // Speaker is the phone's own speaker (talk-back, ADR 0069): Play gets an agent's or a watch's message,
 // chime included, as 16-bit little-endian mono PCM at `rate`, plays it and returns when it has finished.
+// It returns "muted" when the phone's volume was off (it played, but nobody could hear it), else "".
 // The app shows that something is speaking while it plays.
 type Speaker interface {
-	Play(pcm []byte, rate int) error
+	Play(pcm []byte, rate int) (string, error)
 }
 
 // Box is one phone acting as a box.
@@ -120,22 +121,23 @@ func (b *Box) SetSpeaker(s Speaker) {
 }
 
 // playHere plays a message on this phone when the camera is this phone's own.
-func (b *Box) playHere(_ context.Context, sourceID string, p speak.PCM) (bool, error) {
+func (b *Box) playHere(_ context.Context, sourceID string, p speak.PCM) (bool, string, error) {
 	b.mu.Lock()
 	mine := sourceID != "" && sourceID == b.status.PhoneCamera
 	s := b.speaker
 	b.mu.Unlock()
 	if !mine {
-		return false, nil
+		return false, "", nil
 	}
 	if s == nil {
-		return true, errors.New("this phone's app can't play sound")
+		return true, "", errors.New("this phone's app can't play sound")
 	}
 	pcm := make([]byte, 2*len(p.Samples))
 	for i, v := range p.Samples {
 		pcm[2*i], pcm[2*i+1] = byte(v), byte(uint16(v)>>8)
 	}
-	return true, s.Play(pcm, p.Rate)
+	note, err := s.Play(pcm, p.Rate)
+	return true, note, err
 }
 
 // probeSpeaker: the phone's own camera has a speaker; other cameras are asked for an ONVIF backchannel.

@@ -535,7 +535,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   }
   registerBridgeRoutes(app, {
     data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
-    onSpeakReported: (accountId, id, ok, error) => speech.boxReported(accountId, id, ok, error),
+    onSpeakReported: (accountId, id, ok, error, result) => speech.boxReported(accountId, id, ok, error, result),
     ...(mediaDriver?.publicUrl ? { whip: { publicUrl: mediaDriver.publicUrl, authorizeUrl: whipAuthorizeUrl, signer } } : {}),
   });
   registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,

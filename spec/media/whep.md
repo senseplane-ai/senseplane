@@ -16,7 +16,8 @@ API hands the box with the `talk` command:
   phone (`{source_id}:capture`) can't be heard this way.
 - `kind: "agent"`, `transport: "webrtc"`.
 - `grants`: `canPublish: false`, `canSubscribe: true`, `canPublishData: false`,
-  `subscribeKinds: ["audio"]`, `maxSubscriptions: 1`.
+  `subscribeKinds: ["audio"]`, `maxSubscriptions: 1`, and `listenTo`: the one
+  `talkback` producer (the press) this token is for.
 - `exp`: the most this one press may last; the session ends then.
 
 ## Flow
@@ -26,10 +27,11 @@ API hands the box with the `talk` command:
    a complete offer (non-trickle) with one audio section that receives Opus
    48000/2.
 2. The node admits the token like any join (signature, issuer, single use,
-   the join gate). It answers 404 `no_talkback` when the room has no
-   `talkback` track, or the track's `visibleTo` doesn't name this identity:
-   the same answer, so nothing is disclosed. A token that may publish, or
-   may not receive audio: 403. No Opus in the offer: 415.
+   the join gate). It answers 404 `no_talkback` when the room's `talkback`
+   track isn't the token's `listenTo` (nobody talking, or a later press), or
+   the track's `visibleTo` doesn't name this identity: the same answer, so
+   nothing is disclosed. A token that may publish, may not receive audio, or
+   names no `listenTo`: 403. No Opus in the offer: 415.
 3. It consumes the track for the listener and answers `201` with an ICE-lite
    SDP answer (the audio section `sendonly`, the track's SSRC) and
    `Location: /whep/talkback/{session}`. Audio flows once DTLS is up; the
@@ -37,9 +39,12 @@ API hands the box with the `talk` command:
 4. The session ends when the talker's track closes (the button released, the
    talker gone or removed), when the token's `exp` passes, when the room
    ends, or on `DELETE {Location}` with the same bearer. The node closes the
-   transport, which the box sees as the connection closing.
-5. A listener that goes first (DELETE, DTLS closed, ICE lost, `exp`) ends the
-   talker's track too, and the talker gets `talkbackEnded` with `reason`
-   `listener_left` or `expired`.
+   transport, which the box sees as the connection closing. A connected
+   listener from which nothing arrives for 4 s (no ICE checks: the box is
+   gone) is ended too; a listener should send a check at least every 2 s.
+5. A listener that goes first (DELETE, DTLS closed, ICE lost, silent for 4 s,
+   `exp`) ends the talker's track too, if it is still the press the listener
+   had, and the talker gets `talkbackEnded` with `reason` `listener_left` or
+   `expired`.
 
 `PATCH` (trickle ICE) answers 405.

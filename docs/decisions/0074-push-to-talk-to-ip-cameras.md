@@ -27,17 +27,30 @@ console; the media plane decides who may receive it, as before.
   camera's box (the command channel of ADR 0062, taken within 10 s and with a
   `run_by`, or never). Its arguments, sealed like every command's and
   cleared once taken, are the media plane's WHEP URL
-  (`{MEDIA_PUBLIC_URL}/whep/talkback`) and a join token for this one press:
-  identity `{source_id}:speaker`, kind `agent`, audio in only
-  (`canPublish: false`, `subscribeKinds: ["audio"]`, `maxSubscriptions: 1`),
-  single use, expiring with the press's cap.
-- The box opens the camera's backchannel (`DESCRIBE`, `SETUP`, `PLAY`, as for
-  clips) and then pulls the track with a WHEP-style request
+  (`{MEDIA_PUBLIC_URL}/whep/talkback`), the press's producer and a join token
+  for that one press: identity `{source_id}:speaker`, kind `agent`, audio in
+  only (`canPublish: false`, `subscribeKinds: ["audio"]`,
+  `maxSubscriptions: 1`, `listenTo: <the press's producer>`), single use,
+  expiring with the press's cap.
+- **Each press is its own track.** The media plane gives a listener only the
+  producer its token names, and only while that press is held; a token for
+  an earlier press (a box slow to connect while the person let go and
+  pressed again) gets 404 and never hears, nor ends, the later one. A
+  listener that goes away ends only the press it had; the API's
+  `talkback/stop` names the producer too.
+- The box pulls the press first, with a WHEP-style request
   (`spec/media/whep.md`): an SDP offer POSTed with the token, an ICE-lite
   answer back, `DELETE` to end. WebRTC is Pion (MIT), which the box already
-  uses for WHIP. The media plane answers 404 `no_talkback` when nobody is
-  talking or the talker didn't name this listener, so a token for another
+  uses for WHIP. Only then does it take the camera's speaker and open its
+  backchannel (`DESCRIBE`, `SETUP`, `PLAY`, as for clips), so a command for a
+  press already over never opens the speaker. The media plane answers 404
+  `no_talkback` when nobody is talking, the talker didn't name this
+  listener, or the token is for another press, so a token for another
   camera, or a talker on the phone path, gets nothing.
+- The backchannel is kept alive while a press lasts: the box sends
+  `GET_PARAMETER` (`OPTIONS` to a camera that refuses it) every half of the
+  session timeout the camera's `SETUP` names, since interleaved audio isn't a
+  request and cameras drop sessions that send none.
 
 **Audio.** The box decodes Opus in pure Go with Pion's decoder
 (`github.com/pion/opus`, MIT, SILK, CELT and hybrid), straight to 8 kHz
@@ -61,15 +74,22 @@ them going on.
 - the button released, the console gone, or the viewer removed (idle,
   revoked, the camera offline): the track closes, the media plane closes the
   listener's connection, and the box stops within a packet;
-- no audio for 3 s;
+- no packets for 3 s: the person's audio stopped reaching the box (a silent
+  microphone still sends packets, so this is the network, not a pause);
 - the token's expiry and the press's cap, 10 minutes, as on the phone
   (ADR 0069's `PERSON_MAX_MS`); the media plane also ends the listener at
   `exp`;
 - the camera hanging up, or not taking audio for a second.
 A listener that goes first ends the talker's track too, and the console is
-told why (`talkbackEnded`). A person who loses member (removed, or made a
-viewer) has their live views ended with `revoked`, so a press in progress
-stops at once and no new one starts on an old token.
+told why (`talkbackEnded`). A box that vanishes mid-press (unplugged, its
+network gone, no goodbye) is noticed by the media plane within about 4 s:
+once connected, the box sends an ICE check every second, and a listener
+from which nothing at all arrives for 4 s is ended (mediasoup's own ICE
+consent timeout, at least 10 s, is the backstop). A person who loses member
+(removed, or made a viewer) has their live views ended with `revoked`, so a
+press in progress stops at once and no new one starts on an old token. A
+press another press took the speaker from before it was heard is reported
+`stopped`, not failed.
 
 **One speaker per camera, shared with typed speech.** The API's rules are
 unchanged: a message is refused (`speaker_busy`) while a person talks, and a
@@ -82,9 +102,16 @@ arrives while someone talks is refused.
 this. The lawful-use rules for speaking through a camera apply unchanged.
 
 **Audited like the phone path.** Each press is a `person` speak message with
-who and how long (`speak.playing`, then `speak.played`); a press the box
-couldn't carry is `speak.failed` with the box's reason. What was said isn't
-recorded.
+who and how long (`speak.playing`, then `speak.played`), keyed on its
+producer, so the media plane's callbacks (at least once, in any order) land on
+the right press: a retried start is a no-op, an end that came first leaves
+the press finished and sends the box nothing, a press of the same viewer still
+open when another starts (its end was lost) is finished, as is one past the
+10-minute cap or of a viewer who left. The box reports how long the camera's
+speaker carried it (`heard_ms`); a press the box took but found already let
+go of is `speak.late` ("nobody heard it"), and one the box couldn't carry is
+`speak.failed` with the box's reason (it ends the press only while it is
+still held). What was said isn't recorded.
 
 **Capability on the source.** Sources gain `talk`: push-to-talk reaches this
 camera's speaker. A phone with a speaker always; an IP camera when its box
@@ -96,18 +123,20 @@ live audio to the phone's loudspeaker is a later step. `POST
 saying why.
 
 **Console.** Hold to talk shows on cameras with `talk`, for members and up.
-While held it says "Connecting to the speaker…" until the media plane says
-the camera hears it (`talkbackListening`: the phone resumed the track, or
-the box connected), then "Talking… release to stop". A press nobody hears
-within 6 s is stopped ("the camera's speaker didn't answer"), and a press the
-camera's side ended shows why (the box's reason, the 10-minute cap, the
-camera hanging up). An IP camera that has a speaker but no `talk` says the box
+On an IP camera, while held it says "Connecting to the speaker…" until the
+media plane says the camera hears it (`talkbackListening`, once the box is
+connected), then "Talking… release to stop"; a press nobody hears within
+6 s is stopped ("the camera's speaker didn't answer"). A phone's press is as
+before: "Talking" at once, no timer. On either, a press the camera's side
+ended shows why (the box's reason, the 10-minute cap, "the camera stopped
+getting your audio"). Each state is announced in a polite live region for
+screen readers. An IP camera that has a speaker but no `talk` says the box
 needs updating or the speaker isn't G.711.
 
-**Media contract.** `spec/media/whep.md`; the `talkbackListening` and
-`talkbackEnded` events; `POST /control/rooms/{roomId}/participants/
-{identity}/talkback/stop` with a reason and a message, which the API uses when
-the box reports it couldn't carry a press. All optional for a media plane:
+**Media contract.** `spec/media/whep.md`; the `listenTo` grant; the
+`talkbackListening` and `talkbackEnded` events; `POST /control/rooms/{roomId}/participants/
+{identity}/talkback/stop` with a reason, a message and the producer, which
+the API uses when the box reports it couldn't carry a press. All optional for a media plane:
 without them a press to an IP camera simply isn't heard, and the console
 says so.
 
@@ -122,7 +151,8 @@ says so.
   (`SENSEPLANE_TALK_E2E_MEDIA=media go test ./internal/bridge -run
   TestTalkEndToEnd` after building `media/`): a fake console sends the tone,
   the real bridge pulls it, and Goertzel on the fake camera's G.711 finds the
-  tone.
+  tone; then a box that vanishes without a goodbye has its press ended
+  within about 4.5 s.
 - Needs real hardware: browsers' Opus through the public internet, cameras'
   own backchannel buffering and echo, Digest quirks of particular models,
   and a box behind a strict NAT reaching the media plane (the same path the

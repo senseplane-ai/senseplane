@@ -56,6 +56,39 @@ func TestAStreamSendsPacketsAsTheyCome(t *testing.T) {
 	}
 }
 
+// A long press keeps the camera's session: a keepalive every half of its timeout (GET_PARAMETER, or
+// OPTIONS for a camera that refuses it), since interleaved audio alone isn't a request.
+func TestAStreamKeepsTheSessionAlive(t *testing.T) {
+	for name, noGet := range map[string]bool{"GET_PARAMETER": false, "OPTIONS": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cam := speaktest.Start(t, true)
+			cam.Timeout = 2
+			cam.NoGetParameter = noGet
+			cam.Digest = true
+			st, err := Open(context.Background(), cam.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			frame := make([]int16, 160)
+			for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+				if err := st.Write(frame); err != nil {
+					t.Fatalf("the camera dropped the session after %d packets: %v", len(cam.Packets()), err)
+				}
+			}
+			select {
+			case <-st.Gone():
+				t.Fatal("the camera hung up")
+			default:
+			}
+			if !slices.Contains(cam.Methods(), name) {
+				t.Fatalf("no %s keepalive: %v", name, cam.Methods())
+			}
+		})
+	}
+}
+
 // A camera whose speaker takes another codec is refused, saying which.
 func TestAnUnsupportedSpeakerCodecIsNamed(t *testing.T) {
 	cam := speaktest.Start(t, true)

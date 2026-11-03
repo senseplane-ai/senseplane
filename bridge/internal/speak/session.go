@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,17 +35,24 @@ type track struct {
 
 // session is one RTSP connection to a camera, over TCP, for the backchannel only.
 type session struct {
-	conn  net.Conn
-	r     *bufio.Reader
-	wmu   sync.Mutex
-	base  string // Content-Base, else the URL without credentials
-	user  string
-	pass  string
-	cseq  int
-	id    string // Session
-	auth  func(method, uri string) string
-	track *track
-	other string // a speaker track in a codec the box can't send, when there is no G.711 one
+	conn net.Conn
+	r    *bufio.Reader
+	wmu  sync.Mutex
+	base string // Content-Base, else the URL without credentials
+	user string
+	pass string
+	cseq int
+	id   string // Session
+	auth func(method, uri string) string
+	// timeout is how long the camera keeps the session without a request (SETUP's Session timeout=).
+	timeout time.Duration
+	// The keepalive: GET_PARAMETER, or OPTIONS for a camera that refuses it; kaCSeq is the last one sent.
+	kaOptions atomic.Bool
+	kaCSeq    atomic.Int64
+	stop      chan struct{}
+	stopOnce  sync.Once
+	track     *track
+	other     string // a speaker track in a codec the box can't send, when there is no G.711 one
 }
 
 // open connects and DESCRIBEs with the backchannel required.
@@ -201,7 +209,15 @@ func (s *session) setup(ctx context.Context) (byte, error) {
 		return 0, fmt.Errorf("SETUP answered %d", status)
 	}
 	if sess := h.Get("Session"); sess != "" {
-		s.id = strings.TrimSpace(strings.SplitN(sess, ";", 2)[0])
+		parts := strings.Split(sess, ";")
+		s.id = strings.TrimSpace(parts[0])
+		for _, p := range parts[1:] {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(p), "timeout="); ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					s.timeout = time.Duration(n) * time.Second
+				}
+			}
+		}
 	}
 	ch := byte(0)
 	tr := h.Get("Transport")
@@ -226,15 +242,62 @@ func (s *session) play(ctx context.Context) error {
 	return nil
 }
 
-// drain reads and drops what the camera sends once audio is flowing; the channel closes when it hangs up.
+// drain reads and drops what the camera sends once audio is flowing (its RTCP, the keepalives' answers);
+// the channel closes when it hangs up. It also keeps the session alive: interleaved audio isn't a request,
+// and cameras drop a session that sends none for its timeout (RFC 2326 §12.37).
 func (s *session) drain() <-chan struct{} {
 	gone := make(chan struct{})
+	s.stop = make(chan struct{})
 	go func() {
 		defer close(gone)
 		_ = s.conn.SetReadDeadline(time.Time{})
-		_, _ = io.Copy(io.Discard, s.r)
+		for {
+			status, h, _, err := s.read()
+			if err != nil {
+				return
+			}
+			// A camera that doesn't know GET_PARAMETER is kept alive with OPTIONS from then on.
+			if cseq, _ := strconv.ParseInt(h.Get("Cseq"), 10, 64); cseq == s.kaCSeq.Load() && (status == 405 || status == 501 || status == 551) {
+				s.kaOptions.Store(true)
+			}
+		}
 	}()
+	go s.keepalive(gone)
 	return gone
+}
+
+// keepalive sends a request every half of the session's timeout (60 s when the camera names none).
+func (s *session) keepalive(gone <-chan struct{}) {
+	every := s.timeout / 2
+	if every <= 0 {
+		every = 30 * time.Second
+	}
+	every = max(every, 500*time.Millisecond)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-gone:
+			return
+		case <-s.stop:
+			return
+		case <-t.C:
+		}
+		method := "GET_PARAMETER"
+		if s.kaOptions.Load() {
+			method = "OPTIONS"
+		}
+		s.wmu.Lock()
+		_ = s.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		err := s.write(method, s.base, nil)
+		if method == "GET_PARAMETER" {
+			s.kaCSeq.Store(int64(s.cseq))
+		}
+		s.wmu.Unlock()
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (s *session) writeInterleaved(ctx context.Context, ch byte, data []byte) error {
@@ -254,6 +317,9 @@ func (s *session) writeInterleaved(ctx context.Context, ch byte, data []byte) er
 }
 
 func (s *session) close() {
+	if s.stop != nil {
+		s.stopOnce.Do(func() { close(s.stop) })
+	}
 	if s.id != "" {
 		s.wmu.Lock()
 		_ = s.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))

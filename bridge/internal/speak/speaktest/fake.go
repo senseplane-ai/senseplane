@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +40,11 @@ type Camera struct {
 	Qop bool
 	// Slow: how long it takes to answer DESCRIBE (a camera on a slow network).
 	Slow time.Duration
+	// Timeout, when set, is the session timeout (seconds) SETUP announces, and the camera hangs up a
+	// playing session that sends no request for that long, as real ones do; 0 announces 60 and never hangs up.
+	Timeout int
+	// NoGetParameter: it answers GET_PARAMETER 501 (and that doesn't keep the session), as some cameras do.
+	NoGetParameter bool
 
 	ln       net.Listener
 	mu       sync.Mutex
@@ -139,6 +145,9 @@ func (c *Camera) sdp(backchannel bool) string {
 func (c *Camera) handle(conn net.Conn) {
 	defer conn.Close()
 	r := bufio.NewReader(conn)
+	var lastRequest atomic.Int64
+	lastRequest.Store(time.Now().UnixNano())
+	watching := false
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		first, err := r.Peek(1)
@@ -177,6 +186,9 @@ func (c *Camera) handle(conn net.Conn) {
 		if n, _ := strconv.Atoi(h.Get("Content-Length")); n > 0 {
 			_, _ = io.CopyN(io.Discard, r, int64(n))
 		}
+		if !(c.NoGetParameter && strings.HasPrefix(line, "GET_PARAMETER")) {
+			lastRequest.Store(time.Now().UnixNano())
+		}
 		parts := strings.SplitN(line, " ", 3)
 		method := parts[0]
 		uri := ""
@@ -213,8 +225,30 @@ func (c *Camera) handle(conn net.Conn) {
 			backchannel := strings.Contains(h.Get("Require"), "www.onvif.org/ver20/backchannel")
 			reply("Content-Base: "+strings.Replace(c.URL, "admin:secret@", "", 1)+"/\r\n", c.sdp(backchannel))
 		case "SETUP":
-			reply("Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\nSession: 4242;timeout=60\r\n", "")
+			timeout := 60
+			if c.Timeout > 0 {
+				timeout = c.Timeout
+			}
+			reply(fmt.Sprintf("Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\nSession: 4242;timeout=%d\r\n", timeout), "")
 		case "PLAY":
+			reply("Session: 4242\r\n", "")
+			if c.Timeout > 0 && !watching {
+				watching = true
+				go func() {
+					for {
+						time.Sleep(100 * time.Millisecond)
+						if time.Since(time.Unix(0, lastRequest.Load())) > time.Duration(c.Timeout)*time.Second {
+							_ = conn.Close() // the session timed out
+							return
+						}
+					}
+				}()
+			}
+		case "GET_PARAMETER":
+			if c.NoGetParameter {
+				_, _ = conn.Write([]byte("RTSP/1.0 501 Not Implemented\r\nCSeq: " + cseq + "\r\n\r\n"))
+				continue
+			}
 			reply("Session: 4242\r\n", "")
 		case "TEARDOWN":
 			reply("Session: 4242\r\n", "")

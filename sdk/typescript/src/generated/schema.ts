@@ -1094,7 +1094,7 @@ export interface paths {
         put?: never;
         /**
          * Make one video from many moments across cameras
-         * @description Moments (events, or time ranges on cameras) or a search are put in time order and made into one video: each piece labelled with its camera and time, a gap over a minute shown as a short "+3 min" card (labelled mode, 720p H.264), or the recordings copied untouched without labels (fast mode). It is rendered in the background: poll GET /stories/{id} until `ready`. At most 20 pieces and 10 minutes of video. The caller needs a video grant covering every piece (with history for older ones); sound only from cameras it has an audio grant on; a blurred-only agent is refused (recordings aren't blurred). Kept like a saved clip: raw retention doesn't delete it.
+         * @description Moments (events, or time ranges on cameras) or a search are put in time order and made into one video, never re-encoded: each piece is its recorded segments (cut on keyframes), captioned with its camera and time and a gap over a minute said in the next caption ("+3 min · Kitchen"), as a WebVTT track and as subtitles in MP4 parts to download (labelled mode); pieces whose video can't be joined without re-encoding are separate parts, said in `note`. Or the recordings copied untouched without labels (fast mode). It is rendered in the background: poll GET /stories/{id} until `ready`. At most 20 pieces and 10 minutes of video. The caller needs a video grant covering every piece (with history for older ones); sound only from cameras it has an audio grant on; a blurred-only agent is refused (recordings aren't blurred). Kept like a saved clip: raw retention doesn't delete it.
          */
         post: operations["createStory"];
         delete?: never;
@@ -2069,7 +2069,7 @@ export interface components {
             moments?: components["schemas"]["StoryMoment"][];
             search?: components["schemas"]["StorySearch"];
             /**
-             * @description labelled (default): re-encoded with labels and gap cards; fast: the recordings copied untouched
+             * @description labelled (default): captions and MP4 parts; fast: the playlist alone. Neither re-encodes.
              * @enum {string}
              */
             mode?: "labelled" | "fast";
@@ -2112,10 +2112,31 @@ export interface components {
             playback_url?: string;
             /** Format: date-time */
             playback_expires_at?: string;
+            /**
+             * Format: uri
+             * @description WebVTT captions (camera and time per piece) for the player, on the playback link's token
+             */
+            captions_url?: string;
+            /** @description MP4 downloads with a subtitle track; one per run of pieces that join without re-encoding */
+            parts?: components["schemas"]["StoryPart"][];
+            /** @description Said plainly when the story is more than one part */
+            note?: string;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             ready_at?: string;
+        };
+        StoryPart: {
+            /** @description The pieces (by position) in this part */
+            pieces: number[];
+            duration_ms: number;
+            bytes: number;
+            has_audio: boolean;
+            /**
+             * Format: uri
+             * @description On the playback link's token; refused to a viewer who may not hear its sound
+             */
+            download_url?: string;
         };
         StoryPiece: {
             source_id: string;
@@ -2131,7 +2152,7 @@ export interface components {
             recorded_ms?: number;
             /** @description Where it starts in the story (after the render) */
             offset_ms?: number;
-            /** @description Time since the previous piece */
+            /** @description Time since the previous piece, when it is long enough to be said in the caption */
             gap_before_ms?: number;
         };
         FollowCreate: {

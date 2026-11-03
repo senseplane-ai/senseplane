@@ -278,6 +278,9 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
         story_id: story.id, status: story.status, ...(story.error ? { error: story.error } : {}),
         pieces: story.pieces.map((p) => ({ source: p.source_name, from: p.from, to: p.to, ...(p.recorded_ms === 0 ? { note: "nothing recorded" } : {}) })),
         ...(story.playback_url ? { url: story.playback_url, expires_at: story.playback_expires_at, duration_ms: story.duration_ms } : {}),
+        ...(story.captions_url ? { captions_url: story.captions_url } : {}),
+        ...(story.parts?.length ? { downloads: story.parts.map((x) => x.download_url).filter(Boolean) } : {}),
+        ...(story.note ? { note: story.note } : {}),
         ...(story.status !== "ready" && story.status !== "failed" ? { note: "still rendering: get it later by its story id (GET /v1/stories/{id})" } : {}),
       });
     },

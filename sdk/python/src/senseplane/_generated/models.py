@@ -814,6 +814,24 @@ class StorySearch(BaseModel):
     limit: Annotated[int | None, Field(ge=1, le=20)] = None
 
 
+class StoryPart(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    pieces: list[int]
+    """
+    The pieces (by position) in this part
+    """
+    duration_ms: int
+    bytes: int
+    has_audio: bool
+    download_url: str | None = None
+    """
+    On the playback link's token; refused to a viewer who may not hear its sound
+    """
+
+
 class StoryPiece(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -838,7 +856,7 @@ class StoryPiece(BaseModel):
     """
     gap_before_ms: int | None = None
     """
-    Time since the previous piece
+    Time since the previous piece, when it is long enough to be said in the caption
     """
 
 
@@ -3747,7 +3765,7 @@ class StoryCreate(BaseModel):
     search: StorySearch | None = None
     mode: Literal['labelled', 'fast'] | None = None
     """
-    labelled (default): re-encoded with labels and gap cards; fast: the recordings copied untouched
+    labelled (default): captions and MP4 parts; fast: the playlist alone. Neither re-encodes.
     """
 
 
@@ -3770,6 +3788,18 @@ class Story(BaseModel):
     Signed HLS URL, 15-minute expiry; only when ready.
     """
     playback_expires_at: AwareDatetime | None = None
+    captions_url: str | None = None
+    """
+    WebVTT captions (camera and time per piece) for the player, on the playback link's token
+    """
+    parts: list[StoryPart] | None = None
+    """
+    MP4 downloads with a subtitle track; one per run of pieces that join without re-encoding
+    """
+    note: str | None = None
+    """
+    Said plainly when the story is more than one part
+    """
     created_at: AwareDatetime
     ready_at: AwareDatetime | None = None
 

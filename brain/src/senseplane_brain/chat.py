@@ -108,7 +108,7 @@ TOOL_SPECS = [
         "Slower, checks at most 10 moments, and only covers moments a person, vehicle, animal, object or sound was detected.",
         {"instruction": {"type": "string", "description": "What to look for, as a watch would be written: 'a person taking pills at the kitchen table'"},
          "sources": _SOURCES, "from": _TIME, "to": _TIME}, ["instruction"]),
-    _fn("make_story", "Make one video (a story) of moments you found, across cameras in time order, each labelled with its camera and time "
+    _fn("make_story", "Make one video (a story) of moments you found, across cameras in time order, each captioned with its camera and time "
         "(\"show me how the cat got out\"). Find the moments first (search_history, list_events, query_activity timeline), then pass their refs. "
         "At most 20 moments.",
         {"refs": {"type": "array", "items": {"type": "string"}, "description": "Refs of events or activities, e.g. [\"m1\", \"m3\"]"},

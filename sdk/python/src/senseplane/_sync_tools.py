@@ -523,8 +523,16 @@ class Toolkit:
         ]
         if s.get("playback_url"):
             out.update(
-                {"url": s["playback_url"], "expires_at": s.get("playback_expires_at"), **_pick(s, "duration_ms")}
+                {
+                    "url": s["playback_url"],
+                    "expires_at": s.get("playback_expires_at"),
+                    **_pick(s, "duration_ms", "captions_url"),
+                }
             )
+            if s.get("parts"):
+                out["downloads"] = [x["download_url"] for x in s["parts"] if x.get("download_url")]
+            if s.get("note"):
+                out["note"] = s["note"]
         elif s["status"] not in ("ready", "failed"):
             out["note"] = "still rendering: get it later by its story id (GET /v1/stories/{id})"
         return _text(out)

@@ -626,7 +626,7 @@
     },
     {
       "name": "make_story",
-      "description": "Make one video from many moments across cameras, in time order: each piece labelled with its camera and time, long gaps shown as a short card. Give moments (events or time ranges) or a search ('the courier'). Waits for it to be ready (up to a minute or two) and returns its playback link. At most 20 pieces and 10 minutes of video; needs video on every camera in it.",
+      "description": "Make one video from many moments across cameras, in time order, never re-encoded: each piece captioned with its camera and time, a long gap said in the next caption. Give moments (events or time ranges) or a search ('the courier'). Waits for it to be ready (up to a minute or two) and returns its playback link, captions and MP4 downloads. At most 20 pieces and 10 minutes of video; needs video on every camera in it.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -685,7 +685,7 @@
           "fast": {
             "type": "boolean",
             "default": false,
-            "description": "Copy the recordings untouched (no labels or cards), quicker"
+            "description": "Only the playlist (no captions or MP4 downloads), quicker"
           }
         }
       },

@@ -1683,8 +1683,11 @@ paths:
       summary: Make one video from many moments across cameras
       description: >-
         Moments (events, or time ranges on cameras) or a search are put in time order and
-        made into one video: each piece labelled with its camera and time, a gap over a
-        minute shown as a short "+3 min" card (labelled mode, 720p H.264), or the recordings
+        made into one video, never re-encoded: each piece is its recorded segments (cut
+        on keyframes), captioned with its camera and time and a gap over a minute said in
+        the next caption ("+3 min · Kitchen"), as a WebVTT track and as subtitles in MP4
+        parts to download (labelled mode); pieces whose video can't be joined without
+        re-encoding are separate parts, said in `note`. Or the recordings
         copied untouched without labels (fast mode). It is rendered in the background: poll
         GET /stories/{id} until `ready`. At most 20 pieces and 10 minutes of video. The caller
         needs a video grant covering every piece (with history for older ones); sound only
@@ -3215,7 +3218,7 @@ components:
           maxItems: 50
           items: {$ref: '#/components/schemas/StoryMoment'}
         search: {$ref: '#/components/schemas/StorySearch'}
-        mode: {type: string, enum: [labelled, fast], description: 'labelled (default): re-encoded with labels and gap cards; fast: the recordings copied untouched'}
+        mode: {type: string, enum: [labelled, fast], description: 'labelled (default): captions and MP4 parts; fast: the playlist alone. Neither re-encodes.'}
     StoryMoment:
       type: object
       additionalProperties: false
@@ -3253,8 +3256,23 @@ components:
         has_audio: {type: boolean}
         playback_url: {type: string, format: uri, description: 'Signed HLS URL, 15-minute expiry; only when ready.'}
         playback_expires_at: {type: string, format: date-time}
+        captions_url: {type: string, format: uri, description: "WebVTT captions (camera and time per piece) for the player, on the playback link's token"}
+        parts:
+          type: array
+          description: MP4 downloads with a subtitle track; one per run of pieces that join without re-encoding
+          items: {$ref: '#/components/schemas/StoryPart'}
+        note: {type: string, description: 'Said plainly when the story is more than one part'}
         created_at: {type: string, format: date-time}
         ready_at: {type: string, format: date-time}
+    StoryPart:
+      type: object
+      required: [pieces, duration_ms, bytes, has_audio]
+      properties:
+        pieces: {type: array, items: {type: integer}, description: The pieces (by position) in this part}
+        duration_ms: {type: integer}
+        bytes: {type: integer}
+        has_audio: {type: boolean}
+        download_url: {type: string, format: uri, description: "On the playback link's token; refused to a viewer who may not hear its sound"}
     StoryPiece:
       type: object
       required: [source_id, source_name, from, to, audio]
@@ -3267,7 +3285,7 @@ components:
         audio: {type: boolean, description: Its sound is in the story (an audio grant on that camera)}
         recorded_ms: {type: integer, description: How much of it was recorded (after the render)}
         offset_ms: {type: integer, description: Where it starts in the story (after the render)}
-        gap_before_ms: {type: integer, description: Time since the previous piece, when it is long enough for a card}
+        gap_before_ms: {type: integer, description: 'Time since the previous piece, when it is long enough to be said in the caption'}
     FollowCreate:
       type: object
       additionalProperties: false

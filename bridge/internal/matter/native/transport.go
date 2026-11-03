@@ -17,7 +17,8 @@ import (
 
 // Matter's message layer (spec 4.4–4.12): message and protocol headers,
 // unsecured and encrypted sessions, exchanges, and MRP (acknowledgements and
-// retransmission) over UDP.
+// retransmission) over UDP. The same layer runs over BTP (Bluetooth, btp.go),
+// which is reliable itself, so MRP is off there (spec 4.12.1).
 
 const (
 	protoSecureChannel = 0x0000
@@ -175,9 +176,19 @@ func decodeProtoHeader(b []byte) (protoHeader, []byte, error) {
 	return p, b[i:], nil
 }
 
-// Transport is one UDP socket and the sessions over it.
+// packetLink is what a transport sends its packets over: a UDP socket, or a
+// BTP session (one peer, addresses ignored).
+type packetLink interface {
+	ReadFrom(b []byte) (int, net.Addr, error)
+	WriteTo(b []byte, addr net.Addr) (int, error)
+	Close() error
+}
+
+// Transport is one UDP socket (or one BTP session) and the sessions over it.
 type Transport struct {
-	conn *net.UDPConn
+	conn packetLink
+	udp  *net.UDPConn // nil over BTP
+	mrp  bool         // reliability is MRP's (UDP), not the link's (BTP)
 	log  *slog.Logger
 
 	mu        sync.Mutex
@@ -187,6 +198,7 @@ type Transport struct {
 	nextID    uint16
 	unsecCtr  uint32
 	onUnsecur func(s *Session) // a peer started an unsecured session (responders)
+	gate      func() bool      // false drops what arrives (a fake device off the network)
 	closed    bool
 }
 
@@ -196,19 +208,39 @@ func Listen(port int, log *slog.Logger) (*Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	if log == nil {
-		log = slog.Default()
-	}
-	t := &Transport{
-		conn: conn, log: log, secure: map[uint16]*Session{}, byEphem: map[uint64]*Session{}, byPeer: map[uint64]*Session{},
-		nextID: uint16(1 + rand.IntN(0xFFF0)), unsecCtr: uint32(1 + rand.IntN(1<<28)),
-	}
+	t := newTransport(conn, true, log)
+	t.udp = conn
 	go t.read()
 	return t, nil
 }
 
-// Port is the local UDP port.
-func (t *Transport) Port() int { return t.conn.LocalAddr().(*net.UDPAddr).Port }
+// OverLink runs a transport over a reliable link (a BTP session): no MRP.
+func OverLink(l packetLink, log *slog.Logger) *Transport {
+	t := newTransport(l, false, log)
+	go t.read()
+	return t
+}
+
+func newTransport(l packetLink, mrp bool, log *slog.Logger) *Transport {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Transport{
+		conn: l, mrp: mrp, log: log, secure: map[uint16]*Session{}, byEphem: map[uint64]*Session{}, byPeer: map[uint64]*Session{},
+		nextID: uint16(1 + rand.IntN(0xFFF0)), unsecCtr: uint32(1 + rand.IntN(1<<28)),
+	}
+}
+
+// linkPeer stands for the one peer at the other end of a BTP link.
+var linkPeer = &net.UDPAddr{IP: net.IPv6loopback}
+
+// Port is the local UDP port (0 over BTP).
+func (t *Transport) Port() int {
+	if t.udp == nil {
+		return 0
+	}
+	return t.udp.LocalAddr().(*net.UDPAddr).Port
+}
 
 // Close ends every session and the socket.
 func (t *Transport) Close() {
@@ -442,6 +474,7 @@ func (e *Exchange) Send(protocol uint16, opcode byte, payload []byte) error {
 }
 
 func (e *Exchange) send(protocol uint16, opcode byte, payload []byte, reliable bool) error {
+	reliable = reliable && e.s.t.mrp // BTP delivers (or fails the session) itself
 	p := protoHeader{opcode: opcode, exchange: e.id, protocol: protocol}
 	if e.initiator {
 		p.flags |= exInitiator
@@ -469,7 +502,7 @@ func (e *Exchange) send(protocol uint16, opcode byte, payload []byte, reliable b
 		return err
 	}
 	if !reliable {
-		_, err := e.s.t.conn.WriteToUDP(packet, e.s.peerAddr())
+		_, err := e.s.t.conn.WriteTo(packet, e.s.peerAddr())
 		return err
 	}
 	o := &outstanding{counter: counter, acked: make(chan struct{})}
@@ -477,7 +510,7 @@ func (e *Exchange) send(protocol uint16, opcode byte, payload []byte, reliable b
 	e.waiting = o
 	e.mu.Unlock()
 	for attempt := 0; attempt <= maxRetransmits; attempt++ {
-		if _, err := e.s.t.conn.WriteToUDP(packet, e.s.peerAddr()); err != nil {
+		if _, err := e.s.t.conn.WriteTo(packet, e.s.peerAddr()); err != nil {
 			return err
 		}
 		timer := time.NewTimer(e.s.retransmitTimeout(attempt + 1))
@@ -612,7 +645,7 @@ func (s *Session) sendAck(exchange uint16, initiator bool, counter uint32) {
 	}
 	packet, _, err := s.seal(p.encode(), nil)
 	if err == nil {
-		_, _ = s.t.conn.WriteToUDP(packet, s.peerAddr())
+		_, _ = s.t.conn.WriteTo(packet, s.peerAddr())
 	}
 }
 
@@ -621,7 +654,7 @@ func (s *Session) sendAck(exchange uint16, initiator bool, counter uint32) {
 func (t *Transport) read() {
 	buf := make([]byte, 64<<10)
 	for {
-		n, from, err := t.conn.ReadFromUDP(buf)
+		n, addr, err := t.conn.ReadFrom(buf)
 		if err != nil {
 			t.mu.Lock()
 			closed := t.closed
@@ -629,6 +662,20 @@ func (t *Transport) read() {
 			if closed {
 				return
 			}
+			if t.udp == nil { // a BTP link that ended ends its sessions
+				t.Close()
+				return
+			}
+			continue
+		}
+		from, ok := addr.(*net.UDPAddr)
+		if !ok {
+			from = linkPeer
+		}
+		t.mu.Lock()
+		gate := t.gate
+		t.mu.Unlock()
+		if gate != nil && !gate() {
 			continue
 		}
 		t.handle(append([]byte(nil), buf[:n]...), from)

@@ -565,11 +565,11 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   channels.decideConfirmation = devices.decide;
   const stoppers: (() => void | Promise<void>)[] = [];
   // Workflows (ADR 0072): a trigger and steps that tell, ask, speak, clip and wait; never switching a device.
-  registerWorkflowRoutes(app, { data, audit, base });
   const workflows = createWorkflowEngine({
     data, bus, storage, audit, speech, log: app.log, ...(options.workflowSender ? { send: options.workflowSender } : {}),
     checksUsedUp: (id) => over(id, (m) => m === "ai_checks"),
   });
+  registerWorkflowRoutes(app, { data, audit, base, cancel: (accountId, id, by) => workflows.cancel(accountId, id, by) });
   if (storage) {
     registerPlaybackRoutes(app, {
       data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900,

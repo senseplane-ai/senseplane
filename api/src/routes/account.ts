@@ -1,6 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { rescheduleWorkflows } from "../workflows.js";
 import type { FastifyInstance } from "fastify";
 import { sql } from "kysely";
 import type { DataAccess } from "../data/access.js";
@@ -134,6 +135,8 @@ export function registerAccountRoutes(
         // Scheduled watches in the workspace's zone are due by its clock: work their next check out again (ADR 0058).
         if (b.time_zone && b.time_zone !== current!.time_zone) {
           await s.db.updateTable("watches").set({ next_check_at: new Date(0) }).where("next_check_at", "is not", null).execute();
+          // And workflow schedules that follow the workspace's zone (ADR 0072).
+          await rescheduleWorkflows(s, b.time_zone);
         }
         return s.db
           .updateTable("accounts")

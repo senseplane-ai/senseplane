@@ -178,13 +178,19 @@ export async function planStory(deps: Pick<StoryDeps, "data" | "bus">, req: Fast
 export const storyKick = new EventTarget();
 
 export async function createStory(
-  data: DataAccess, accountId: string, pieces: PlannedPiece[], o: { title: string | null; mode: "labelled" | "fast"; actor: string; agentId: string | null },
-): Promise<{ story: StoryRow; pieces: PieceRow[] }> {
-  const id = newId("sty");
+  data: DataAccess, accountId: string, pieces: PlannedPiece[],
+  o: { title: string | null; mode: "labelled" | "fast"; actor: string; agentId: string | null; /** A given id (a workflow's): made once. */ id?: string },
+): Promise<{ story: StoryRow; pieces: PieceRow[]; existed?: boolean }> {
+  const id = o.id ?? newId("sty");
   const out = await data.withAccount(accountId, async (s) => {
     const story = await s.db.insertInto("stories").values({
       id, account_id: accountId, title: o.title, mode: o.mode, created_by: o.actor, created_by_agent: o.agentId,
-    }).returningAll().executeTakeFirstOrThrow();
+    }).onConflict((oc) => oc.column("id").doNothing()).returningAll().executeTakeFirst();
+    if (!story) {
+      // Made already (a workflow step run again after a crash): that story, as it is.
+      const was = await s.db.selectFrom("stories").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+      return { story: was, pieces: await s.db.selectFrom("story_pieces").selectAll().where("story_id", "=", id).orderBy("seq").execute(), existed: true };
+    }
     const rows = await s.db.insertInto("story_pieces").values(pieces.map((p, seq) => ({
       story_id: id, seq, account_id: accountId, source_id: p.source_id, source_name: p.source_name,
       from_at: new Date(p.from), to_at: new Date(p.to), event_id: p.event_id, audio: p.audio,

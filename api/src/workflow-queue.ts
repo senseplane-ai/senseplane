@@ -3,9 +3,9 @@
 
 // Starting workflow runs (ADR 0072): from an event (in the event's own
 // transaction), a schedule, a signed webhook or a person. Each start is
-// counted under a lock on the workflow's row, so concurrent triggers can't
-// all slip under the run rate; one over it is dropped and counted on the
-// workflow. Kept apart from the engine so events.ts stays light.
+// counted under the account's lock and the workflow's row lock, so concurrent
+// triggers can't slip under the run rate; one over it is dropped and counted
+// on the workflow. Kept apart from the engine so events.ts stays light.
 import { type Selectable, sql } from "kysely";
 import type { AccountScope } from "./data/access.js";
 import { newId } from "./data/ids.js";
@@ -32,13 +32,23 @@ export function eventStarts(w: Pick<WorkflowRow, "source_ids" | "definition">, e
 
 export type StartOutcome = { run: WorkflowRunRow } | { dropped: "workflow" | "account" | "disabled" };
 
+/** The run rate (ADR 0072). Mutable for tests only. */
+export const RUN_LIMITS = { perMinute: LIMITS.perMinute, perHour: LIMITS.perHour, accountPerHour: LIMITS.accountPerHour };
+
+/**
+ * Every start in an account takes this lock first (then workflow rows, by id), so the account's hourly cap is
+ * counted by one transaction at a time and two triggers can never both slip under it.
+ */
+const lockAccountRuns = (s: AccountScope) => sql`select pg_advisory_xact_lock(hashtextextended(${`workflow-runs:${s.accountId}`}, 0))`.execute(s.db);
+
 /**
  * Queues a run of a workflow, within its run rate. `s` is the caller's transaction. Times are the database's
  * (ADR 0058), so a process whose clock is ahead can't queue a run the claim doesn't see as due yet.
  */
 export async function startRun(s: AccountScope, workflowId: string, trigger: WorkflowRunTrigger, eventId: string | null = null): Promise<StartOutcome> {
+  await lockAccountRuns(s);
   const w = await s.db.selectFrom("workflows").selectAll().where("id", "=", workflowId).forUpdate().executeTakeFirst();
-  if (!w || (!w.enabled && trigger.type !== "manual")) return { dropped: "disabled" };
+  if (!w || !w.enabled) return { dropped: "disabled" };
   const since = (ms: number) => sql<Date>`now() - make_interval(secs => ${ms / 1000})`;
   const counts = await s.db.selectFrom("workflow_runs")
     .select((eb) => [
@@ -48,8 +58,8 @@ export async function startRun(s: AccountScope, workflowId: string, trigger: Wor
     ])
     .where("created_at", ">", since(3600_000))
     .executeTakeFirstOrThrow();
-  const over = Number(counts.minute) >= LIMITS.perMinute || Number(counts.hour) >= LIMITS.perHour ? "workflow" as const
-    : Number(counts.account) >= LIMITS.accountPerHour ? "account" as const : undefined;
+  const over = Number(counts.minute) >= RUN_LIMITS.perMinute || Number(counts.hour) >= RUN_LIMITS.perHour ? "workflow" as const
+    : Number(counts.account) >= RUN_LIMITS.accountPerHour ? "account" as const : undefined;
   if (over) {
     await s.db.updateTable("workflows").set((eb) => ({ runs_dropped: eb("runs_dropped", "+", 1) })).where("id", "=", workflowId).execute();
     return { dropped: over };
@@ -64,15 +74,39 @@ export async function startRun(s: AccountScope, workflowId: string, trigger: Wor
   return { run };
 }
 
-/** An event was stored: every enabled workflow it starts gets a run (createEvent, in the event's transaction). */
+/** After a workflow's own speech on a camera, its events are ignored this long: the camera hears its own speaker. */
+export const OWN_SPEECH_TAIL_S = 5;
+
+/** Is this workflow speaking (or did it just speak) through this camera? Its events there may be its own voice. */
+async function speakingThere(s: AccountScope, workflowId: string, sourceId: string): Promise<boolean> {
+  const r = await s.db.selectFrom("speak_messages").select("id")
+    .where("actor", "=", `workflow:${workflowId}`).where("source_id", "=", sourceId)
+    .where((eb) => eb.or([
+      eb(sql`greatest(ends_at, finished_at)`, ">", sql`now() - make_interval(secs => ${OWN_SPEECH_TAIL_S})`),
+      eb.and([eb("status", "=", "queued"), eb("created_at", ">", sql<Date>`now() - interval '1 minute'`)]),
+    ]))
+    .executeTakeFirst();
+  return !!r;
+}
+
+/**
+ * An event was stored: every enabled workflow it starts gets a run (createEvent, in the event's transaction,
+ * inside a savepoint there). Rows are locked in id order after the account's lock, as every start does.
+ */
 export async function queueWorkflowsForEvent(s: AccountScope, ev: Selectable<EventsTable>): Promise<number> {
   const candidates = await s.db.selectFrom("workflows").select(["id", "source_ids", "definition"])
     .where("trigger_type", "=", "event").where("enabled", "=", true)
     .where((eb) => eb(eb.val(ev.source_id), "=", eb.fn.any("source_ids")))
+    .orderBy("id")
     .execute();
+  const starting = candidates.filter((w) => eventStarts(w as { source_ids: string[]; definition: WorkflowDefinition }, ev));
+  if (!starting.length) return 0;
+  await lockAccountRuns(s);
+  await s.db.selectFrom("workflows").select("id").where("id", "in", starting.map((w) => w.id)).orderBy("id").forUpdate().execute();
   let n = 0;
-  for (const w of candidates) {
-    if (!eventStarts(w as { source_ids: string[]; definition: WorkflowDefinition }, ev)) continue;
+  for (const w of starting) {
+    // A workflow's own speech heard by the camera it spoke through never starts it again.
+    if (await speakingThere(s, w.id, ev.source_id)) continue;
     const out = await startRun(s, w.id, { type: "event", event_id: ev.id, event_type: ev.type }, ev.id);
     if ("run" in out) n++;
   }

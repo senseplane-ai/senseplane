@@ -19,13 +19,14 @@
 // speak step names the camera, and blurred-only where the camera's blurring is
 // on (ADR 0068). The engine knows the step kinds of workflow-spec.ts and no
 // others; there is no step, and no import, that reaches a device.
+import { createHash } from "node:crypto";
 import type { FastifyBaseLogger, FastifyRequest } from "fastify";
-import { type Selectable, sql } from "kysely";
+import { type Kysely, type Selectable, sql } from "kysely";
 import { type Access, type Grant, SPEAK, coversSense, requireRange } from "./access.js";
 import { blurFor, blurredOnly, effectiveBlur, requireBlurringBrains } from "./blur.js";
 import { queueBody } from "./channels.js";
 import type { AccountScope, DataAccess, Source } from "./data/access.js";
-import type { EventsTable, WorkflowRunStepsTable, WorkflowStepStatus } from "./data/schema.js";
+import type { Database, EventsTable, WorkflowRunStepsTable, WorkflowStepStatus } from "./data/schema.js";
 import { deliveryErrorText } from "./egress.js";
 import { ApiError } from "./errors.js";
 import type { ApiBus } from "./indexer.js";
@@ -49,8 +50,8 @@ type EventRow = Selectable<EventsTable>;
 
 /** A run's lease: renewed while a step works, so only a process that stopped loses it. */
 export const RUN_LEASE_S = 120;
-/** A run taken over this many times (its processes kept dying) fails. */
-const MAX_CLAIMS = 6;
+/** A run taken over this many times from a process whose lease ran out (its processes kept dying) fails. */
+const MAX_TAKEOVERS = 5;
 /** Before attempt 2 and 3 of a step that may be retried. */
 export const RETRY_DELAYS_S = [5, 30];
 /** A clip or story waits this long past the moment's end, so its recording (6 s segments) is in. */
@@ -69,18 +70,24 @@ export interface WorkflowDeps {
   log?: FastifyBaseLogger;
 }
 
-/** A step's result: done (with what it found), not yet (park the run), or failed (retry only when it says so). */
+/** A step's result: done (with what it found), not yet (park the run `afterS` on the database's clock), or failed. */
 type Outcome =
   | { status: "succeeded"; output: Record<string, unknown> }
-  | { status: "waiting"; until: Date; output?: Record<string, unknown>; attempt?: false }
+  | { status: "waiting"; afterS: number; output?: Record<string, unknown>; attempt?: false }
   | { status: "failed"; error: string; retry?: boolean };
 
 class LostClaim extends Error {}
 const fail = (error: string, retry = false): Outcome => ({ status: "failed", error: error.slice(0, 500), retry });
+/** `now() + secs` on the database's clock (ADR 0058). */
+const inSecs = (secs: number) => sql<Date>`now() + make_interval(secs => ${Math.max(0, secs)})`;
 
-/** The run's principal: grants on its own sources only, as they are now (ADR 0072). */
-export function workflowAccess(workflowId: string, sources: Source[], account: { blur_faces?: boolean; blur_plates?: boolean } | undefined, def: WorkflowDefinition): Access {
-  const speak = new Set(speakTargets(def));
+/**
+ * The run's principal: grants on its own sources only, as they are now (ADR 0072). Speech only on cameras
+ * a speak step names, in the run's definition and, when given, in the workflow as it is now.
+ */
+export function workflowAccess(workflowId: string, sources: Source[], account: { blur_faces?: boolean; blur_plates?: boolean } | undefined, def: WorkflowDefinition, current?: WorkflowDefinition): Access {
+  const now = current ? new Set(speakTargets(current)) : undefined;
+  const speak = new Set(speakTargets(def).filter((id) => !now || now.has(id)));
   const grants: Grant[] = sources.map((src) => {
     const camera = src.type !== "sensor";
     const blur = effectiveBlur(src, account);
@@ -102,6 +109,15 @@ const eventContext = (e: EventRow, sourceName: string): NonNullable<RunContext["
   confidence: e.confidence, verified: e.verified ?? null, reading: e.value?.value ?? null, occurred_at: new Date(e.occurred_at).toISOString(),
 });
 
+/** An id made from the run and the step, so a step run again after a crash makes the same clip or story, once. */
+export function derivedId(prefix: "clp" | "sty", runId: string, stepId: string): string {
+  const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const h = createHash("sha256").update(`${runId}/${stepId}`).digest();
+  let out = "";
+  for (let i = 0; i < 26; i++) out += CROCKFORD[h[i]! % 32];
+  return `${prefix}_${out}`;
+}
+
 export function createWorkflowEngine(deps: WorkflowDeps) {
   const { data } = deps;
   const send = deps.send ?? defaultSender();
@@ -113,42 +129,47 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     return fn(s);
   });
   const renew = (accountId: string, runId: string, token: string) => data.withAccount(accountId, async (s) => Number((await s.db.updateTable("workflow_runs")
-    .set({ claimed_until: new Date(Date.now() + RUN_LEASE_S * 1000) }).where("id", "=", runId).where("claim_token", "=", token).executeTakeFirst()).numUpdatedRows) > 0);
+    .set({ claimed_until: inSecs(RUN_LEASE_S) }).where("id", "=", runId).where("claim_token", "=", token).executeTakeFirst()).numUpdatedRows) > 0);
 
-  const putStep = (s: AccountScope, runId: string, step: Pick<Step, "id" | "kind">, set: Partial<Omit<StepRow, "run_id" | "step_id" | "account_id" | "kind">> & { status: WorkflowStepStatus }) => {
+  const putStep = (s: AccountScope, runId: string, step: Pick<Step, "id" | "kind">, set: Partial<Omit<StepRow, "run_id" | "step_id" | "account_id" | "kind" | "resume_at">> & { status: WorkflowStepStatus; resume_at?: unknown }) => {
     const values = { ...set, output: set.output === undefined ? undefined : set.output === null ? null : JSON.stringify(set.output) };
     return s.db.insertInto("workflow_run_steps").values({ run_id: runId, step_id: step.id, account_id: s.accountId, kind: step.kind, ...values } as never)
       .onConflict((oc) => oc.columns(["run_id", "step_id"]).doUpdateSet(values as never)).execute();
   };
 
-  async function audit(accountId: string, run: WorkflowRunRow, status: "succeeded" | "failed", error?: string | null) {
+  async function audit(accountId: string, run: WorkflowRunRow, status: "succeeded" | "failed" | "cancelled", error?: string | null) {
     await deps.audit?.write({
-      accountId, actor: `workflow:${run.workflow_id}`, action: `workflow.run_${status}`, target: run.id, status: status === "succeeded" ? 200 : 500,
+      accountId, actor: `workflow:${run.workflow_id ?? "deleted"}`, action: `workflow.run_${status}`, target: run.id, status: status === "succeeded" ? 200 : status === "cancelled" ? 409 : 500,
       details: { workflow: run.workflow_id, name: run.workflow_name, trigger: run.trigger.type, ...(error ? { error } : {}), ...(run.failed_step ? { step: run.failed_step } : {}) },
     }).catch(() => undefined);
   }
 
   /** Ends a run: its unreached steps are recorded as skipped. */
-  async function finishRun(accountId: string, run: WorkflowRunRow, token: string, def: WorkflowDefinition | undefined, status: "succeeded" | "failed", error: string | null, failedStep: string | null) {
+  async function finishRun(accountId: string, run: WorkflowRunRow, token: string, def: WorkflowDefinition | undefined, status: "succeeded" | "failed" | "cancelled", error: string | null, failedStep: string | null) {
     await guarded(accountId, run.id, token, async (s) => {
       const have = new Set((await s.db.selectFrom("workflow_run_steps").select("step_id").where("run_id", "=", run.id).execute()).map((r) => r.step_id));
       for (const st of def?.steps ?? []) if (!have.has(st.id)) await putStep(s, run.id, st, { status: "skipped" });
+      if (status === "cancelled") {
+        await s.db.updateTable("workflow_run_steps").set({ status: "skipped", resume_at: null }).where("run_id", "=", run.id).where("status", "=", "waiting").execute();
+      }
       await s.db.updateTable("workflow_runs").set({
-        status, error, failed_step: failedStep, finished_at: new Date(), due_at: null, claimed_until: null, claim_token: null,
+        status, error, failed_step: failedStep, finished_at: sql`now()`, due_at: null, claimed_until: null, claim_token: null,
       }).where("id", "=", run.id).execute();
     });
     await audit(accountId, { ...run, failed_step: failedStep }, status, error);
   }
 
-  /** Parks a run until `until`, holding no claim. */
-  const park = (accountId: string, runId: string, token: string, until: Date) => guarded(accountId, runId, token, (s) =>
-    s.db.updateTable("workflow_runs").set({ status: "waiting", due_at: until, claimed_until: null, claim_token: null }).where("id", "=", runId).execute()).then(() => undefined);
+  /** Parks a run `afterS` from now, or until a time the database already holds; it holds no claim meanwhile. */
+  const park = (accountId: string, runId: string, token: string, until: { afterS: number } | { at: Date }) => guarded(accountId, runId, token, (s) =>
+    s.db.updateTable("workflow_runs").set({ status: "waiting", due_at: "at" in until ? until.at : inSecs(until.afterS), claimed_until: null, claim_token: null })
+      .where("id", "=", runId).execute()).then(() => undefined);
 
   // --- the steps ------------------------------------------------------------------
 
   interface StepEnv {
     accountId: string;
     run: WorkflowRunRow;
+    token: string;
     def: WorkflowDefinition;
     ctx: RunContext;
     event?: EventRow;
@@ -157,12 +178,14 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     req: FastifyRequest;
     /** The moment a clip or story is about: the event, or the run's start. */
     moment: { from: number; to: number };
+    /** The database's clock when the step started. */
+    now: number;
   }
 
   const camera = (env: StepEnv, id: string | undefined): Source | Outcome => {
     if (!id) return fail("there is no event camera to use; name one");
     const src = env.sources.get(id);
-    if (!src || !env.run.source_ids.includes(id)) return fail(`${id} isn't one of this workflow's sources (or no longer exists)`);
+    if (!src) return fail(`${id} isn't one of this workflow's sources (or no longer exists)`);
     if (src.type === "sensor") return fail(`${src.name} is a sensor, not a camera`);
     return src;
   };
@@ -206,17 +229,23 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     const text = fillTemplate(step.text, env.ctx);
     if (!text.trim()) return fail("the text came out empty");
     if (step.to.type === "channel") {
-      return data.withAccount(env.accountId, async (s) => {
+      // Queued and recorded as done in one transaction, under the claim: a crash can't queue it twice.
+      return guarded(env.accountId, env.run.id, env.token, async (s) => {
         const ch = await s.db.selectFrom("channels").select(["id", "status", "snapshots", "muted_until"]).where("id", "=", step.to.id).executeTakeFirst();
         if (!ch) return fail(`the chat ${step.to.id} isn't linked to this workspace`);
         if (ch.status !== "active") return fail(`the chat ${step.to.id} is ${ch.status}`);
         // A chat someone muted stays quiet, as it does for watches' alerts; the step is done, and says so.
-        if (ch.muted_until && new Date(ch.muted_until) > new Date()) return { status: "succeeded", output: { channel_id: ch.id, muted: true } } as Outcome;
-        // The event's snapshot when the chat takes them and the workflow may show it unblurred; otherwise text only.
-        const ev = env.event;
-        const photo = ev?.snapshot_key && ch.snapshots && !blurredOnly(env.access.grants, ev.source_id) ? { photo_key: ev.snapshot_key, photo_source: ev.source_id } : {};
-        await queueBody(s, ch.id, { text: `<b>${escapeHtml(env.run.workflow_name)}</b>\n${escapeHtml(text)}`, ...photo });
-        return { status: "succeeded", output: { channel_id: ch.id, text } } as Outcome;
+        let output: Record<string, unknown>;
+        if (ch.muted_until && new Date(ch.muted_until).getTime() > env.now) output = { channel_id: ch.id, muted: true };
+        else {
+          // The event's snapshot when the chat takes them and the workflow may show it unblurred; otherwise text only.
+          const ev = env.event;
+          const photo = ev?.snapshot_key && ch.snapshots && !blurredOnly(env.access.grants, ev.source_id) ? { photo_key: ev.snapshot_key, photo_source: ev.source_id } : {};
+          await queueBody(s, ch.id, { text: `<b>${escapeHtml(env.run.workflow_name)}</b>\n${escapeHtml(text)}`, ...photo });
+          output = { channel_id: ch.id, text };
+        }
+        await putStep(s, env.run.id, step, { status: "succeeded", output, error: null, finished_at: sql`now()` as never, resume_at: null });
+        return { status: "succeeded", output } as Outcome;
       });
     }
     const hook = await data.withAccount(env.accountId, (s) => s.db.selectFrom("webhooks").select(["id", "url", "secret"]).where("id", "=", step.to.id).executeTakeFirst());
@@ -224,7 +253,7 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     const delivery = `${env.run.id}.${step.id}`;
     const ev = env.event;
     const body = JSON.stringify({
-      type: "workflow.notify", id: delivery, created_at: new Date().toISOString(),
+      type: "workflow.notify", id: delivery, created_at: new Date(env.now).toISOString(),
       workflow: { id: env.run.workflow_id, name: env.run.workflow_name }, run_id: env.run.id, step_id: step.id, text,
       ...(ev ? { event: { id: ev.id, type: ev.type, source: { id: ev.source_id, name: env.ctx.event?.source_name }, occurred_at: new Date(ev.occurred_at).toISOString(), summary: ev.summary, labels: ev.labels, confidence: ev.confidence, value: ev.value ?? null } } : {}),
       ...(env.ctx.input ? { input: env.ctx.input } : {}),
@@ -237,7 +266,7 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
         headers: {
           "content-type": "application/json", "user-agent": "Senseplane-Webhooks/1",
           "senseplane-signature": signatureHeader(data.box().decrypt(hook.secret), body),
-          // The same on every attempt, so a receiver can drop a repeat.
+          // The same on every attempt (a retry, or a run again after a crash), so a receiver can drop a repeat.
           "senseplane-delivery": delivery, "senseplane-event": "workflow.notify",
         },
       });
@@ -255,7 +284,9 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     const granted = env.access.grants?.some((g) => g.source_ids.includes(src.id) && coversSense(g.senses, SPEAK));
     if (!granted) return fail(`this workflow has no Speak permission for ${src.name}`);
     if (!deps.speech) return fail("talk-back isn't available on this server");
-    const text = fillTemplate(step.text, env.ctx, 500);
+    // What a webhook sent is said aloud only when the step allows it (ADR 0072): otherwise it reads as empty.
+    const ctx = step.allow_input ? env.ctx : { ...env.ctx, input: undefined };
+    const text = fillTemplate(step.text, ctx, 500);
     if (!text.trim()) return fail("the text came out empty");
     const out = await deps.speech.say(env.accountId, src, { kind: "workflow", actor: `workflow:${env.run.workflow_id}`, name: `Workflow: ${env.run.workflow_name.slice(0, 80)}`, via: "workflow" }, text,
       { kind: "workflow", ...(env.event ? { eventId: env.event.id } : {}) });
@@ -264,9 +295,9 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     return fail(out.row.message ?? `nothing was said (${out.row.status})`);
   }
 
-  /** Clips and stories are cut from the recording: wait until the moment is in, then check the grant over it. */
+  /** Clips and stories are cut from the recording: wait until the moment is in (on the database's clock). */
   const recordedBy = (env: StepEnv, to: number): Outcome | undefined =>
-    Date.now() < to + RECORDED_AFTER_MS ? { status: "waiting", until: new Date(to + RECORDED_AFTER_MS), attempt: false } : undefined;
+    env.now < to + RECORDED_AFTER_MS ? { status: "waiting", afterS: Math.ceil((to + RECORDED_AFTER_MS - env.now) / 1000), attempt: false } : undefined;
 
   async function clip(env: StepEnv, step: ClipStep): Promise<Outcome> {
     const ev = env.event;
@@ -286,7 +317,8 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
       return fail((err as Error).message);
     }
     if (blurredOnly(env.access.grants, src.id)) return fail(`${src.name} is blurred for this workflow, and clips are made from the recording, which isn't blurred`);
-    const made = await createClip({ data, storage: deps.storage }, env.accountId, src.id, from, to, `${env.run.workflow_name}: ${ev.summary}`.slice(0, 200));
+    // The same id on every attempt: a step run again after a crash finds the clip it made.
+    const made = await createClip({ data, storage: deps.storage }, env.accountId, src.id, from, to, `${env.run.workflow_name}: ${ev.summary}`.slice(0, 200), derivedId("clp", env.run.id, step.id));
     if (!made) return fail(`nothing was recorded on ${src.name} at that time`);
     return { status: "succeeded", output: { clip_id: made.id } };
   }
@@ -306,17 +338,17 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
       const out = await makeStory({ data, bus: deps.bus, audit: deps.audit }, env.req, {
         title: `${env.run.workflow_name}${env.event ? `: ${env.event.summary}` : ""}`.slice(0, 200), mode: step.mode ?? "labelled",
         moments: ids.map((id) => ({ source: id, from: new Date(from).toISOString(), to: new Date(to).toISOString() })),
-      });
+      }, { id: derivedId("sty", env.run.id, step.id) });
       return { status: "succeeded", output: { story_id: out.story.id } };
     } catch (err) {
       return fail((err as Error).message, err instanceof ApiError && err.status >= 500);
     }
   }
 
-  const wait = (step: WaitStep, row: StepRow | undefined): Outcome => {
+  const wait = (env: StepEnv, step: WaitStep, row: StepRow | undefined): Outcome => {
     // Its second visit, once due: done.
-    if (row?.status === "waiting" && row.resume_at && new Date(row.resume_at).getTime() <= Date.now()) return { status: "succeeded", output: { waited_s: step.seconds } };
-    return { status: "waiting", until: new Date(Date.now() + step.seconds * 1000) };
+    if (row?.status === "waiting" && row.resume_at && new Date(row.resume_at).getTime() <= env.now) return { status: "succeeded", output: { waited_s: step.seconds } };
+    return { status: "waiting", afterS: step.seconds };
   };
 
   async function runStep(env: StepEnv, step: Step, row: StepRow | undefined): Promise<Outcome> {
@@ -330,7 +362,7 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
       case "speak": return speak(env, step);
       case "clip": return clip(env, step);
       case "story": return story(env, step);
-      case "wait": return wait(step, row);
+      case "wait": return wait(env, step, row);
       default:
         // Never reached for a checked definition: there is no other kind, and none that switches a device.
         return fail(`unknown step kind ${JSON.stringify((step as { kind?: unknown }).kind)}; nothing was done`);
@@ -339,13 +371,13 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
 
   // --- a run ------------------------------------------------------------------------
 
-  /** Runs one claimed run as far as it goes now. Returns quietly if the claim was lost. */
+  /** Runs one claimed run as far as it goes now. Returns quietly if the claim was lost (or the run cancelled). */
   async function execute(accountId: string, runId: string, token: string): Promise<void> {
     try {
       await executeHeld(accountId, runId, token);
     } catch (err) {
       if (err instanceof LostClaim) {
-        deps.log?.warn({ run: runId }, "a workflow run was taken over by another process; this one stopped");
+        deps.log?.warn({ run: runId }, "a workflow run was taken over or cancelled; this process stopped it");
         return;
       }
       throw err;
@@ -362,7 +394,7 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     });
     if (!loaded) return;
     const { run, event, account } = loaded;
-    if (run.claims > MAX_CLAIMS) return finishRun(accountId, run, token, undefined, "failed", "the run was taken over too many times; it was stopped", null);
+    if (run.claims > MAX_TAKEOVERS) return finishRun(accountId, run, token, undefined, "failed", "the run was taken over too many times (its processes kept stopping); it was stopped", null);
     // The definition is checked again: a run follows only known step kinds (none switches a device) in a DAG.
     let def: WorkflowDefinition;
     try {
@@ -378,7 +410,7 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     const startedAt = new Date(run.created_at).getTime();
     const ctx: RunContext = {
       ...(event ? { event: eventContext(event, sources.get(event.source_id)?.name ?? event.source_id) } : {}),
-      ...(trigger.type === "webhook" ? { input: trigger.input } : trigger.type === "manual" && trigger.input ? { input: trigger.input } : {}),
+      ...(trigger.type === "webhook" && trigger.input ? { input: trigger.input } : trigger.type === "manual" && trigger.input ? { input: trigger.input } : {}),
       steps: Object.fromEntries([...rows].filter(([, r]) => r.status === "succeeded" && r.output).map(([id, r]) => [id, r.output!])),
       at: startedAt, timeZone: account?.time_zone || "UTC",
     };
@@ -395,26 +427,34 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
       const row = rows.get(step.id);
       if (row && (row.status === "succeeded" || row.status === "skipped")) continue;
       if (row?.status === "failed") return finishRun(accountId, run, token, def, "failed", row.error, step.id);
+      // The workflow as it is now: deleted or turned off stops the run; it may have lost sources or speak steps since.
+      const now = await data.withAccount(accountId, async (s) => ({
+        workflow: run.workflow_id ? await s.db.selectFrom("workflows").select(["enabled", "source_ids", "definition"]).where("id", "=", run.workflow_id).executeTakeFirst() : undefined,
+        list: await s.sources.list(), account: await s.account.get(), clock: await dbNow(s.db),
+      }));
+      if (!now.workflow) return finishRun(accountId, run, token, def, "cancelled", "the workflow was deleted, so the run was stopped", null);
+      if (!now.workflow.enabled) return finishRun(accountId, run, token, def, "cancelled", "the workflow was turned off, so the run was stopped", null);
       if (!def.edges.some((e) => e.to === step.id && taken(e.from, e.branch))) {
         await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "skipped" }));
         rows.set(step.id, { ...(row ?? {} as StepRow), status: "skipped" });
         continue;
       }
-      if (row?.status === "waiting" && row.resume_at && new Date(row.resume_at).getTime() > Date.now()) return park(accountId, run.id, token, new Date(row.resume_at));
+      const clock = now.clock.getTime();
+      if (row?.status === "waiting" && row.resume_at && new Date(row.resume_at).getTime() > clock) return park(accountId, run.id, token, { at: new Date(row.resume_at) });
       if (row?.status === "running" && (!RETRY_SAFE.has(step.kind) || row.attempts >= LIMITS.attempts)) {
         // The process running it stopped part way: a step that may not run twice is not run again.
         const error = "the step was interrupted (the process running it stopped), so it may or may not have happened; it isn't run twice";
-        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "failed", error, finished_at: new Date() }));
+        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "failed", error, finished_at: sql`now()` as never }));
         return finishRun(accountId, run, token, def, "failed", error, step.id);
       }
       if (!(await renew(accountId, run.id, token))) throw new LostClaim();
       const attempts = (row?.attempts ?? 0) + 1;
-      await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "running", attempts, started_at: row?.started_at ?? new Date(), error: null }));
-      // Sources and grants as they are now: a camera whose blurring was turned on is blurred from the next step.
-      const fresh = await data.withAccount(accountId, async (s) => ({ list: await s.sources.list(), account: await s.account.get() }));
-      const now = new Map(fresh.list.filter((x) => run.source_ids.includes(x.id)).map((x) => [x.id, x]));
-      const access = workflowAccess(run.workflow_id, [...now.values()], fresh.account, def);
-      const env: StepEnv = { accountId, run, def, ctx, ...(event ? { event } : {}), sources: now, access, req: asRequest(accountId, access), moment };
+      await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "running", attempts, started_at: (row?.started_at ?? sql`now()`) as never, error: null }));
+      // Sources and grants as they are now: only sources the run and the workflow both still name; a camera whose
+      // blurring was turned on is blurred from the next step.
+      const allowed = new Map(now.list.filter((x) => run.source_ids.includes(x.id) && now.workflow!.source_ids.includes(x.id)).map((x) => [x.id, x]));
+      const access = workflowAccess(run.workflow_id!, [...allowed.values()], now.account, def, now.workflow.definition);
+      const env: StepEnv = { accountId, run, token, def, ctx, ...(event ? { event } : {}), sources: allowed, access, req: asRequest(accountId, access), moment, now: clock };
       const keep = setInterval(() => void renew(accountId, run.id, token).catch(() => undefined), (RUN_LEASE_S * 1000) / 4);
       let out: Outcome;
       try {
@@ -427,22 +467,22 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
         clearInterval(keep);
       }
       if (out.status === "succeeded") {
-        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "succeeded", output: out.output, error: null, finished_at: new Date(), resume_at: null }));
+        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "succeeded", output: out.output, error: null, finished_at: sql`now()` as never, resume_at: null }));
         rows.set(step.id, { ...(row ?? {} as StepRow), step_id: step.id, status: "succeeded", output: out.output, attempts });
         ctx.steps[step.id] = out.output;
         continue;
       }
       if (out.status === "waiting") {
         // Waiting for the recording isn't an attempt.
-        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "waiting", resume_at: out.until, attempts: out.attempt === false ? attempts - 1 : attempts, ...(out.output ? { output: out.output } : {}) }));
-        return park(accountId, run.id, token, out.until);
+        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "waiting", resume_at: inSecs(out.afterS), attempts: out.attempt === false ? attempts - 1 : attempts, ...(out.output ? { output: out.output } : {}) }));
+        return park(accountId, run.id, token, { afterS: out.afterS });
       }
       if (out.retry && RETRY_SAFE.has(step.kind) && attempts < LIMITS.attempts) {
-        const until = new Date(Date.now() + RETRY_DELAYS_S[Math.min(attempts - 1, RETRY_DELAYS_S.length - 1)]! * 1000);
-        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "waiting", resume_at: until, error: out.error }));
-        return park(accountId, run.id, token, until);
+        const afterS = RETRY_DELAYS_S[Math.min(attempts - 1, RETRY_DELAYS_S.length - 1)]!;
+        await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "waiting", resume_at: inSecs(afterS), error: out.error }));
+        return park(accountId, run.id, token, { afterS });
       }
-      await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "failed", error: out.error, finished_at: new Date() }));
+      await guarded(accountId, run.id, token, (s) => putStep(s, run.id, step, { status: "failed", error: out.error, finished_at: sql`now()` as never }));
       return finishRun(accountId, run, token, def, "failed", out.error, step.id);
     }
     await finishRun(accountId, run, token, def, "succeeded", null, null);
@@ -460,7 +500,10 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
     return rows.length;
   }
 
-  /** Scheduled workflows that are due: a run each, and the next time worked out. Returns how many it started. */
+  /**
+   * Scheduled workflows that are due: a run each, and the next time worked out from the database's clock
+   * (or `at`, standing in for it in tests). Returns how many it started.
+   */
   async function fireSchedules(at?: Date, max = 50): Promise<number> {
     const due = (await sql<{ account_id: string; id: string }>`select * from claim_workflow_schedules(${max}, ${60}, ${at ?? sql`now()`})`.execute(data.db())).rows;
     let n = 0;
@@ -469,17 +512,37 @@ export function createWorkflowEngine(deps: WorkflowDeps) {
         const w = await s.db.selectFrom("workflows").selectAll().where("id", "=", d.id).executeTakeFirst();
         if (!w) return;
         const tz = (await s.account.get())?.time_zone || "UTC";
-        const out = await startRun(s, w.id, { type: "schedule", scheduled_for: (w.next_fire_at ? new Date(w.next_fire_at) : at ?? new Date()).toISOString() });
+        const clock = at ?? (await dbNow(s.db));
+        const out = await startRun(s, w.id, { type: "schedule", scheduled_for: (w.next_fire_at ? new Date(w.next_fire_at) : clock).toISOString() });
         if ("run" in out) n++;
         await s.db.updateTable("workflows").set({
-          next_fire_at: nextFireAt(w.definition.trigger as ScheduleTrigger, tz, at ?? new Date(), true), fire_claimed_until: null, last_fired_at: at ?? new Date(),
+          next_fire_at: nextFireAt(w.definition.trigger as ScheduleTrigger, tz, clock, true), fire_claimed_until: null, last_fired_at: clock,
         }).where("id", "=", w.id).execute();
       });
     }
     return n;
   }
 
-  return { execute, runDue, fireSchedules, claim };
+  /** A person stops a run (POST /v1/workflow-runs/{id}/cancel): a process running it stops at its next write. */
+  async function cancel(accountId: string, runId: string, by: string): Promise<WorkflowRunRow | undefined> {
+    const out = await data.withAccount(accountId, async (s) => {
+      const run = await s.db.selectFrom("workflow_runs").selectAll().where("id", "=", runId).forUpdate().executeTakeFirst();
+      if (!run || run.due_at === null) return run ? { run, done: true } : undefined;
+      await s.db.updateTable("workflow_run_steps").set({ status: "skipped", resume_at: null }).where("run_id", "=", runId).where("status", "in", ["waiting"]).execute();
+      const have = new Set((await s.db.selectFrom("workflow_run_steps").select("step_id").where("run_id", "=", runId).execute()).map((r) => r.step_id));
+      for (const st of run.definition.steps) if (!have.has(st.id)) await putStep(s, runId, st, { status: "skipped" });
+      const row = await s.db.updateTable("workflow_runs").set({
+        status: "cancelled", error: `cancelled by ${by}`, finished_at: sql`now()`, due_at: null, claimed_until: null, claim_token: null,
+      }).where("id", "=", runId).returningAll().executeTakeFirstOrThrow();
+      return { run: row, done: false };
+    });
+    if (!out) return undefined;
+    if (out.done) throw new ApiError(409, "conflict", `this run has already ${out.run.status === "succeeded" ? "finished" : out.run.status}`);
+    await audit(accountId, out.run, "cancelled", out.run.error);
+    return out.run;
+  }
+
+  return { execute, runDue, fireSchedules, claim, cancel };
 }
 
 export type WorkflowEngine = ReturnType<typeof createWorkflowEngine>;
@@ -489,6 +552,28 @@ export function nextFireAt(t: ScheduleTrigger, accountTz: string, now: Date, ran
   const tz = t.time_zone || accountTz || "UTC";
   const trig = { type: "condition", ...(t.at ? { at: t.at } : { every_min: t.every_min ?? 60 }), ...(t.days?.length ? { days: t.days } : {}) } as Parameters<typeof nextCheck>[0];
   return new Date(nextCheck(trig, tz, null, ran ? now.getTime() : null, now.getTime(), ran));
+}
+
+/** The database's clock (ADR 0058). */
+export const dbNow = async (db: Kysely<Database>): Promise<Date> =>
+  new Date((await sql<{ now: Date }>`select now() as now`.execute(db)).rows[0]!.now);
+
+/**
+ * The workspace's time zone changed: schedules that follow it (no zone of their own) are worked out again
+ * in the new zone, from now. Called in the account's update transaction.
+ */
+export async function rescheduleWorkflows(s: AccountScope, timeZone: string): Promise<number> {
+  const rows = await s.db.selectFrom("workflows").select(["id", "definition"])
+    .where("trigger_type", "=", "schedule").where("enabled", "=", true).where("next_fire_at", "is not", null).execute();
+  const now = await dbNow(s.db);
+  let n = 0;
+  for (const w of rows) {
+    const t = w.definition.trigger as ScheduleTrigger;
+    if (t.time_zone) continue;
+    await s.db.updateTable("workflows").set({ next_fire_at: nextFireAt(t, timeZone, now, false) }).where("id", "=", w.id).execute();
+    n++;
+  }
+  return n;
 }
 
 /** The workflow worker: due runs (woken when a run is queued here) and due schedules. */

@@ -108,8 +108,14 @@ export function toClip(row: Selectable<ClipsTable>, playback?: { url: string; ex
  */
 export async function createClip(
   deps: Pick<PlaybackDeps, "data" | "storage">, accountId: string, sourceId: string, from: number, to: number, title: string | null,
+  /** A given id (a workflow's, made from its run and step): when that clip exists already, it is returned as it is. */
+  id?: string,
 ): Promise<Selectable<ClipsTable> | undefined> {
-  const clipId = newId("clp");
+  const clipId = id ?? newId("clp");
+  if (id) {
+    const existing = await deps.data.withAccount(accountId, (s) => s.db.selectFrom("clips").selectAll().where("id", "=", id).executeTakeFirst());
+    if (existing) return existing;
+  }
   const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, sourceId, from, to));
   if (!rows.length) return undefined;
   const inits = new Map<string, string>();
@@ -129,8 +135,11 @@ export async function createClip(
         from_at: new Date(first.start_at), to_at: new Date(new Date(last.start_at).getTime() + last.duration_ms),
         duration_ms: rows.reduce((a, r) => a + r.duration_ms, 0), bytes: rows.reduce((a, r) => a + Number(r.bytes), 0),
       })
+      .onConflict((oc) => oc.column("id").doNothing())
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    // Made at the same time by another attempt: that one is the clip.
+    if (!row) return s.db.selectFrom("clips").selectAll().where("id", "=", clipId).executeTakeFirstOrThrow();
     await s.db
       .insertInto("clip_segments")
       .values(copies.map((c) => ({

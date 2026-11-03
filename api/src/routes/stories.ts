@@ -47,11 +47,13 @@ export const STORY_BODY = {
 };
 
 /** Makes a story for this caller: checks its grants on every piece, records it and queues the render. Shared with chat and following. */
-export async function makeStory(deps: Pick<StoryRouteDeps, "data" | "bus" | "audit">, req: FastifyRequest, input: StoryInput) {
+export async function makeStory(deps: Pick<StoryRouteDeps, "data" | "bus" | "audit">, req: FastifyRequest, input: StoryInput, opts: { id?: string } = {}) {
   const pieces = await planStory(deps, req, input);
   const out = await createStory(deps.data, req.accountId!, pieces, {
     title: input.title?.trim() || null, mode: input.mode ?? "labelled", actor: req.access?.actor ?? "account", agentId: req.access?.agentId ?? null,
+    ...(opts.id ? { id: opts.id } : {}),
   });
+  if (out.existed) return out;
   await deps.audit?.write({
     accountId: req.accountId!, actor: req.access?.actor ?? "account", action: "story.created", target: out.story.id, status: 202,
     details: { mode: out.story.mode, pieces: pieces.length, sources: [...new Set(pieces.map((p) => p.source_id))] },

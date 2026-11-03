@@ -18,8 +18,8 @@ import { ApiError } from "../errors.js";
 import type { AuditLog } from "../module.js";
 import { validTimeZone } from "../schedule.js";
 import { type WorkflowRow, type WorkflowRunRow, startRun } from "../workflow-queue.js";
-import { DefinitionError, LIMITS, type ScheduleTrigger, type WorkflowDefinition, checkDefinition } from "../workflow-spec.js";
-import { nextFireAt } from "../workflows.js";
+import { DefinitionError, LIMITS, type ScheduleTrigger, type WorkflowDefinition, checkDefinition, definitionWarnings } from "../workflow-spec.js";
+import { dbNow, nextFireAt } from "../workflows.js";
 import { SIGNATURE_TOLERANCE_S, parseSignature, signatureFor } from "./readings-webhook.js";
 
 /** Signatures the hook has taken are kept this long past their time, to refuse a replay. */
@@ -30,7 +30,10 @@ export interface WorkflowRouteDeps {
   audit?: AuditLog;
   /** The API's public base, for the hook URL. */
   base: (req: FastifyRequest) => string;
+  /** The webhook trigger's clock for signature times (tests); default the database's. */
   now?: () => number;
+  /** Stops a run (the engine's cancel). */
+  cancel?(accountId: string, runId: string, by: string): Promise<WorkflowRunRow | undefined>;
 }
 
 type Body = { name?: string; enabled?: boolean; sources?: string[]; trigger?: unknown; steps?: unknown; edges?: unknown };
@@ -38,11 +41,13 @@ type Body = { name?: string; enabled?: boolean; sources?: string[]; trigger?: un
 const bad = (message: string, details?: Record<string, unknown>) => new ApiError(400, "validation_failed", message, details);
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
 
-export function toWorkflow(w: WorkflowRow, base: string) {
+export function toWorkflow(w: WorkflowRow, base: string, name?: (id: string) => string) {
   const d = w.definition;
+  const warnings = definitionWarnings(d, w.source_ids, name);
   return {
     id: w.id, name: w.name, enabled: w.enabled, sources: w.source_ids, trigger: d.trigger, steps: d.steps, edges: d.edges,
-    ...(d.trigger.type === "webhook" ? { hook_url: `${base.replace(/\/$/, "")}/v1/workflow-hooks/${w.id}`, hook_secret_set: !!w.hook_secret } : {}),
+    ...(d.trigger.type === "webhook" ? { hook_url: `${base.replace(/\/$/, "")}/v1/workflow-hooks/${w.id}`, hook_secret_set: !!w.hook_secret, hook_failures: w.hook_failures } : {}),
+    ...(warnings.length ? { warnings } : {}),
     runs_dropped: w.runs_dropped, last_run_at: iso(w.last_run_at),
     ...(d.trigger.type === "schedule" ? { next_run_at: w.enabled ? iso(w.next_fire_at) : null } : {}),
     created_by: w.created_by, created_at: iso(w.created_at)!, updated_at: iso(w.updated_at)!,
@@ -71,7 +76,6 @@ const newHookSecret = () => `whsec_${randomBytes(24).toString("base64url")}`;
 
 export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRouteDeps) {
   const { data } = deps;
-  const now = deps.now ?? Date.now;
 
   /** Checks a whole workflow: the definition, then everything it names against the account. */
   async function check(accountId: string, b: Required<Pick<Body, "sources">> & Body): Promise<WorkflowDefinition> {
@@ -115,8 +119,13 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
     return w;
   };
   const tzOf = async (accountId: string) => (await data.withAccount(accountId, (s) => s.account.get()))?.time_zone || "UTC";
-  const nextFire = (def: WorkflowDefinition, enabled: boolean, tz: string) =>
-    def.trigger.type === "schedule" && enabled ? nextFireAt(def.trigger as ScheduleTrigger, tz, new Date(now()), false) : null;
+  // From the database's clock (ADR 0058), as the scheduler compares with it.
+  const nextFire = async (def: WorkflowDefinition, enabled: boolean, tz: string) =>
+    def.trigger.type === "schedule" && enabled ? nextFireAt(def.trigger as ScheduleTrigger, tz, await dbNow(data.db()), false) : null;
+  const namesOf = async (accountId: string) => {
+    const m = new Map((await data.withAccount(accountId, (s) => s.sources.list())).map((x) => [x.id, x.name]));
+    return (id: string) => m.get(id) ?? id;
+  };
 
   const workflowBody = {
     type: "object", additionalProperties: false,
@@ -130,7 +139,8 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
 
   app.get("/v1/workflows", async (req) => {
     const rows = await data.withAccount(req.accountId!, (s) => s.db.selectFrom("workflows").selectAll().orderBy("created_at", "desc").execute());
-    return { data: rows.map((w) => toWorkflow(w, deps.base(req))), next_cursor: null };
+    const name = await namesOf(req.accountId!);
+    return { data: rows.map((w) => toWorkflow(w, deps.base(req), name)), next_cursor: null };
   });
 
   app.post<{ Body: Body }>("/v1/workflows", { schema: { body: { ...workflowBody, required: ["name", "sources", "trigger", "steps"] } } }, async (req, reply) => {
@@ -140,20 +150,21 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
     const enabled = b.enabled ?? true;
     const secret = def.trigger.type === "webhook" ? newHookSecret() : undefined;
     const tz = await tzOf(accountId);
+    const fireAt = await nextFire(def, enabled, tz);
     const row = await data.withAccount(accountId, async (s) => {
       const count = Number((await s.db.selectFrom("workflows").select((e) => e.fn.countAll<string>().as("n")).executeTakeFirstOrThrow()).n);
       if (count >= LIMITS.workflows) throw new ApiError(409, "limit_reached", `a workspace has at most ${LIMITS.workflows} workflows`);
       return s.db.insertInto("workflows").values({
         id: newId("wfl"), account_id: accountId, name: b.name.trim(), enabled, definition: JSON.stringify(def), trigger_type: def.trigger.type,
-        source_ids: b.sources, hook_secret: secret ? data.box().encrypt(secret) : null, next_fire_at: nextFire(def, enabled, tz),
+        source_ids: b.sources, hook_secret: secret ? data.box().encrypt(secret) : null, next_fire_at: fireAt,
         created_by: req.access?.actor ?? "account", updated_by: req.access?.actor ?? "account",
       }).returningAll().executeTakeFirstOrThrow();
     });
     // The hook secret is shown once.
-    return reply.code(201).send({ ...toWorkflow(row, deps.base(req)), ...(secret ? { hook_secret: secret } : {}) });
+    return reply.code(201).send({ ...toWorkflow(row, deps.base(req), await namesOf(accountId)), ...(secret ? { hook_secret: secret } : {}) });
   });
 
-  app.get<{ Params: { id: string } }>("/v1/workflows/:id", async (req) => toWorkflow(await load(req.accountId!, req.params.id), deps.base(req)));
+  app.get<{ Params: { id: string } }>("/v1/workflows/:id", async (req) => toWorkflow(await load(req.accountId!, req.params.id), deps.base(req), await namesOf(req.accountId!)));
 
   app.patch<{ Params: { id: string }; Body: Body }>("/v1/workflows/:id", { schema: { body: workflowBody } }, async (req) => {
     const accountId = req.accountId!;
@@ -167,13 +178,14 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
     const secret = def.trigger.type === "webhook" && !w.hook_secret ? newHookSecret() : undefined;
     const tz = await tzOf(accountId);
     const scheduleChanged = JSON.stringify(def.trigger) !== JSON.stringify(w.definition.trigger) || merged.enabled !== w.enabled;
+    const fireAt = await nextFire(def, merged.enabled, tz);
     const row = await data.withAccount(accountId, (s) => s.db.updateTable("workflows").set({
       name: merged.name.trim(), enabled: merged.enabled, definition: JSON.stringify(def), trigger_type: def.trigger.type, source_ids: merged.sources,
       ...(secret ? { hook_secret: data.box().encrypt(secret) } : def.trigger.type !== "webhook" ? { hook_secret: null } : {}),
-      ...(scheduleChanged || def.trigger.type !== "schedule" ? { next_fire_at: nextFire(def, merged.enabled, tz) } : {}),
+      ...(scheduleChanged || def.trigger.type !== "schedule" ? { next_fire_at: fireAt } : {}),
       updated_by: req.access?.actor ?? "account", updated_at: new Date(),
     }).where("id", "=", w.id).returningAll().executeTakeFirstOrThrow());
-    return { ...toWorkflow(row, deps.base(req)), ...(secret ? { hook_secret: secret } : {}) };
+    return { ...toWorkflow(row, deps.base(req), await namesOf(accountId)), ...(secret ? { hook_secret: secret } : {}) };
   });
 
   app.delete<{ Params: { id: string } }>("/v1/workflows/:id", async (req, reply) => {
@@ -195,7 +207,7 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
     return { ...toWorkflow(row, deps.base(req)), hook_secret: secret };
   });
 
-  // Starting one by hand (testing it, or a disabled one): as a run of its own, within the run rate.
+  // Starting one by hand (trying it): as a run of its own, within the run rate. A workflow that is off doesn't run.
   app.post<{ Params: { id: string }; Body: { input?: Record<string, unknown> } }>("/v1/workflows/:id/run", {
     schema: { body: { type: ["object", "null"], additionalProperties: false, properties: { input: { type: "object" } } } },
   }, async (req, reply) => {
@@ -204,6 +216,7 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
       // An event trigger's steps read the event: a run by hand needs one.
       throw new ApiError(409, "conflict", "a workflow started by events runs when one happens; it can't be started by hand");
     }
+    if (!w.enabled) throw new ApiError(409, "conflict", "this workflow is turned off; turn it on to run it");
     const input = req.body?.input;
     if (input && Buffer.byteLength(JSON.stringify(input)) > LIMITS.inputBytes) throw bad(`input is larger than ${LIMITS.inputBytes / 1024} KiB`);
     const out = await data.withAccount(req.accountId!, (s) => startRun(s, w.id, { type: "manual", by: req.access?.actor ?? "account", ...(input ? { input } : {}) }));
@@ -222,17 +235,39 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
     return { data: rows.map((r) => toRun(r)), next_cursor: null };
   });
 
-  app.get<{ Params: { id: string } }>("/v1/workflow-runs/:id", async (req) => {
-    const found = await data.withAccount(req.accountId!, async (s) => {
-      const run = await s.db.selectFrom("workflow_runs").selectAll().where("id", "=", req.params.id).executeTakeFirst();
+  const getRun = async (accountId: string, id: string) => {
+    const found = await data.withAccount(accountId, async (s) => {
+      const run = await s.db.selectFrom("workflow_runs").selectAll().where("id", "=", id).executeTakeFirst();
       return run ? { run, steps: await s.db.selectFrom("workflow_run_steps").selectAll().where("run_id", "=", run.id).execute() } : undefined;
     });
     if (!found) throw new ApiError(404, "not_found", "run not found");
     return toRun(found.run, found.steps, true);
+  };
+  app.get<{ Params: { id: string } }>("/v1/workflow-runs/:id", async (req) => getRun(req.accountId!, req.params.id));
+
+  // Stopping a run (admins and up): it is cancelled at once; a process running a step stops at its next write.
+  app.post<{ Params: { id: string } }>("/v1/workflow-runs/:id/cancel", async (req) => {
+    if (!deps.cancel) throw new ApiError(503, "service_unavailable", "runs can't be cancelled on this server");
+    const run = await deps.cancel(req.accountId!, req.params.id, req.access?.actor ?? "account");
+    if (!run) throw new ApiError(404, "not_found", "run not found");
+    return getRun(req.accountId!, req.params.id);
   });
 
   // --- the webhook trigger: no API key, the workflow's own signature ---------------------
-  const unsigned = (msg: string) => new ApiError(401, "unauthorized", msg);
+  // Every request that isn't signed right for a workflow with a webhook trigger gets the same answer, whether
+  // the id exists or not; on a known workflow the failure is counted and audited (at most once a minute).
+  const REFUSED = "the request isn't signed for this workflow: send Senseplane-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of \"t.body\"> made with its hook secret, within 5 minutes, once";
+  const refused = () => new ApiError(401, "unauthorized", REFUSED);
+  const DUMMY_SECRET = randomBytes(24).toString("base64url");
+  const failedAttempt = async (accountId: string, id: string) => {
+    const r = await data.withAccount(accountId, (s) => s.db.updateTable("workflows").set((eb) => ({
+      hook_failures: eb("hook_failures", "+", 1),
+      last_hook_failure_at: sql`CASE WHEN last_hook_failure_at IS NULL OR last_hook_failure_at < now() - interval '1 minute' THEN now() ELSE last_hook_failure_at END`,
+    })).where("id", "=", id).returning([sql<boolean>`last_hook_failure_at = now()`.as("audit"), "hook_failures"]).executeTakeFirst());
+    if (r?.audit) {
+      await deps.audit?.write({ accountId, actor: "webhook", action: "workflow.hook_refused", target: id, status: 401, details: { failures: r.hook_failures } }).catch(() => undefined);
+    }
+  };
   app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
     scope.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: LIMITS.inputBytes }, (req, raw: Buffer, done) => {
@@ -242,17 +277,21 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
     });
     scope.post<{ Params: { id: string } }>("/v1/workflow-hooks/:id", async (req, reply) => {
       const id = req.params.id;
-      const hook = (await sql<{ account_id: string; hook_secret: string | null; enabled: boolean; trigger_type: string }>`select * from workflow_hook(${id})`.execute(data.db())).rows[0];
-      if (!hook || hook.trigger_type !== "webhook" || !hook.hook_secret) throw new ApiError(404, "not_found", "no workflow with a webhook trigger has this id");
+      const found = (await sql<{ account_id: string; hook_secret: string | null; enabled: boolean; trigger_type: string }>`select * from workflow_hook(${id})`.execute(data.db())).rows[0];
+      const hook = found && found.trigger_type === "webhook" && found.hook_secret ? found : undefined;
       const header = req.headers["senseplane-signature"];
       const sig = parseSignature(Array.isArray(header) ? header[0] ?? "" : header ?? "");
-      if (!sig) throw unsigned("sign the request: Senseplane-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of \"t.body\"> with the workflow's hook secret");
-      const clock = now();
-      if (Math.abs(Math.floor(clock / 1000) - sig.t) > SIGNATURE_TOLERANCE_S) throw unsigned(`the signature's time is more than ${SIGNATURE_TOLERANCE_S / 60} minutes from now`);
       const body = req.rawBody ?? "";
-      const want = Buffer.from(signatureFor(data.box().decrypt(hook.hook_secret), sig.t, body), "hex");
-      const mac = sig.v1.find((v) => timingSafeEqual(Buffer.from(v, "hex"), want));
-      if (!mac) throw unsigned("the signature doesn't match the body");
+      const clock = deps.now ? deps.now() : (await dbNow(data.db())).getTime();
+      // The MAC is worked out for unknown ids too, with a throwaway secret, so the answer takes as long.
+      const want = Buffer.from(signatureFor(hook ? data.box().decrypt(hook.hook_secret!) : DUMMY_SECRET, sig?.t ?? 0, body), "hex");
+      const mac = sig?.v1.find((v) => timingSafeEqual(Buffer.from(v, "hex"), want));
+      const fresh = !!sig && Math.abs(Math.floor(clock / 1000) - sig.t) <= SIGNATURE_TOLERANCE_S;
+      if (!hook) throw refused();
+      if (!sig || !mac || !fresh) {
+        await failedAttempt(hook.account_id, id);
+        throw refused();
+      }
       let input: unknown = {};
       if (body.trim()) {
         try {
@@ -264,15 +303,22 @@ export function registerWorkflowRoutes(app: FastifyInstance, deps: WorkflowRoute
       if (!input || typeof input !== "object" || Array.isArray(input)) throw bad("the body must be a JSON object");
       if (!hook.enabled) throw new ApiError(409, "conflict", "this workflow is turned off");
       const out = await data.withAccount(hook.account_id, async (s) => {
-        // Each signature once, in the run's own transaction: a request that starts nothing doesn't use it up.
+        // Each signature once, in the run's own transaction.
         await s.db.deleteFrom("workflow_hook_signatures").where("signed_at", "<", Math.floor(clock / 1000) - SIGNATURE_KEEP_S).execute();
-        const fresh = await s.db.insertInto("workflow_hook_signatures").values({ account_id: hook.account_id, workflow_id: id, mac, signed_at: sig.t })
+        const taken = await s.db.insertInto("workflow_hook_signatures").values({ account_id: hook.account_id, workflow_id: id, mac, signed_at: sig.t })
           .onConflict((oc) => oc.columns(["workflow_id", "mac"]).doNothing()).returning("mac").executeTakeFirst();
-        if (!fresh) throw unsigned("this signature was already used; sign each request");
+        if (!taken) return "replayed" as const;
         return startRun(s, id, { type: "webhook", input: input as Record<string, unknown> });
       });
+      if (out === "replayed") {
+        await failedAttempt(hook.account_id, id);
+        throw refused();
+      }
       // Over the rate: nothing ran, the drop is counted on the workflow, and the signature is spent (sign a retry afresh).
-      if (!("run" in out)) throw new ApiError(429, "rate_limited", `this ${out.dropped === "account" ? "workspace" : "workflow"} has started as many runs as it may for now`);
+      if (!("run" in out)) {
+        if (out.dropped === "disabled") throw new ApiError(409, "conflict", "this workflow is turned off");
+        throw new ApiError(429, "rate_limited", `this ${out.dropped === "account" ? "workspace" : "workflow"} has started as many runs as it may for now`);
+      }
       await deps.audit?.write({ accountId: hook.account_id, actor: "webhook", action: "workflow.hook", target: id, status: 202, details: { run: out.run.id } }).catch(() => undefined);
       return reply.code(202).send({ run_id: out.run.id, status: out.run.status });
     });

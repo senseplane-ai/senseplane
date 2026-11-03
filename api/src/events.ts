@@ -3,7 +3,7 @@
 
 // Events: created from the brain (Valkey) and from sensor readings, shaped as the
 // public Event schema, and fanned out to webhooks.
-import type { Selectable } from "kysely";
+import { type Selectable, sql } from "kysely";
 import type { AccountScope } from "./data/access.js";
 import { newId } from "./data/ids.js";
 import type { Destination, EventsTable } from "./data/schema.js";
@@ -80,8 +80,16 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
         .execute();
     }
   }
-  // Workflows this event starts (ADR 0072), queued in the same transaction.
-  await queueWorkflowsForEvent(s, row);
+  // Workflows this event starts (ADR 0072), queued in the same transaction, inside a savepoint: whatever goes
+  // wrong there, the event is kept.
+  await sql`savepoint workflows`.execute(s.db);
+  try {
+    await queueWorkflowsForEvent(s, row);
+    await sql`release savepoint workflows`.execute(s.db);
+  } catch (err) {
+    await sql`rollback to savepoint workflows`.execute(s.db);
+    console.error(JSON.stringify({ level: "error", msg: "workflows for an event could not be queued; the event is kept", event: row.id, err: (err as Error).message }));
+  }
   return row;
 }
 

@@ -11,6 +11,7 @@ import json
 import re
 import time
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ._base import parse
 from ._errors import WebhookVerificationError
@@ -42,6 +43,23 @@ def verify_webhook(
     header; a framework's headers mapping works too. Raises WebhookVerificationError on a
     bad signature or a timestamp more than `tolerance_seconds` from now.
     """
+    body = verify_webhook_payload(raw_body, signature_header, secret, tolerance_seconds=tolerance_seconds, now=now)
+    return parse(Event, body)
+
+
+def verify_webhook_payload(
+    raw_body: str | bytes,
+    signature_header: str | Sequence[str] | Mapping[str, str] | None,
+    secret: str,
+    *,
+    tolerance_seconds: int = DEFAULT_TOLERANCE_S,
+    now: int | None = None,
+) -> Any:
+    """Verifies a signed delivery and returns its JSON as sent, whatever it carries.
+
+    For a workflow's notify step (`type: "workflow.notify"`, ADR 0072), or a request signed
+    the same way for a workflow's webhook trigger. The same checks as `verify_webhook`.
+    """
     header = _header(signature_header)
     if not header:
         raise WebhookVerificationError("missing Senseplane-Signature header")
@@ -63,7 +81,7 @@ def verify_webhook(
         given = b""
     if not hmac.compare_digest(given, expected):
         raise WebhookVerificationError("signature mismatch")
-    return parse(Event, json.loads(body))
+    return json.loads(body)
 
 
 def _header(value: str | Sequence[str] | Mapping[str, str] | None) -> str | None:

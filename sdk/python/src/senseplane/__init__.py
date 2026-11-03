@@ -31,7 +31,7 @@ from ._errors import (
 from ._generated.api import KNOWN_SENSES, KnownSense
 from ._sync_client import Senseplane, SenseplaneDemo
 from ._version import __version__
-from ._webhooks import sign_webhook, verify_webhook
+from ._webhooks import sign_webhook, verify_webhook, verify_webhook_payload
 from .labels import LABELS, Label, LabelInfo, detection_label, is_label, label_name
 from .senses import (
     SENSES,
@@ -85,4 +85,5 @@ __all__ = [
     "state_word",
     "unit_symbol",
     "verify_webhook",
+    "verify_webhook_payload",
 ]

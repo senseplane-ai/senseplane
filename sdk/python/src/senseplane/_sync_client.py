@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import time
 from collections.abc import Iterator, Mapping
@@ -99,7 +100,9 @@ class Transport:
 
     def _prepare(self, operation: str, token: str | None, extra: Mapping[str, str] | None, **kw: Any) -> Prepared:
         headers = dict(self.headers)
-        if token is not None:
+        if token == "":
+            headers.pop("authorization", None)  # a call that takes no API key (a workflow's hook)
+        elif token is not None:
             headers["authorization"] = f"Bearer {token}"
         return prepare(operation, headers={**headers, **(extra or {})}, **kw)
 
@@ -732,6 +735,66 @@ class Follows(_Resource):
         return parse(m.FollowsGetResponse, self._t.request("listFollows", query={"limit": limit})).data
 
 
+class Workflows(_Resource):
+    """Workflows (ADR 0072): a trigger and steps that tell, ask, speak, clip, make stories and wait.
+
+    No step ever switches a device. Admins and up make them; runs act on the workflow's own
+    sources with an agent's grant and privacy rules.
+    """
+
+    def create(self, body: Body = None, /, **fields: Any) -> m.WorkflowCreated:
+        """`create(name=..., sources=[...], trigger={"type": "event", ...}, steps=[...], edges=[...])`.
+
+        A webhook trigger's `hook_secret` is in this answer only.
+        """
+        return parse(m.WorkflowCreated, self._t.request("createWorkflow", body=body_of(m.WorkflowCreate, body, fields)))
+
+    def get(self, id: str) -> m.Workflow:
+        return parse(m.Workflow, self._t.request("getWorkflow", path={"id": id}))
+
+    def update(self, id: str, body: Body = None, /, **fields: Any) -> m.WorkflowCreated:
+        """Checked in full as on creation; `update(id, enabled=False)` turns it off."""
+        data = self._t.request("updateWorkflow", path={"id": id}, body=body_of(m.WorkflowUpdate, body, fields))
+        return parse(m.WorkflowCreated, data)
+
+    def delete(self, id: str) -> None:
+        self._t.request("deleteWorkflow", path={"id": id})
+
+    def list(self) -> list[m.Workflow]:
+        return parse(m.WorkflowsGetResponse, self._t.request("listWorkflows")).data
+
+    def run(self, id: str, input: Mapping[str, Any] | None = None) -> m.WorkflowRun:
+        """Starts a run by hand (a schedule or webhook trigger), with what a webhook would have sent."""
+        body = {"input": dict(input)} if input is not None else {}
+        return parse(m.WorkflowRun, self._t.request("runWorkflow", path={"id": id}, body=body))
+
+    def rotate_hook_secret(self, id: str) -> m.WorkflowCreated:
+        """A new hook secret (shown once); the old one stops working."""
+        return parse(m.WorkflowCreated, self._t.request("rotateWorkflowHookSecret", path={"id": id}))
+
+    def runs(self, id: str, *, status: str | None = None, limit: int | None = None) -> builtins.list[m.WorkflowRun]:
+        data = self._t.request("listWorkflowRuns", path={"id": id}, query={"status": status, "limit": limit})
+        return parse(m.WorkflowsIdRunsGetResponse, data).data
+
+    def get_run(self, id: str) -> m.WorkflowRun:
+        """A run with each step's status, timing, output and error."""
+        return parse(m.WorkflowRun, self._t.request("getWorkflowRun", path={"id": id}))
+
+    def trigger(
+        self, id: str, hook_secret: str, input: Mapping[str, Any] | None = None
+    ) -> m.WorkflowHooksIdPostResponse:
+        """Starts a workflow with a webhook trigger, signed with its hook secret, as n8n or a script would.
+
+        The `Senseplane-Signature` covers the exact body sent; no API key goes with it.
+        """
+        data = dict(input or {})
+        signature = sign_webhook(json.dumps(data, separators=(",", ":")), hook_secret)
+        res = self._t.request(
+            "triggerWorkflowHook", path={"id": id}, body=data, token="", headers={"senseplane-signature": signature}
+        )
+        return parse(m.WorkflowHooksIdPostResponse, res)
+
+
 class Conversations(_Resource):
     """Ask about what your sources saw and heard (ADR 0041). Answers cite moments as [1], [2], …"""
 
@@ -1043,6 +1106,7 @@ class Senseplane:
         self.clips = Clips(transport)
         self.stories = Stories(transport)
         self.follows = Follows(transport)
+        self.workflows = Workflows(transport)
         self.conversations = Conversations(transport)
         self.memory = Memory(transport)
         self.activity = Activity(transport)

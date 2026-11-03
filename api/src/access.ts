@@ -22,21 +22,23 @@ export const ABILITIES = ["watch", "history"] as const;
 
 /**
  * The grant sense that covers every sensor sense (ADR 0060): temperature,
- * contact, power and any sense a sensor reports later. video and audio are
- * never covered by it.
+ * contact, power and any sense a sensor reports later. video, audio and
+ * control are never covered by it.
  */
 export const SENSORS = "sensors";
-const MEDIA = new Set(["video", "audio"]);
+/** Switching the devices on a sensor source (ADR 0067): only ever granted by name, like video and audio. */
+export const CONTROL = "control";
+const NEVER_IMPLIED = new Set(["video", "audio", CONTROL]);
 
 /** Does a grant's sense list cover this sense? */
 export function coversSense(granted: readonly string[], sense: string): boolean {
-  return granted.includes(sense) || (!MEDIA.has(sense) && granted.includes(SENSORS));
+  return granted.includes(sense) || (!NEVER_IMPLIED.has(sense) && granted.includes(SENSORS));
 }
 
 /** The senses granted on a source: `has` also answers for senses covered by "sensors". */
 export class SenseSet extends Set<string> {
   override has(sense: string): boolean {
-    return super.has(sense) || (!MEDIA.has(sense) && super.has(SENSORS));
+    return super.has(sense) || (!NEVER_IMPLIED.has(sense) && super.has(SENSORS));
   }
 }
 /** Without the `history` ability, recorded data is limited to this recent stretch (enough for listen and read_environment). */
@@ -120,7 +122,7 @@ export function grantFilter<DB, TB extends keyof DB>(req: FastifyRequest, timeCo
     if (!grants.length) return sql<boolean>`false`;
     return eb.or(grants.map((g) => {
       const sense = g.senses.includes(SENSORS)
-        ? eb.or([eb("sense" as never, "in", g.senses as never), eb("sense" as never, "not in", [...MEDIA] as never)])
+        ? eb.or([eb("sense" as never, "in", g.senses as never), eb("sense" as never, "not in", [...NEVER_IMPLIED] as never)])
         : eb("sense" as never, "in", g.senses as never);
       const parts = [eb("source_id" as never, "in", g.source_ids as never), sense];
       if (g.window_from) parts.push(eb(timeColumn as never, ">=", g.window_from as never));
@@ -145,6 +147,8 @@ const AGENT_ROUTES = new Set([
   // Activities (ADR 0057): questions and intervals, within the agent's grants.
   "POST /v1/activity/query", "GET /v1/activities", "POST /v1/activity/check",
   "GET /v1/watch-packs", "POST /v1/watch-packs/:id/apply",
+  // Devices (ADR 0067): switching one needs a control grant on its source, checked by the route.
+  "GET /v1/devices", "GET /v1/devices/:id", "POST /v1/devices/:id/commands", "GET /v1/device-commands/:id",
 ]);
 
 /** Agent routes that need the `watch` ability on a grant (ADR 0048). */

@@ -10,16 +10,21 @@
 // - PUT  /v1/bridge/entities the Home Assistant entities it can send (ADR 0061)
 // - POST /v1/bridge/readings readings of the entities a person chose
 // - PUT  /v1/bridge/cameras-found  the cameras it found to pick from (ADR 0063)
+// - GET  /v1/bridge/commands work for the box, long-polled (ADR 0062), such as
+//                            switching a device a person asked for (ADR 0067)
 // Plus GET /v1/integration for a sensor integration token (`sit_…`), and the
 // console's side: POST/GET /v1/bridges and choosing a bridge's entities.
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
+import { sql } from "kysely";
 import type { AccountScope, DataAccess, Source } from "../data/access.js";
 import { hashApiKey } from "../data/access.js";
 import { ApiError } from "../errors.js";
 import type { IngestSigner } from "../ingest.js";
 import type { AuditLog } from "../module.js";
 import { type ReadingInput, cleanReading, readingInputSchema } from "../readings.js";
+import { ACTIONS } from "../devices.js";
+import { bridgeKick, finishDeviceCommand } from "./devices.js";
 import { ingestReadings } from "./source-config.js";
 import { newBridgeToken, redactUrls, toSource } from "./sources.js";
 
@@ -259,7 +264,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
     );
 
     // The entities the bridge's Home Assistant has that Senseplane can take; ones it no longer lists stay, marked unlisted.
-    scope.put<{ Body: { entities: { entity_id: string; name: string; area?: string; device_class?: string; sense: string; kind: string }[] } }>(
+    scope.put<{ Body: { entities: { entity_id: string; name: string; area?: string; device_class?: string; sense: string; kind: string; controls?: string[] }[] } }>(
       "/v1/bridge/entities",
       { schema: { body: { type: "object", additionalProperties: false, required: ["entities"], properties: { entities: { type: "array", maxItems: 5000, items: {
         type: "object", additionalProperties: false, required: ["entity_id", "name", "sense", "kind"],
@@ -267,6 +272,8 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
           entity_id: { type: "string", minLength: 3, maxLength: 200, pattern: "^[a-z0-9_]+\\.[a-z0-9_]+$" }, name: { type: "string", maxLength: 200 },
           area: { type: "string", maxLength: 120 }, device_class: { type: "string", maxLength: 64 },
           sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40 }, kind: { enum: ["number", "state", "event"] },
+          // What the box can do to it (ADR 0067); the API offers only what the device's type allows.
+          controls: { type: "array", maxItems: 20, items: { type: "string", maxLength: 40 } },
         },
       } } } } } },
       async (req, reply) => {
@@ -274,11 +281,12 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         const ids = req.body.entities.map((e) => e.entity_id);
         await deps.data.withAccount(accountId, async (s) => {
           for (const e of req.body.entities) {
+            const controls = [...new Set((e.controls ?? []).filter((c) => (ACTIONS as readonly string[]).includes(c)))];
             await s.db.insertInto("bridge_entities").values({
               account_id: accountId, bridge_id: bridgeId, entity_id: e.entity_id, name: e.name || e.entity_id, area: e.area || null,
-              device_class: e.device_class || null, sense: e.sense, kind: e.kind, listed: true, updated_at: new Date(),
+              device_class: e.device_class || null, sense: e.sense, kind: e.kind, listed: true, updated_at: new Date(), controls,
             }).onConflict((oc) => oc.columns(["bridge_id", "entity_id"]).doUpdateSet({
-              name: e.name || e.entity_id, area: e.area || null, device_class: e.device_class || null, sense: e.sense, kind: e.kind, listed: true, updated_at: new Date(),
+              name: e.name || e.entity_id, area: e.area || null, device_class: e.device_class || null, sense: e.sense, kind: e.kind, listed: true, updated_at: new Date(), controls,
             })).execute();
           }
           let gone = s.db.updateTable("bridge_entities").set({ listed: false, updated_at: new Date() }).where("bridge_id", "=", bridgeId).where("listed", "=", true);
@@ -374,13 +382,16 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
     );
 
     // Work for the box (ADR 0062), long-polled: what is waiting is handed over once, its arguments then cleared.
+    // A command past its expires_at is never handed out: a device command the box didn't take in time
+    // was answered "the box is offline", so it must not run later (ADR 0067).
     scope.get<{ Querystring: { wait?: string } }>("/v1/bridge/commands", async (req) => {
       const { bridgeId, accountId } = req.bridge!;
       const until = Date.now() + Math.min(Math.max(Number(req.query.wait ?? 0) || 0, 0), 25) * 1000;
       for (;;) {
         const taken = await deps.data.withAccount(accountId, async (s) => {
           const rows = await s.db.selectFrom("bridge_commands").select(["id", "kind", "args_sealed as args"]).where("bridge_id", "=", bridgeId)
-            .where("status", "=", "pending").orderBy("created_at").limit(10).forUpdate().skipLocked().execute();
+            .where("status", "=", "pending").where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", sql<Date>`now()`)]))
+            .orderBy("created_at").limit(10).forUpdate().skipLocked().execute();
           if (rows.length) {
             await s.db.updateTable("bridge_commands").set({ status: "taken", taken_at: new Date(), args_sealed: null })
               .where("id", "in", rows.map((r) => r.id)).execute();
@@ -390,7 +401,16 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         if (taken.length || Date.now() >= until || req.raw.destroyed) {
           return { data: taken.map((c) => ({ id: c.id, kind: c.kind, args: c.args ? JSON.parse(box().decrypt(c.args)) : {} })) };
         }
-        await new Promise((r) => setTimeout(r, 1000));
+        // Checked every second, and at once when this process queues work for this box.
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(t);
+            bridgeKick.removeEventListener(bridgeId, done);
+            resolve();
+          };
+          const t = setTimeout(done, 1000);
+          bridgeKick.addEventListener(bridgeId, done);
+        });
       }
     });
 
@@ -407,6 +427,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         }).where("id", "=", req.params.id).where("bridge_id", "=", bridgeId).where("status", "=", "taken").returning("kind").executeTakeFirst());
         if (!done) throw new ApiError(404, "not_found", "no such command waiting for a result");
         await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: `bridge.${done.kind}_${req.body.ok ? "done" : "failed"}`, target: req.params.id, status: 200 });
+        if (done.kind === "device_control") await finishDeviceCommand(deps.data, accountId, req.params.id, req.body.ok, req.body.result, req.body.error, deps.audit);
         return reply.code(204).send();
       },
     );

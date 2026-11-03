@@ -43,7 +43,7 @@ export interface TelegramMessage {
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
-  callback_query?: { id: string; data?: string; message?: { chat: TelegramChat }; from: { id: number } };
+  callback_query?: { id: string; data?: string; message?: { chat: TelegramChat }; from: { id: number; first_name?: string } };
   my_chat_member?: { chat: TelegramChat; new_chat_member: { status: string } };
 }
 

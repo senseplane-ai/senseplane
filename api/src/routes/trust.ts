@@ -178,7 +178,7 @@ export function registerTrustRoutes(app: FastifyInstance, deps: {
     });
     const page = rows.slice(0, limit);
     return {
-      data: page.map((r) => ({ id: String(r.id), actor: r.actor, action: r.action, target: r.target, ...(r.status ? { status: r.status } : {}), occurred_at: iso(r.occurred_at) })),
+      data: page.map((r) => ({ id: String(r.id), actor: r.actor, action: r.action, target: r.target, ...(r.status ? { status: r.status } : {}), ...(r.details ? { details: r.details } : {}), occurred_at: iso(r.occurred_at) })),
       next_cursor: rows.length > limit ? String(page.at(-1)!.id) : null,
     };
   });

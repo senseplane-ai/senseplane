@@ -9,10 +9,15 @@
 // with the channel's own key), so grants, limits and the audit log apply.
 // Everything sent goes through the channel_messages outbox; updates coming in
 // are stored once and handled by whichever API process claims them (ADR 0058).
+// Devices (ADR 0067): "turn on the hall light" or /devices switches a device
+// as the chat's agent, within its Control grants; a request for a lock, garage
+// door, gate or alarm waits for a person, who can confirm with a button in a
+// private chat (not in a group, where anyone could press it).
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { type Selectable, sql } from "kysely";
 import { type AccountScope, type DataAccess, hashApiKey } from "./data/access.js";
+import { type Action, actionText } from "./devices.js";
 import { newId } from "./data/ids.js";
 import type { ChannelBody, ChannelsTable, EventsTable, StoredMoment } from "./data/schema.js";
 import { ApiError } from "./errors.js";
@@ -54,6 +59,8 @@ export interface ChannelDeps {
   consoleUrl?: string;
   audit?: AuditLog;
   log: FastifyBaseLogger;
+  /** A person's answer to a device request waiting for confirmation (routes/devices.ts). */
+  decideConfirmation?(accountId: string, id: string, approve: boolean, by: { actor: string; name: string }): Promise<{ status: string; message: string | null }>;
 }
 
 export const toChannel = (c: Channel) => ({
@@ -214,6 +221,7 @@ const HELP = [
   "<b>Senseplane</b>",
   "Ask about your cameras in plain words, for example “How many times did someone come to the door today?”. In a group, start with /ask.",
   "",
+  "/devices: switch the devices this chat may control, or say “turn on the hall light”",
   "/mute 1h, 8h, 1d or off: pause alerts in this chat",
   "/new: start a new conversation",
   "/use: choose the workspace, when this chat is linked to more than one",
@@ -240,6 +248,7 @@ export async function handleTelegramUpdate(deps: ChannelDeps, u: TelegramUpdate)
 
   if (u.callback_query) {
     const q = u.callback_query;
+    if (/^(cf|dv):/.test(q.data ?? "")) return deviceButton(deps, q, linked);
     const [what, channelId, secs] = (q.data ?? "").split(":");
     const c = q.message ? (await linked(q.message.chat.id)).find((x) => x.id === channelId) : undefined;
     if (!c || (what !== "mute" && what !== "unmute")) return void (await bot.answerCallback(q.id, "This chat isn't linked any more.").catch(() => undefined));
@@ -289,6 +298,10 @@ export async function handleTelegramUpdate(deps: ChannelDeps, u: TelegramUpdate)
     for (const c of channels) await deps.data.withAccount(c.account_id, (s) => s.db.updateTable("channels").set({ muted_until: until }).where("id", "=", c.id).execute());
     return void (await reply(m.chat.id, off ? "Alerts are on." : `Alerts paused until ${until!.toISOString().slice(11, 16)} UTC. /mute off turns them back on.`));
   }
+  if (command === "devices") {
+    if (!current) return void (await reply(m.chat.id, "This chat isn't linked."));
+    return listDevices(deps, current.account_id, current.id);
+  }
   if (command === "new") {
     if (current) await deps.data.withAccount(current.account_id, (s) => s.db.updateTable("channels").set({ conversation_id: null }).where("id", "=", current.id).execute());
     return void (await reply(m.chat.id, "Starting afresh."));
@@ -300,6 +313,7 @@ export async function handleTelegramUpdate(deps: ChannelDeps, u: TelegramUpdate)
   const question = command === "ask" ? arg : text;
   if (!current) return void (await reply(m.chat.id, "This chat isn't linked. Open Senseplane → Settings → Notifications → <b>Connect Telegram</b>."));
   if (!question) return void (await reply(m.chat.id, "Ask me something about your cameras, for example “/ask did anyone come to the door today?”"));
+  if (await controlFromText(deps, current.account_id, current.id, question)) return;
   await answerQuestion(deps, current.account_id, current.id, question);
 }
 
@@ -410,6 +424,145 @@ async function answerQuestion(deps: ChannelDeps, accountId: string, channelId: s
     return undefined;
   }) : undefined;
   await data.withAccount(accountId, (s) => queueBody(s, ch.id, { text: answerHtml(message.content || "I don't have an answer for that."), ...(buttons.length ? { buttons } : {}), ...(photo ? { photo_key: photo } : {}) }));
+}
+
+// --- devices (ADR 0067) ---------------------------------------------------------
+
+interface ChatDevice { id: string; name: string; room: string | null; type: string; tier: string; actions: string[]; can_control: boolean; state: Record<string, unknown> | null }
+
+/** What a chat's message asks a device to do: "turn on the hall light", "unlock the front door", "set the bedroom to 20". */
+export function parseControl(text: string): { action: Action | "set"; target: string; value?: number } | undefined {
+  const t = text.trim().replace(/[.!?]+$/, "").replace(/^please\s+/i, "").replace(/\s+please$/i, "");
+  const the = (x: string) => x.replace(/^(the|my)\s+/i, "").trim();
+  const onOff = (word: string, target: string) => ({ action: (word.toLowerCase() === "on" ? "turn_on" : "turn_off") as Action, target: the(target) });
+  let m = /^(?:turn|switch)\s+(on|off)\s+(.+)$/i.exec(t);
+  if (m) return onOff(m[1]!, m[2]!);
+  m = /^(?:turn|switch)\s+(.+?)\s+(on|off)$/i.exec(t);
+  if (m) return onOff(m[2]!, m[1]!);
+  m = /^(lock|unlock|open|close|disarm)\s+(.+)$/i.exec(t);
+  if (m) return { action: m[1]!.toLowerCase() as Action, target: the(m[2]!) };
+  m = /^arm\s+(.+?)(?:\s+(away|home))?$/i.exec(t);
+  if (m) return { action: m[2]?.toLowerCase() === "home" ? "arm_home" : "arm_away", target: the(m[1]!) };
+  m = /^(?:set|dim)\s+(.+?)\s+to\s+(\d+(?:\.\d+)?)\s*(?:%|percent|°\s*c?|degrees?(?:\s+c(?:elsius)?)?)?$/i.exec(t);
+  if (m) return { action: "set", target: the(m[1]!), value: Number(m[2]) };
+  return undefined;
+}
+
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/** The one device a target names: its name exactly, else the only one whose name (or room and name) contains it. */
+export function findDevice<T extends { name: string; room: string | null }>(list: T[], target: string): T | T[] | undefined {
+  const want = norm(target);
+  const exact = list.filter((d) => norm(d.name) === want || norm(`${d.room ?? ""} ${d.name}`) === want);
+  if (exact.length === 1) return exact[0];
+  const partial = list.filter((d) => { const n = norm(`${d.room ?? ""} ${d.name}`); return want.split(" ").every((w) => n.includes(w)); });
+  if (partial.length === 1) return partial[0];
+  return partial.length ? partial : undefined;
+}
+
+const agentHeaders = (deps: ChannelDeps, ch: Channel) => ({ authorization: `Bearer ${deps.data.box().decrypt(ch.agent_key)}` });
+
+/** Switches a device as the chat's agent and says what happened. */
+async function runControl(deps: ChannelDeps, ch: Channel, deviceId: string, action: string, value?: number | string) {
+  const res = await deps.app.inject({ method: "POST", url: `/v1/devices/${deviceId}/commands`, headers: agentHeaders(deps, ch), payload: { action, ...(value !== undefined ? { value } : {}) } });
+  const body = res.json() as { message?: string; status?: string; error?: { message?: string; details?: { command?: { message?: string } } } };
+  const text = res.statusCode < 300 ? body.message || "Done." : body.error?.details?.command?.message || body.error?.message || "That didn't work. Try again in a moment.";
+  await deps.data.withAccount(ch.account_id, (s) => queueBody(s, ch.id, { text: escapeHtml(text) }));
+}
+
+async function chatDevices(deps: ChannelDeps, ch: Channel): Promise<ChatDevice[] | undefined> {
+  const res = await deps.app.inject({ method: "GET", url: "/v1/devices", headers: agentHeaders(deps, ch) });
+  return res.statusCode === 200 ? (res.json().data as ChatDevice[]) : undefined;
+}
+
+const channelRow = (deps: ChannelDeps, accountId: string, channelId: string) =>
+  deps.data.withAccount(accountId, (s) => s.db.selectFrom("channels").selectAll().where("id", "=", channelId).executeTakeFirstOrThrow());
+
+/** A message that asks for a device: switches it, or says why not. False when it doesn't name a device (it is a question then). */
+async function controlFromText(deps: ChannelDeps, accountId: string, channelId: string, text: string): Promise<boolean> {
+  const asked = parseControl(text);
+  if (!asked) return false;
+  const ch = await channelRow(deps, accountId, channelId);
+  const list = await chatDevices(deps, ch);
+  if (!list) return false;
+  const tell = (t: string) => deps.data.withAccount(accountId, (s) => queueBody(s, ch.id, { text: t }));
+  const found = findDevice(list, asked.target);
+  if (!found) {
+    if (!list.length) return false;
+    await tell(`I can't find a device called “${escapeHtml(asked.target)}” that this chat may switch. /devices lists them.`);
+    return true;
+  }
+  if (Array.isArray(found)) {
+    await tell(`Which one: ${found.slice(0, 6).map((d) => `<b>${escapeHtml(d.name)}</b>`).join(", ")}?`);
+    return true;
+  }
+  let action: string = asked.action;
+  if (action === "set") action = found.type === "climate" ? "set_temperature" : found.type === "light" ? "set_brightness" : "set_position";
+  if (!found.actions.includes(action)) {
+    await tell(`${escapeHtml(found.name)} can't do that. It can: ${found.actions.map((a) => a.replace(/_/g, " ")).join(", ")}.`);
+    return true;
+  }
+  await runControl(deps, ch, found.id, action, asked.value);
+  return true;
+}
+
+const BUTTONS: Record<string, string> = { turn_on: "On", turn_off: "Off", open: "Open", close: "Close", lock: "Lock", unlock: "Unlock", arm_away: "Arm", disarm: "Disarm" };
+
+/** /devices: the devices this chat may switch, each with buttons. */
+async function listDevices(deps: ChannelDeps, accountId: string, channelId: string) {
+  const ch = await channelRow(deps, accountId, channelId);
+  const list = (await chatDevices(deps, ch))?.filter((d) => d.can_control) ?? [];
+  const tell = (body: ChannelBody) => deps.data.withAccount(accountId, (s) => queueBody(s, ch.id, body));
+  if (!list.length) return tell({ text: "This chat can't switch any devices. In Senseplane, an admin makes a device controllable on the Devices page, and gives this chat's agent the Control permission on the Agents page." });
+  const shown = list.slice(0, 8);
+  const buttons = shown.flatMap((d) => d.actions.filter((a) => BUTTONS[a]).map((a) => ({ text: `${d.name}: ${BUTTONS[a]}`, data: `dv:${d.id}:${a}` })));
+  return tell({ text: [`<b>Devices</b>${list.length > shown.length ? ` (the first ${shown.length})` : ""}`, ...shown.map((d) => `${escapeHtml(d.name)}${d.room ? ` · ${escapeHtml(d.room)}` : ""}`)].join("\n"), buttons: buttons.slice(0, 24) });
+}
+
+/** A device button: switch one (dv:<device>:<action>) or answer a confirmation (cf:<command>:y|n). */
+async function deviceButton(deps: ChannelDeps, q: NonNullable<TelegramUpdate["callback_query"]>, linked: (chat: number | string) => Promise<{ account_id: string; id: string }[]>) {
+  const bot = deps.bot!;
+  const ack = (text: string) => bot.answerCallback(q.id, text).catch(() => undefined);
+  const [kind, id = "", arg = ""] = (q.data ?? "").split(":");
+  const channels = q.message ? await linked(q.message.chat.id) : [];
+  if (!channels.length) return void (await ack("This chat isn't linked any more."));
+  if (kind === "dv") {
+    const current = channels[0]!;
+    await ack("Sending…");
+    return runControl(deps, await channelRow(deps, current.account_id, current.id), id, arg);
+  }
+  // Confirming opens doors: only in a private chat, where the person pressing is the one it was linked for.
+  if (q.message?.chat.type !== "private") return void (await ack("Confirm this in Senseplane: in a group, anyone could press the button."));
+  for (const c of channels) {
+    const has = await deps.data.withAccount(c.account_id, (s) => s.db.selectFrom("device_commands").select("id").where("id", "=", id).executeTakeFirst());
+    if (!has || !deps.decideConfirmation) continue;
+    await ack(arg === "y" ? "Confirmed. Sending…" : "Refused.");
+    const name = `${q.from.first_name ?? "someone"} in Telegram`;
+    try {
+      const out = await deps.decideConfirmation(c.account_id, id, arg === "y", { actor: `telegram:${q.from.id}`, name });
+      await deps.data.withAccount(c.account_id, (s) => queueBody(s, c.id, { text: escapeHtml(out.message || out.status) }));
+    } catch (err) {
+      await deps.data.withAccount(c.account_id, (s) => queueBody(s, c.id, { text: escapeHtml((err as Error).message) }));
+    }
+    return;
+  }
+  await ack("This request isn't waiting any more.");
+}
+
+/** Tells the workspace's chats that a device request waits for a person; private chats get buttons to answer it. */
+export async function notifyConfirmation(deps: ChannelDeps, accountId: string, c: { id: string; device_name: string; action: string; value: number | string | null; requested_by: { name: string | null }; via: string }) {
+  if (!deps.bot) return;
+  const by = c.requested_by.name ?? "An agent";
+  const what = actionText(c.action as Action, c.device_name, c.value);
+  await deps.data.withAccount(accountId, async (s) => {
+    const live = await s.db.selectFrom("channels").select(["id", "chat_type"]).where("status", "=", "active").execute();
+    for (const ch of live) {
+      const text = `<b>Confirm?</b>\n${escapeHtml(by)} asks to ${escapeHtml(what)}.\nIt is refused if nobody confirms within 2 minutes.`;
+      await queueBody(s, ch.id, ch.chat_type === "private"
+        ? { text, buttons: [{ text: "Confirm", data: `cf:${c.id}:y` }, { text: "Refuse", data: `cf:${c.id}:n` }] }
+        : { text: `${text}\nConfirm it in Senseplane.` });
+    }
+  });
 }
 
 // --- routes --------------------------------------------------------------------

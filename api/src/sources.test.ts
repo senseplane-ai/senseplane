@@ -146,6 +146,7 @@ describe("sources, ingest tokens, account retention, segment index", () => {
       "rate_limited", "needs_zone", "unsupported_codec", "resolution_not_in_plan", "source_limit_reached", "not_implemented",
       "service_unavailable", "internal", "idempotency_key_reused", "signup_refused",
       "forbidden_role", "invite_invalid", "conflict", "feature_not_available", "limit_reached",
+      "not_controllable", "confirmation_required", "confirmation_expired", "confirmation_denied", "device_offline", "device_failed",
     ];
     expect(spec.properties.error.properties.code.enum).toEqual(codes);
   });

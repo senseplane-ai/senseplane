@@ -39,11 +39,12 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerLiveRoutes, sweepLiveSessions } from "./routes/live.js";
 import { markSilentBridges, registerBridgeAdminRoutes, registerBridgeRoutes } from "./routes/bridges.js";
 import { registerPairingRoutes } from "./routes/pairing.js";
+import { expireConfirmations, registerDeviceRoutes } from "./routes/devices.js";
 import { closeStaleActivities } from "./activity.js";
 import { startScheduledWatches } from "./scheduled-watches.js";
 import { type Job, startJobs } from "./jobs.js";
 import {
-  type ChannelDeps, registerChannelRoutes, startChannelSender, startTelegramUpdates, telegramPollJob, telegramWebhookJob,
+  type ChannelDeps, notifyConfirmation, registerChannelRoutes, startChannelSender, startTelegramUpdates, telegramPollJob, telegramWebhookJob,
 } from "./channels.js";
 import { type TelegramConfig, TelegramBot, telegramConfigFromEnv } from "./telegram.js";
 import { registerActivityRoutes } from "./routes/activity.js";
@@ -131,6 +132,8 @@ export interface CreateApiOptions {
   telegram?: TelegramConfig | false;
   /** Telegram API calls (tests inject a fake). */
   telegramFetch?: typeof fetch;
+  /** Device commands (ADR 0067): how long a box has to take one, a request waits, and a person has to confirm (tests shorten them). */
+  deviceTimings?: { takeMs?: number; waitMs?: number; confirmMs?: number };
   /** Live view (ADR 0042): viewers idle this long are closed (default LIVE_IDLE_TIMEOUT_SECONDS or 600). */
   liveIdleTimeoutSeconds?: number;
   /** Live view join token lifetime (default 60 s). */
@@ -144,6 +147,8 @@ export interface SenseplaneApi {
   /** Records usage and forwards it to every module's onUsage hook. */
   recordUsage(record: UsageRecord): Promise<void>;
   quotaFor(accountId: string): Promise<Quota>;
+  /** A person's answer to a device request waiting for confirmation (ADR 0067); Telegram's buttons use it. */
+  decideConfirmation: NonNullable<ChannelDeps["decideConfirmation"]>;
   listen(options: { port: number; host?: string }): Promise<void>;
   close(): Promise<void>;
 }
@@ -483,6 +488,9 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
     ...(mediaDriver?.disconnect ? { disconnect: (id: string) => mediaDriver.disconnect!(id, "removed") } : {}) });
   registerPairingRoutes(app, { data, audit, ...(auth.consoleUrls[0] ? { consoleUrl: auth.consoleUrls[0] } : {}) });
+  // Switching devices, only when a person asks (ADR 0067); requests waiting for a person also go to linked chats.
+  const devices = registerDeviceRoutes(app, { data, audit, ...options.deviceTimings, onConfirmation: (accountId, c) => notifyConfirmation(channels, accountId, c) });
+  channels.decideConfirmation = devices.decide;
   const stoppers: (() => void | Promise<void>)[] = [];
   if (storage) {
     registerPlaybackRoutes(app, {
@@ -499,6 +507,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       { name: "demos.sweep", everyS: 30, run: () => sweepDemos({ data, bus, media: mediaControl, storage }, demo, app.log) },
       { name: "watches.expire", everyS: 30, run: () => expireWatches(data, bus) },
       { name: "bridges.silent", everyS: 30, run: () => markSilentBridges(data, app.log) },
+      // Refuses device requests nobody confirmed in two minutes; it never switches anything.
+      { name: "devices.confirmations", everyS: 15, run: () => expireConfirmations(data, audit) },
       { name: "activities.close_stale", everyS: 30, run: () => closeStaleActivities(data) },
       { name: "accounts.purge", everyS: 30, leaseS: 1800, run: () => purgeDeletedAccounts({ data, bus, storage }, app.log) },
       // Key rotation (ADR 0066): accounts mid-rotation get their footage re-encrypted; old master keys re-wrapped.
@@ -577,6 +587,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       for (const m of modules) await m.onUsage?.(record);
     },
     quotaFor,
+    decideConfirmation: devices.decide,
     async listen({ port, host = "0.0.0.0" }) {
       await app.listen({ port, host });
       if (internal) await internal.listen({ port: options.internalPort!, host: process.env.INTERNAL_HOST ?? "127.0.0.1" });

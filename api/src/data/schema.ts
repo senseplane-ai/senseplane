@@ -138,12 +138,43 @@ export interface BridgeCommandsTable {
   bridge_id: string;
   kind: string;
   args_sealed: string | null;
-  status: ColumnType<"pending" | "taken" | "done" | "failed", "pending" | "taken" | "done" | "failed" | undefined, "pending" | "taken" | "done" | "failed">;
+  status: ColumnType<BridgeCommandStatus, BridgeCommandStatus | undefined, BridgeCommandStatus>;
   result: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
   error: string | null;
   created_by: string | null;
   created_at: Timestamp;
   taken_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  finished_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** Not taken by then: never handed out (device commands, ADR 0067); null waits. */
+  expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+}
+export type BridgeCommandStatus = "pending" | "taken" | "done" | "failed" | "expired";
+
+export type DeviceCommandStatus = "awaiting_confirmation" | "denied" | "expired" | "refused" | "sent" | "done" | "in_progress" | "unchanged" | "offline" | "failed";
+
+/** One request to switch a device (ADR 0067): who asked, through what, and what happened. */
+export interface DeviceCommandsTable {
+  id: string;
+  account_id: string;
+  device_id: string;
+  bridge_id: string;
+  entity_id: string;
+  device_name: string;
+  action: string;
+  value: ColumnType<number | string | null, string | null | undefined, string | null>;
+  tier: string;
+  actor: string;
+  actor_kind: "user" | "account_key" | "agent";
+  actor_name: string | null;
+  via: string;
+  status: DeviceCommandStatus;
+  message: string | null;
+  state_after: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  bridge_command_id: string | null;
+  expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  decided_by: string | null;
+  decided_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: Timestamp;
   finished_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
@@ -169,6 +200,14 @@ export interface BridgeEntitiesTable {
   source_id: string | null;
   listed: ColumnType<boolean, boolean | undefined, boolean>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  /** The device's id in /v1/devices (ADR 0067). */
+  id: Generated<string>;
+  /** The actions the box can run on it; empty: not a device. */
+  controls: ColumnType<string[], string[] | undefined, string[]>;
+  /** An admin made it controllable (off by default), and who. */
+  controllable: ColumnType<boolean, boolean | undefined, boolean>;
+  controllable_by: ColumnType<string | null, string | null | undefined, string | null>;
+  controllable_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
 export type Zone = { name: string; polygon: number[][] };
@@ -599,6 +638,7 @@ export interface Database {
   bridge_entities: BridgeEntitiesTable;
   bridge_links: BridgeLinksTable;
   bridge_commands: BridgeCommandsTable;
+  device_commands: DeviceCommandsTable;
   bridge_cameras_found: BridgeCamerasFoundTable;
   account_keys: AccountKeysTable;
   users: UsersTable;

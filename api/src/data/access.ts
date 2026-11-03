@@ -238,6 +238,12 @@ export class DataAccess {
     return rows;
   }
 
+  /** Device commands still waiting for a person after their two minutes (ADR 0067). */
+  async expiredConfirmations(): Promise<{ id: string; account_id: string }[]> {
+    const { rows } = await sql<{ id: string; account_id: string }>`select * from expired_confirmations()`.execute(this.kdb);
+    return rows;
+  }
+
   /** Sensor sources holding readings older than their retention days. */
   async readingsRetentionTargets(): Promise<{ account_id: string; source_id: string; retention_days: number }[]> {
     const { rows } = await sql<{ account_id: string; source_id: string; retention_days: number }>`select * from readings_retention_targets()`.execute(this.kdb);

@@ -68,11 +68,19 @@ type Options struct {
 	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, string, error)
 	// OpenSpeaker holds a camera's speaker open for push-to-talk (default: the ONVIF backchannel, ADR 0074).
 	OpenSpeaker func(ctx context.Context, rtspURL string) (LiveSpeaker, error)
-	// Listen carries one press from the media plane to the speaker (default: talk.Listen).
-	Listen func(ctx context.Context, o talk.Options, sp talk.Speaker) (talk.Result, error)
+	// TalkConnect pulls one press from the media plane (default: talk.Connect), before any speaker is opened.
+	TalkConnect func(ctx context.Context, o talk.Options) (TalkSession, error)
+	// TalkLoopback offers loopback candidates to the media plane: only for one on this machine (tests).
+	TalkLoopback bool
 	// NoTalk, when set, names cameras that can't take push-to-talk though they have a speaker (the phone's
 	// own camera in the Android app plays messages itself, not live audio yet).
 	NoTalk func(rtspURL string) bool
+}
+
+// TalkSession is a press connected from the media plane (talk.Session).
+type TalkSession interface {
+	Play(ctx context.Context, sp talk.Speaker) (talk.Result, error)
+	Close()
 }
 
 // LiveSpeaker is a camera's speaker held open for live audio.
@@ -145,8 +153,8 @@ func New(o Options) *Bridge {
 	if o.OpenSpeaker == nil {
 		o.OpenSpeaker = func(ctx context.Context, url string) (LiveSpeaker, error) { return speak.Open(ctx, url) }
 	}
-	if o.Listen == nil {
-		o.Listen = talk.Listen
+	if o.TalkConnect == nil {
+		o.TalkConnect = func(ctx context.Context, to talk.Options) (TalkSession, error) { return talk.Connect(ctx, to) }
 	}
 	if o.HomeAssistant != nil || o.Matter != nil || len(o.Sensors) > 0 {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)

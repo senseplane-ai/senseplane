@@ -190,24 +190,41 @@ func (b *Bridge) talk(ctx context.Context, args map[string]any) (map[string]any,
 	if exp, ok := tokenExpiry(token); ok {
 		until = minTime(until, exp)
 	}
+	if err := onTime(ctx, args); err != nil {
+		return nil, err
+	}
+	// The press first: one already let go of (a command that waited) never opens the camera's speaker.
+	sess, err := b.o.TalkConnect(ctx, talk.Options{WHEPURL: b.rewrite(whep), Token: token, Until: until, Log: b.o.Log, Loopback: b.o.TalkLoopback})
+	if errors.Is(err, talk.ErrNoTalkback) {
+		return map[string]any{"talked_ms": 0, "ended": talk.EndReleased}, nil
+	}
+	if err != nil {
+		return nil, errors.New(relay.Redact(err.Error()))
+	}
+	defer sess.Close()
+	parent := ctx
 	ctx, release, err := b.slot(sourceID).take(ctx, "talk")
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	if err := onTime(ctx, args); err != nil {
-		return nil, err
+	// A newer press took the speaker before this one was heard: not a failure, the person moved on.
+	stopped := func(talked time.Duration) (map[string]any, error) {
+		return map[string]any{"talked_ms": talked.Milliseconds(), "ended": talk.EndStopped}, nil
 	}
 	sp, err := b.o.OpenSpeaker(ctx, w.cam.RTSPURL)
 	if err != nil {
+		if ctx.Err() != nil && parent.Err() == nil {
+			return stopped(0)
+		}
 		return nil, errors.New(relay.Redact(err.Error()))
 	}
 	defer sp.Close()
-	res, err := b.o.Listen(ctx, talk.Options{WHEPURL: b.rewrite(whep), Token: token, Until: until, Log: b.o.Log}, sp)
-	if errors.Is(err, talk.ErrNoTalkback) {
-		return map[string]any{"talked_ms": 0, "ended": talk.EndReleased}, nil
-	}
+	res, err := sess.Play(ctx, sp)
 	if err != nil {
+		if ctx.Err() != nil && parent.Err() == nil {
+			return stopped(res.Talked)
+		}
 		return nil, errors.New(relay.Redact(err.Error()))
 	}
 	b.o.Log.Info("carried a person's push-to-talk to a camera", "source", sourceID, "ms", res.Talked.Milliseconds(), "ended", res.Ended)

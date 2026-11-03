@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +81,7 @@ func talkBox(t *testing.T, f *talkAPI, o Options) *Bridge {
 	o.Dial = func(context.Context, string, string) (relay.Publisher, error) {
 		return &pub{done: make(chan error)}, nil
 	}
+	o.TalkLoopback = true // the fake and the real media plane here are on this machine
 	b := New(o)
 	ctx, cancel := context.WithCancel(context.Background())
 	b.sync(ctx)
@@ -182,14 +184,14 @@ func TestTalkAndMessagesShareTheSpeaker(t *testing.T) {
 	f := &talkAPI{rtsp: cam.URL, clip: message(3 * time.Second)}
 	held := make(chan struct{})
 	letGo := make(chan struct{})
-	b := talkBox(t, f, Options{Listen: func(ctx context.Context, _ talk.Options, sp talk.Speaker) (talk.Result, error) {
+	b := talkBox(t, f, Options{TalkConnect: connected(func(ctx context.Context, sp talk.Speaker) (talk.Result, error) {
 		close(held)
 		select {
 		case <-letGo:
 		case <-ctx.Done():
 		}
 		return talk.Result{Ended: talk.EndReleased}, nil
-	}})
+	})})
 	clip := api.Command{ID: "bcm_clip", Kind: "speak", Args: map[string]any{"source_id": "src_gate", "url": "/media/tok/speak.wav", "duration_ms": 3000.0}}
 	done := make(chan struct{})
 	go func() {
@@ -223,14 +225,14 @@ func TestTalkAndMessagesShareTheSpeaker(t *testing.T) {
 // What can't be done is refused, saying why, before any audio is pulled.
 func TestTalkRefusals(t *testing.T) {
 	listened := false
-	noListen := func(context.Context, talk.Options, talk.Speaker) (talk.Result, error) {
+	noListen := connected(func(context.Context, talk.Speaker) (talk.Result, error) {
 		listened = true
 		return talk.Result{}, nil
-	}
+	})
 	aac := speaktest.Start(t, true)
 	aac.Codec = "MPEG4-GENERIC"
 	f := &talkAPI{rtsp: aac.URL}
-	b := talkBox(t, f, Options{Listen: noListen})
+	b := talkBox(t, f, Options{TalkConnect: noListen})
 	tok := joinToken(time.Now().Add(time.Minute))
 	b.runCommand(context.Background(), talkCommand("bcm_aac", "http://m.invalid/whep/talkback", tok, 10*time.Second))
 	if rep := f.report("bcm_aac"); rep["ok"] != false || !strings.Contains(fmt.Sprint(rep["error"]), "MPEG4-GENERIC") {
@@ -248,7 +250,7 @@ func TestTalkRefusals(t *testing.T) {
 		t.Fatalf("no token: %v", rep)
 	}
 	phone := &talkAPI{rtsp: "rtsp://this-phone.senseplane.invalid/camera"}
-	pb := talkBox(t, phone, Options{Listen: noListen, NoTalk: func(u string) bool { return strings.Contains(u, "this-phone") }})
+	pb := talkBox(t, phone, Options{TalkConnect: noListen, NoTalk: func(u string) bool { return strings.Contains(u, "this-phone") }})
 	pb.runCommand(context.Background(), talkCommand("bcm_phone", "http://m.invalid/whep/talkback", tok, 10*time.Second))
 	if rep := phone.report("bcm_phone"); rep["ok"] != false || !strings.Contains(fmt.Sprint(rep["error"]), "can't take push-to-talk") {
 		t.Fatalf("the phone's own camera: %v", rep)
@@ -263,10 +265,66 @@ func TestTalkRefusals(t *testing.T) {
 	g := &talkAPI{rtsp: cam.URL}
 	gb := talkBox(t, g, Options{})
 	gb.runCommand(context.Background(), talkCommand("bcm_gone", w.URL, w.Token, 10*time.Second))
-	if rep := g.report("bcm_gone"); rep["ok"] != true {
+	if rep := g.report("bcm_gone"); rep["ok"] != true || rep["result"].(map[string]any)["talked_ms"] != 0.0 {
 		t.Fatalf("released early: %v", rep)
 	}
+	// The press is checked first: the camera's speaker was never opened for it.
+	if cam.Connections() != 0 {
+		t.Fatalf("the camera was connected to %d times for a press already over", cam.Connections())
+	}
 }
+
+// connected is a TalkConnect whose session plays with play.
+func connected(play func(context.Context, talk.Speaker) (talk.Result, error)) func(context.Context, talk.Options) (TalkSession, error) {
+	return func(context.Context, talk.Options) (TalkSession, error) { return fakeSession(play), nil }
+}
+
+type fakeSession func(context.Context, talk.Speaker) (talk.Result, error)
+
+func (f fakeSession) Play(ctx context.Context, sp talk.Speaker) (talk.Result, error) {
+	return f(ctx, sp)
+}
+func (fakeSession) Close() {}
+
+// A press another press took the speaker from, while its camera was still being opened, ended: it reports
+// what happened, not a failure, so the person's newer press goes on.
+func TestAPressCutByANewerOneIsNotAFailure(t *testing.T) {
+	cam := speaktest.Start(t, true)
+	f := &talkAPI{rtsp: cam.URL}
+	opening := make(chan struct{}, 2)
+	var calls atomic.Int32
+	b := talkBox(t, f, Options{
+		TalkConnect: connected(func(ctx context.Context, sp talk.Speaker) (talk.Result, error) {
+			<-ctx.Done()
+			return talk.Result{Ended: talk.EndStopped}, nil
+		}),
+		OpenSpeaker: func(ctx context.Context, _ string) (LiveSpeaker, error) {
+			opening <- struct{}{}
+			if calls.Add(1) == 1 {
+				<-ctx.Done() // a slow camera, while the newer press comes
+				return nil, ctx.Err()
+			}
+			return &nullSpeaker{gone: make(chan struct{})}, nil
+		},
+	})
+	tok := joinToken(time.Now().Add(time.Minute))
+	go b.runCommand(context.Background(), talkCommand("bcm_1", "http://m.invalid/whep/talkback", tok, 10*time.Second))
+	<-opening
+	ctx, cancel := context.WithCancel(context.Background())
+	go b.runCommand(ctx, talkCommand("bcm_2", "http://m.invalid/whep/talkback", tok, 10*time.Second))
+	eventually(t, "the first report", func() bool { return f.report("bcm_1") != nil })
+	if rep := f.report("bcm_1"); rep["ok"] != true || rep["result"].(map[string]any)["ended"] != talk.EndStopped {
+		t.Fatalf("the cut press: %v", rep)
+	}
+	cancel()
+	eventually(t, "the second report", func() bool { return f.report("bcm_2") != nil })
+}
+
+type nullSpeaker struct{ gone chan struct{} }
+
+func (n *nullSpeaker) Write([]int16) error   { return nil }
+func (n *nullSpeaker) Gone() <-chan struct{} { return n.gone }
+func (n *nullSpeaker) Close()                {}
 
 // The box says which cameras take push-to-talk, to an API that takes it.
 func TestTheBoxReportsWhichCamerasTakePushToTalk(t *testing.T) {

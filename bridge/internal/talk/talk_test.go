@@ -246,7 +246,7 @@ func TestListenOverWHEP(t *testing.T) {
 	w := talktest.StartWHEP(t, talktest.Packets(t, "hybrid"))
 	sp := newSpeaker()
 	var first time.Duration
-	o := Options{WHEPURL: w.URL, Token: w.Token, Until: time.Now().Add(time.Minute), OnFirstAudio: func(d time.Duration) { first = d }}
+	o := Options{WHEPURL: w.URL, Token: w.Token, Until: time.Now().Add(time.Minute), Loopback: true, OnFirstAudio: func(d time.Duration) { first = d }}
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
 		w.Close() // the person lets go

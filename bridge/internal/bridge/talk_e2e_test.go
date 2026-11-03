@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4"
 	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
 	"github.com/senseplane-ai/senseplane/bridge/internal/speak/speaktest"
 	"github.com/senseplane-ai/senseplane/bridge/internal/talk"
@@ -159,7 +161,8 @@ func TestTalkEndToEnd(t *testing.T) {
 	}()
 
 	// Only the box's listener for this camera hears it.
-	listener := map[string]any{"canPublish": false, "canSubscribe": true, "canPublishData": false, "subscribeKinds": []string{"audio"}, "maxSubscriptions": 1}
+	// A box's token for one press names it (listenTo).
+	listener := map[string]any{"canPublish": false, "canSubscribe": true, "canPublishData": false, "subscribeKinds": []string{"audio"}, "maxSubscriptions": 1, "listenTo": prod["producerId"]}
 	whep := base + "/whep/talkback"
 	if s := postOffer(t, whep, join("src_gate:viewer:lv_other", "agent", "webrtc", listener, time.Minute)); s != 404 {
 		t.Fatalf("another listener got %d", s)
@@ -258,7 +261,63 @@ func TestTalkEndToEnd(t *testing.T) {
 	if stoppedAfter > 4*time.Second {
 		t.Fatalf("the camera's speaker was held %v after release", stoppedAfter)
 	}
+
+	// A box that vanishes mid-press (unplugged: no DTLS close, it just stops answering): the person is told
+	// within seconds, not after ICE's usual half a minute.
+	press2 := talker.req("produce", map[string]any{"transportId": tr["transportId"], "kind": "audio", "appData": map[string]any{"source": "talkback"},
+		"rtpParameters": map[string]any{"codecs": []any{map[string]any{"mimeType": "audio/opus", "payloadType": 111, "clockRate": 48000, "channels": 2}}, "encodings": []any{map[string]any{"ssrc": 1235}}}})
+	listener["listenTo"] = press2["producerId"]
+	gone := vanishingListener(t, whep, join("src_gate:speaker", "agent", "webrtc", listener, 2*time.Minute))
+	for e := talker.event(t, "talkbackListening", 10*time.Second); e["producerId"] != press2["producerId"]; e = talker.event(t, "talkbackListening", 10*time.Second) {
+	}
+	vanished := time.Now()
+	gone()
+	e := talker.event(t, "talkbackEnded", 15*time.Second)
+	t.Logf("a vanished box: the talker was told %v later (%v)", time.Since(vanished), e["reason"])
+	if e["reason"] != "listener_left" || time.Since(vanished) > 8*time.Second {
+		t.Fatalf("talkbackEnded %v after %v", e, time.Since(vanished))
+	}
 	talker.close()
+}
+
+// vanishingListener connects a box's listener whose network can be cut without closing anything.
+func vanishingListener(t *testing.T, whep, token string) (cut func()) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &webrtc.MediaEngine{}
+	_ = m.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio)
+	se := webrtc.SettingEngine{}
+	se.SetICEUDPMux(webrtc.NewICEUDPMux(nil, conn))
+	se.SetIncludeLoopbackCandidate(true)
+	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(se)).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	_, _ = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly})
+	offer, _ := pc.CreateOffer(nil)
+	gathered := webrtc.GatheringCompletePromise(pc)
+	_ = pc.SetLocalDescription(offer)
+	<-gathered
+	req, _ := http.NewRequest(http.MethodPost, whep, strings.NewReader(pc.LocalDescription().SDP))
+	req.Header.Set("Content-Type", "application/sdp")
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("WHEP %d %s", res.StatusCode, answer)
+	}
+	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(answer)}); err != nil {
+		t.Fatal(err)
+	}
+	return func() { _ = conn.Close() }
 }
 
 func freePort(t *testing.T) int {
@@ -292,6 +351,25 @@ type signal struct {
 	mu   sync.Mutex
 	next int
 	wait map[int]chan map[string]any
+	// events are what the node pushes ({event}).
+	events chan map[string]any
+}
+
+// event waits for the next pushed event named name (others are skipped).
+func (s *signal) event(t *testing.T, name string, within time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		select {
+		case e := <-s.events:
+			if e["event"] == name {
+				return e
+			}
+		case <-deadline:
+			t.Fatalf("no %s within %v", name, within)
+			return nil
+		}
+	}
 }
 
 func newSignal(t *testing.T, url string) *signal {
@@ -299,12 +377,19 @@ func newSignal(t *testing.T, url string) *signal {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &signal{t: t, ws: ws, wait: map[int]chan map[string]any{}}
+	s := &signal{t: t, ws: ws, wait: map[int]chan map[string]any{}, events: make(chan map[string]any, 64)}
 	go func() {
 		for {
 			var f map[string]any
 			if ws.ReadJSON(&f) != nil {
 				return
+			}
+			if _, ok := f["event"]; ok {
+				select {
+				case s.events <- f:
+				default:
+				}
+				continue
 			}
 			if id, ok := f["id"].(float64); ok {
 				s.mu.Lock()

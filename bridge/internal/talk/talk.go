@@ -56,6 +56,8 @@ type Options struct {
 	Log        *slog.Logger
 	// OnFirstAudio, when set, is called with the delay from POST to the first packet written (tests, logs).
 	OnFirstAudio func(time.Duration)
+	// Loopback offers loopback candidates too: only for a media plane on this machine (tests).
+	Loopback bool
 }
 
 // Why a press ended.
@@ -96,9 +98,32 @@ const (
 
 // Listen carries one press to sp until it ends.
 func Listen(ctx context.Context, o Options, sp Speaker) (Result, error) {
+	s, err := Connect(ctx, o)
+	if err != nil {
+		return Result{}, err
+	}
+	defer s.Close()
+	return s.Play(ctx, sp)
+}
+
+// Session is a press pulled from the media plane, connected and not yet played.
+type Session struct {
+	o          Options
+	pc         *webrtc.PeerConnection
+	resource   string
+	started    time.Time
+	packets    chan *rtp.Packet
+	trackEnded chan struct{}
+	closed     chan struct{}
+	closeOnce  sync.Once
+}
+
+// Connect pulls the press from the media plane (the WHEP POST and its answer) without touching any speaker:
+// a press already over is ErrNoTalkback before a camera is opened.
+func Connect(ctx context.Context, o Options) (*Session, error) {
 	o = o.withDefaults()
 	if o.Until.IsZero() || time.Until(o.Until) <= 0 {
-		return Result{Ended: EndDeadline}, errors.New("the press had already reached its time limit")
+		return nil, errors.New("the press had already reached its time limit")
 	}
 	ctx, cancel := context.WithDeadline(ctx, o.Until)
 	defer cancel()
@@ -109,30 +134,39 @@ func Listen(ctx context.Context, o Options, sp Speaker) (Result, error) {
 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1"},
 		PayloadType:        111,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	se := webrtc.SettingEngine{}
-	se.SetIncludeLoopbackCandidate(true) // a media plane on this machine announces 127.0.0.1
+	// A consent check every second, so the media plane sees within seconds when this box is gone.
+	se.SetICETimeouts(5*time.Second, 25*time.Second, time.Second)
+	if o.Loopback {
+		se.SetIncludeLoopbackCandidate(true) // a media plane on this machine announces 127.0.0.1 (tests)
+	}
 	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(se)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
-	defer pc.Close()
-	closed := make(chan struct{})
-	var closeOnce sync.Once
+	s := &Session{o: o, pc: pc, started: started, packets: make(chan *rtp.Packet, 64), trackEnded: make(chan struct{}), closed: make(chan struct{})}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = pc.Close()
+		}
+	}()
+	var closeOnce, endOnce sync.Once
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
 		if st == webrtc.PeerConnectionStateClosed || st == webrtc.PeerConnectionStateFailed {
-			closeOnce.Do(func() { close(closed) })
+			closeOnce.Do(func() { close(s.closed) })
 		}
 	})
-	packets := make(chan *rtp.Packet, 64)
-	trackEnded := make(chan struct{})
+	packets := s.packets
 	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		if t.Kind() != webrtc.RTPCodecTypeAudio {
 			return
 		}
 		go func() {
-			defer close(trackEnded)
+			// A second track (never sent, but possible) ends with the first, once.
+			defer endOnce.Do(func() { close(s.trackEnded) })
 			for {
 				p, _, err := t.ReadRTP()
 				if err != nil {
@@ -146,30 +180,45 @@ func Listen(ctx context.Context, o Options, sp Speaker) (Result, error) {
 		}()
 	})
 	if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	gathered := webrtc.GatheringCompletePromise(pc)
 	if err := pc.SetLocalDescription(offer); err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	select {
 	case <-gathered:
 	case <-ctx.Done():
-		return Result{Ended: EndStopped}, ctx.Err()
+		return nil, ctx.Err()
 	}
 	resource, answer, err := post(ctx, o.WHEPURL, o.Token, pc.LocalDescription().SDP)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
-	defer remove(resource, o.Token)
+	s.resource = resource
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}); err != nil {
-		return Result{}, fmt.Errorf("talkback: %w", err)
+		remove(resource, o.Token)
+		return nil, fmt.Errorf("talkback: %w", err)
 	}
-	return play(ctx, o, sp, started, packets, trackEnded, closed)
+	ok = true
+	return s, nil
+}
+
+// Play carries the press to sp until it ends.
+func (s *Session) Play(ctx context.Context, sp Speaker) (Result, error) {
+	ctx, cancel := context.WithDeadline(ctx, s.o.Until)
+	defer cancel()
+	return play(ctx, s.o, sp, s.started, s.packets, s.trackEnded, s.closed)
+}
+
+// Close ends the session on the media plane and the connection.
+func (s *Session) Close() {
+	remove(s.resource, s.o.Token)
+	_ = s.pc.Close()
 }
 
 func (o Options) withDefaults() Options {

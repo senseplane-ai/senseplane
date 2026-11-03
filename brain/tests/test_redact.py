@@ -164,9 +164,11 @@ def test_pixelate_handles_tiny_and_edge_boxes():
 class _Model:
     def __init__(self):
         self.frames = []
+        self.metas = []
 
     def ask(self, rgb, _q, _meta=None, before=None):
         self.frames.append(rgb)
+        self.metas.append(_meta)
         return Answer(answer="ok", yes=True, confidence=0.9)
 
     def describe(self, rgb, _meta=None):
@@ -236,6 +238,19 @@ def test_stored_snapshots_are_blurred_before_a_model_sees_them():
     jpeg = base64.b64encode(encode_jpeg(_scene())).decode()
     w.do_check({"account_id": "acc", "source_id": "src", "prompt": "Is there a package?", "jpeg_b64": jpeg})
     w.chat_view_event({"source_id": "src", "jpeg_b64": jpeg}, "What is it?", {}, "acc")
+    for frame in w.model.frames:
+        assert _diff(frame, _scene(), FACE) > 10
+
+
+def test_a_workflows_checks_are_metered_as_the_workflows_and_anything_else_as_before():
+    w = _worker({"faces": True})
+    jpeg = base64.b64encode(encode_jpeg(_scene())).decode()
+    w.do_check({"account_id": "acc", "source_id": "src", "prompt": "A parcel?", "jpeg_b64": jpeg, "purpose": "workflow"})
+    w.do_check({"account_id": "acc", "source_id": "src", "prompt": "A parcel?", "jpeg_b64": jpeg, "purpose": "anything"})
+    w.do_ask({"account_id": "acc", "source_id": "src", "question": "A parcel?", "purpose": "workflow"})
+    w.do_ask({"account_id": "acc", "source_id": "src", "question": "A parcel?"})
+    assert [m["purpose"] for m in w.model.metas] == ["workflow", "backtest", "workflow", "ask"]
+    # Blurred all the same.
     for frame in w.model.frames:
         assert _diff(frame, _scene(), FACE) > 10
 

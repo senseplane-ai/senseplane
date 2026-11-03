@@ -518,11 +518,12 @@ class Worker:
         if req.get("describe"):
             a = self.model.describe(frame, {"account": req["account_id"], "purpose": "look"})
         else:
-            a = self.model.ask(frame, req["question"], {"account": req["account_id"], "purpose": "ask"})
+            purpose = "workflow" if req.get("purpose") == "workflow" else "ask"
+            a = self.model.ask(frame, req["question"], {"account": req["account_id"], "purpose": purpose})
         return {"answer": a.answer, "yes": a.yes, "confidence": a.confidence, "snapshot_jpeg_b64": b64}
 
     def do_check(self, req):
-        """A watch's model check on a stored snapshot (backtests, ADR 0043); metered like any check."""
+        """A model check on a stored snapshot (backtests, ADR 0043; workflows, ADR 0072); metered like any check."""
         if self.model is None:
             return {"error": "no_model"}
         rgb = decode_jpeg(base64.b64decode(req["jpeg_b64"]))
@@ -531,7 +532,9 @@ class Worker:
         # A snapshot stored before blurring was turned on is blurred now, before the model sees it.
         if req.get("source_id"):
             rgb = self.redact(f"{req['account_id']}.{req['source_id']}", rgb, Blur.of(req))
-        a = self.model.ask(rgb, req["prompt"], {"account": req["account_id"], "purpose": "backtest"})
+        # Metered as what asked: a backtest, or a workflow's ask step (ADR 0072).
+        purpose = "workflow" if req.get("purpose") == "workflow" else "backtest"
+        a = self.model.ask(rgb, req["prompt"], {"account": req["account_id"], "purpose": purpose})
         return {"yes": a.yes, "answer": a.answer, "confidence": a.confidence}
 
     def do_embed(self, req):

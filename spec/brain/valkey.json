@@ -635,6 +635,14 @@
                 "type": "boolean"
               }
             }
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "workflow"
+            ],
+            "description": "What the AI check is metered as (default ask); a workflow's ask step sends workflow (ADR 0072)"
           }
         }
       },
@@ -1102,7 +1110,7 @@
       }
     },
     "check": {
-      "direction": "api \u2192 brain (backtests, ADR 0043)",
+      "direction": "api \u2192 brain (backtests, ADR 0043; workflows' ask steps, ADR 0072)",
       "request": {
         "type": "object",
         "required": [
@@ -1137,6 +1145,14 @@
                 "type": "boolean"
               }
             }
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "backtest",
+              "workflow"
+            ],
+            "description": "What the AI check is metered as (default backtest); a workflow's ask step sends workflow (ADR 0072)"
           }
         }
       },

@@ -136,6 +136,8 @@ export interface Settings {
   googleClientSecret: string;
   /** A Telegram bot's token from @BotFather (optional): alerts and questions in Telegram, polled, so no public URL is needed (ADR 0059). */
   telegramBotToken: string;
+  /** Text to speech for talk-back (ADR 0069). */
+  tts: { baseUrl: string; apiKey: string; model: string; voice: string };
   /** Host ports, when not 443 and 40000 (local testing only). */
   httpsPort: number;
   rtcPort: number;
@@ -163,6 +165,7 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): Settings 
     maxResolution: maxResolution(env.MAX_RESOLUTION),
     announcedAddress: (env.MEDIA_ANNOUNCED_ADDRESS ?? "").trim(),
     telegramBotToken: (env.TELEGRAM_BOT_TOKEN ?? "").trim(),
+    tts: { baseUrl: (env.TTS_BASE_URL ?? "").trim(), apiKey: (env.TTS_API_KEY ?? "").trim(), model: (env.TTS_MODEL ?? "").trim(), voice: (env.TTS_VOICE ?? "").trim() },
     githubClientId: (env.AUTH_GITHUB_CLIENT_ID ?? "").trim(),
     githubClientSecret: (env.AUTH_GITHUB_CLIENT_SECRET ?? "").trim(),
     googleClientId: (env.AUTH_GOOGLE_CLIENT_ID ?? "").trim(),
@@ -270,6 +273,7 @@ export function serviceFiles(s: Settings, x: Secrets, address: string): ServiceF
         AUTH_GOOGLE_CLIENT_ID: s.googleClientId,
         AUTH_GOOGLE_CLIENT_SECRET: s.googleClientSecret,
         TELEGRAM_BOT_TOKEN: s.telegramBotToken,
+        TTS_BASE_URL: s.tts.baseUrl, TTS_API_KEY: s.tts.apiKey, TTS_MODEL: s.tts.model, TTS_VOICE: s.tts.voice,
       }),
     },
     {

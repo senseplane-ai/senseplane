@@ -49,6 +49,14 @@ x-settings: &settings
   # @BotFather (/newbot), paste its token here, then link chats from
   # Settings → Notifications. No public URL or open port is needed.
   TELEGRAM_BOT_TOKEN: ""
+  # Optional: a voice for agents that speak through cameras with a speaker
+  # (talk-back). Any OpenAI-compatible speech endpoint, such as Kokoro behind
+  # Kokoro-FastAPI on this machine (http://<host>:8880/v1). Empty: agents and
+  # watches can't speak; people can still talk from live view.
+  TTS_BASE_URL: ""
+  TTS_API_KEY: ""
+  TTS_MODEL: ""
+  TTS_VOICE: ""
   # Passwords for the database, Valkey and object storage. Change them before
   # you put real footage here. These services never leave this machine (no
   # ports are published), and a change takes effect on the next

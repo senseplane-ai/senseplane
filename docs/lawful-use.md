@@ -30,6 +30,17 @@ Recordings keep the original picture, so for areas you must not record at all,
 **re-aim the camera** rather than relying on a mask. If Senseplane warns that
 "the view has changed", check that your masks still line up.
 
+**Blur faces and number plates.** Masks can't follow someone walking up to
+your door. Turn on **Blur faces** and **Blur number plates**, for the whole
+workspace or per camera, and faces and plates are pixelated in snapshots,
+looks and answers, and every picture sent to an AI model. An agent can be
+given access to blurred pictures only, with no recordings, clips or live
+view. Blurring helps, but it is **not a guarantee**: a face turned away or
+far off can be missed, plate blurring is a best effort (it misses many
+plates outside China), and **recordings keep the original picture**. It
+doesn't replace pointing cameras at your own property ([ADR
+0068](decisions/0068-privacy-blurring.md)).
+
 **Alerts in Telegram leave your server.** A snapshot sent to a Telegram chat
 is stored by Telegram, and everyone in a group chat sees it and can ask about
 the cameras. Turn snapshots off for a chat that only needs the text, and link
@@ -106,7 +117,8 @@ In Senseplane:
 
 Senseplane detects that *a person* is present. It does **not** recognise who
 someone is: there's no face recognition and no identification of named
-people. Identifying people from their faces or bodies is biometric processing,
+people. Blurring finds faces only to hide them, and keeps nothing about
+them. Identifying people from their faces or bodies is biometric processing,
 which the GDPR treats as a special category of data with much stricter rules,
 and which the EU AI Act restricts further. Don't add it on top of Senseplane
 without legal advice.

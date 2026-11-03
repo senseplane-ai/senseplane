@@ -11,6 +11,15 @@ load for the API's balancer (`spec/brain/valkey.json`, ADR 0051, 0052).
 Cooldowns and "already announced" are shared markers in Valkey, so a camera
 moved to another brain never alerts twice.
 
+Privacy blurring (ADR 0068, `redact.py`): when a camera's `blur` setting or
+the request asks for it, faces (YuNet, MIT) and number plates (LPD-YuNet,
+Apache 2.0, trained on Chinese plates, so a best effort elsewhere) are
+pixelated in every frame that leaves the brain: snapshots and every frame
+sent to a model. Detection only, on outgoing frames only; nothing about a
+face is kept. `uv run python scripts/face_recall.py` downloads the
+public-domain photos in `tests/faces/labels.json` (labelled by hand) and
+reports face recall and the time added per frame.
+
 Models are pinned and checksummed: `uv run --group quantize python scripts/fetch_models.py`
 (the image does this at build time; the int8 detector is built from yolox_s
 on the first fetch). `tests/test_perception.py` runs the

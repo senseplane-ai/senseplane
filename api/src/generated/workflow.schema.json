@@ -57,6 +57,18 @@
       "minimum": 0,
       "description": "Triggers dropped because the workflow or the account was over its run rate."
     },
+    "hook_failures": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "webhook trigger: requests whose signature didn't verify."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Things that may not work as meant, such as a camera that may hear its own speech and start the workflow again."
+    },
     "last_run_at": {
       "type": [
         "string",
@@ -532,7 +544,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 500,
-          "description": "What to say; {{…}} filled in as for notify."
+          "description": "What to say; {{…}} filled in as for notify, except a webhook's {{input.…}}, which needs allow_input."
+        },
+        "allow_input": {
+          "type": "boolean",
+          "description": "Say what a webhook sent ({{input.…}}) aloud. Off by default: text from outside is never spoken unless this is set."
         }
       }
     },

@@ -38,7 +38,7 @@ export type Rule = { field: string; op: "eq" | "ne" | "in" | "contains" | "gt" |
 export type ConditionStep = Base & { kind: "condition"; match?: "all" | "any"; rules: Rule[] };
 export type AskStep = Base & { kind: "ask"; question: string; source?: string; min_confidence?: number };
 export type NotifyStep = Base & { kind: "notify"; to: { type: "channel" | "webhook"; id: string }; text: string };
-export type SpeakStep = Base & { kind: "speak"; source: string; text: string };
+export type SpeakStep = Base & { kind: "speak"; source: string; text: string; allow_input?: boolean };
 export type ClipStep = Base & { kind: "clip"; before_s?: number; after_s?: number };
 export type StoryStep = Base & { kind: "story"; sources?: string[]; before_s?: number; after_s?: number; mode?: "labelled" | "fast" };
 export type WaitStep = Base & { kind: "wait"; seconds: number };
@@ -118,7 +118,11 @@ export function checkDefinition(def: unknown, sources: readonly string[]): Workf
   const kinds = new Map(w.steps.map((s) => [s.id, s.kind]));
   for (const s of w.steps) {
     if (s.kind === "ask" && s.source) inSources(s.source, `${s.id}.source`);
-    if (s.kind === "speak") inSources(s.source, `${s.id}.source`);
+    if (s.kind === "speak") {
+      inSources(s.source, `${s.id}.source`);
+      // Text from outside (a webhook's body) is said aloud only when the step says so.
+      if (/\{\{\s*input\./.test(s.text) && !s.allow_input) problems.push(`${s.id}: the text says {{input.…}}, what a webhook sent; set allow_input to say that aloud`);
+    }
     if (s.kind === "story") for (const id of s.sources ?? []) inSources(id, `${s.id}.sources`);
     if ((s.kind === "clip" || s.kind === "story") && t.type !== "event" && !(s.kind === "story" && s.sources?.length)) {
       problems.push(`${s.id}: a ${s.kind} of "the event's moment" needs an event trigger${s.kind === "story" ? ", or name its sources" : ""}`);
@@ -245,6 +249,21 @@ export function ruleHolds(r: Rule, ctx: RunContext): boolean {
 
 export function conditionHolds(s: ConditionStep, ctx: RunContext): boolean {
   return s.match === "any" ? s.rules.some((r) => ruleHolds(r, ctx)) : s.rules.every((r) => ruleHolds(r, ctx));
+}
+
+/** Can these event type patterns match a sound event (sound.*)? Absent patterns match everything. */
+const hearsSounds = (types: string[] | undefined) => !types?.length || types.some((p) => p === "*" || p === "sound" || p.startsWith("sound."));
+
+/**
+ * What may not work as meant, said at save time: a speak step on a camera whose sound events start this
+ * workflow could hear its own speech (the engine ignores those events while it speaks, plus a short tail).
+ */
+export function definitionWarnings(w: WorkflowDefinition, sources: readonly string[], name: (id: string) => string = (id) => id): string[] {
+  const t = w.trigger;
+  if (t.type !== "event" || !hearsSounds(t.event_types)) return [];
+  const listened = new Set(t.sources?.length ? t.sources : sources);
+  return speakTargets(w).filter((id) => listened.has(id)).map((id) =>
+    `${name(id)} speaks and its sound events start this workflow: the camera may hear its own speech. Those events are ignored while it speaks; to avoid it, leave sound events out or speak through another camera.`);
 }
 
 /** The sources a definition's steps speak through: the only cameras a run gets a speak grant on. */

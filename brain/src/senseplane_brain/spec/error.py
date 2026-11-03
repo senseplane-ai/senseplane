@@ -35,6 +35,12 @@ class Code(StrEnum):
     conflict = 'conflict'
     feature_not_available = 'feature_not_available'
     limit_reached = 'limit_reached'
+    not_controllable = 'not_controllable'
+    confirmation_required = 'confirmation_required'
+    confirmation_expired = 'confirmation_expired'
+    confirmation_denied = 'confirmation_denied'
+    device_offline = 'device_offline'
+    device_failed = 'device_failed'
 
 
 class Error1(BaseModel):

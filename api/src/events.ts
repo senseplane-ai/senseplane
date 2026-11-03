@@ -13,6 +13,7 @@ import { deliveryKick, rememberEventTrace } from "./workers.js";
 import { kickOutputs } from "./outputs-kick.js";
 import type { ReadingOut } from "./readings.js";
 import { queueWatchSpeech } from "./speak.js";
+import { queueWorkflowsForEvent } from "./workflow-queue.js";
 
 export type EventRow = Selectable<EventsTable>;
 
@@ -79,6 +80,8 @@ export async function createEvent(s: AccountScope, e: NewEvent): Promise<EventRo
         .execute();
     }
   }
+  // Workflows this event starts (ADR 0072), queued in the same transaction.
+  await queueWorkflowsForEvent(s, row);
   return row;
 }
 

@@ -237,7 +237,7 @@ export async function synthesize(cfg: TtsConfig, text: string): Promise<Pcm> {
 // --- who speaks ------------------------------------------------------------------
 
 export interface Speaker {
-  kind: "user" | "account_key" | "agent" | "watch";
+  kind: "user" | "account_key" | "agent" | "watch" | "workflow";
   actor: string;
   name: string | null;
   via: string;
@@ -246,7 +246,7 @@ export interface Speaker {
 
 export const toSpeakMessage = (r: SpeakRow, clipUrl?: string | null) => ({
   id: r.id, source_id: r.source_id, kind: r.kind, text: r.text, status: r.status, message: r.message, duration_ms: r.duration_ms,
-  requested_by: { kind: r.actor_kind, id: r.actor.replace(/^(user|owner|agent|watch):/, ""), name: r.actor_name },
+  requested_by: { kind: r.actor_kind, id: r.actor.replace(/^(user|owner|agent|watch|workflow):/, ""), name: r.actor_name },
   watch_id: r.watch_id, clip_url: clipUrl ?? null,
   created_at: new Date(r.created_at).toISOString(), finished_at: r.finished_at ? new Date(r.finished_at).toISOString() : null,
 });
@@ -333,7 +333,7 @@ export function createSpeech(deps: SpeakDeps) {
    * Says `text` on a camera for an agent, a person or a workspace key (from the route, after the grant check)
    * or a watch (from the queue, `existingId`). Every outcome is recorded and audited.
    */
-  async function say(accountId: string, source: Source, who: Speaker, text: string, opts: { kind: "agent" | "watch"; watchId?: string; eventId?: string; existingId?: string }): Promise<SayOutcome> {
+  async function say(accountId: string, source: Source, who: Speaker, text: string, opts: { kind: "agent" | "watch" | "workflow"; watchId?: string; eventId?: string; existingId?: string }): Promise<SayOutcome> {
     const name = source.name;
     const base = {
       account_id: accountId, source_id: source.id, kind: opts.kind, actor: who.actor, actor_kind: who.kind, actor_name: who.name, via: who.via,

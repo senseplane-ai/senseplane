@@ -86,7 +86,8 @@ export async function queueEventForChannels(s: AccountScope, channelIds: string[
   kickSoon(channelKick);
 }
 
-async function queueBody(s: AccountScope, channelId: string, body: ChannelBody) {
+/** Queues a message of its own for a channel (a workflow's notify step, ADR 0072; the bot's replies). */
+export async function queueBody(s: AccountScope, channelId: string, body: ChannelBody) {
   await s.db.insertInto("channel_messages").values({ id: newId("cms"), account_id: s.accountId, channel_id: channelId, body: JSON.stringify(body) }).execute();
   kickSoon(channelKick);
 }

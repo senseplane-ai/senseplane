@@ -131,7 +131,7 @@ export function webhookReadings(body: unknown, query: Record<string, unknown>): 
 }
 
 /** The parts of a `Senseplane-Signature` header, or undefined when it isn't one. */
-function parseSignature(header: string): { t: number; v1: string[] } | undefined {
+export function parseSignature(header: string): { t: number; v1: string[] } | undefined {
   let t = NaN;
   const v1: string[] = [];
   for (const part of header.split(",")) {

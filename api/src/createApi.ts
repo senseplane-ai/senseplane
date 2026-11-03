@@ -73,6 +73,9 @@ import { registerTeamRoutes } from "./routes/team.js";
 import { registerSpeakRoutes } from "./routes/speak.js";
 import { type Speech, type TtsConfig, createSpeech, startSpeechWorker, sweepLostSpeech, ttsConfigFromEnv } from "./speak.js";
 import { type AuthConfig, authConfig, httpOAuthClient, type OAuthClient, registerAuthRoutes } from "./routes/auth.js";
+import { registerWorkflowRoutes } from "./routes/workflows.js";
+import { type WorkflowEngine, createWorkflowEngine, pruneWorkflowRuns, startWorkflowWorker } from "./workflows.js";
+import type { WebhookSender } from "./workers.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -148,6 +151,8 @@ export interface CreateApiOptions {
   tts?: TtsConfig | false;
   /** Shorter waits for a box to take and play a message, in tests. */
   speakTimings?: { takeMs?: number; waitMs?: number };
+  /** Sends a workflow's webhook step (tests inject one; default the guarded egress, ADR 0035). */
+  workflowSender?: WebhookSender;
   /** Live view (ADR 0042): viewers idle this long are closed (default LIVE_IDLE_TIMEOUT_SECONDS or 600). */
   liveIdleTimeoutSeconds?: number;
   /** Live view join token lifetime (default 60 s). */
@@ -165,6 +170,8 @@ export interface SenseplaneApi {
   decideConfirmation: NonNullable<ChannelDeps["decideConfirmation"]>;
   /** Talk-back (ADR 0069): says the watch messages waiting (the speech worker does this when workers run). */
   speech: Pick<Speech, "runQueued">;
+  /** Workflows (ADR 0072): runs what is due and fires due schedules (the workflow worker does this when workers run). */
+  workflows: Pick<WorkflowEngine, "runDue" | "fireSchedules">;
   listen(options: { port: number; host?: string }): Promise<void>;
   close(): Promise<void>;
 }
@@ -310,6 +317,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   app.addHook("onRequest", async (req) => {
     if (!req.url.startsWith("/v1/") || req.method === "OPTIONS" || req.url === "/v1/capture/join" || req.url.startsWith("/v1/demo/")) return;
     if (req.url.startsWith("/v1/bridge/")) return; // bridge token, checked by the bridge routes (ADR 0045)
+    if (req.url.startsWith("/v1/workflow-hooks/")) return; // a workflow's own signature, checked by its route (ADR 0072)
     const header = req.headers.authorization ?? "";
     const key = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
     if (key.startsWith("sit_")) {
@@ -556,6 +564,12 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   const devices = registerDeviceRoutes(app, { data, audit, ...options.deviceTimings, onConfirmation: (accountId, c, where) => notifyConfirmation(channels, accountId, c, where) });
   channels.decideConfirmation = devices.decide;
   const stoppers: (() => void | Promise<void>)[] = [];
+  // Workflows (ADR 0072): a trigger and steps that tell, ask, speak, clip and wait; never switching a device.
+  registerWorkflowRoutes(app, { data, audit, base });
+  const workflows = createWorkflowEngine({
+    data, bus, storage, audit, speech, log: app.log, ...(options.workflowSender ? { send: options.workflowSender } : {}),
+    checksUsedUp: (id) => over(id, (m) => m === "ai_checks"),
+  });
   if (storage) {
     registerPlaybackRoutes(app, {
       data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900,
@@ -596,6 +610,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       ...(mediaDriver ? [{ name: "media.feeds", everyS: 30, run: () => mediaDriver.sweepFeeds() }] : []),
       { name: "storage.sample", everyS: 3600, run: () => sampleStorage(data) },
       { name: "idempotency.expire", everyS: 3600, run: () => expireIdempotencyKeys(data) },
+      { name: "workflows.prune", everyS: 3600, run: () => pruneWorkflowRuns(data) },
       { name: "sources.republish", everyS: 300, run: () => republishAllConfigs() },
       {
         name: "usage.limits", everyS: 30,
@@ -629,6 +644,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     }
     stoppers.push(startChannelSender(channels));
     stoppers.push(startSpeechWorker(speech, app.log));
+    stoppers.push(startWorkflowWorker(workflows, app.log));
     stoppers.push(startJobs(data, jobs, app.log));
     stoppers.push(startScheduledWatches(data, app.log));
     // Deliveries are built outside a request, so links use the configured public URL.
@@ -672,6 +688,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     quotaFor,
     decideConfirmation: devices.decide,
     speech,
+    workflows,
     async listen({ port, host = "0.0.0.0" }) {
       await app.listen({ port, host });
       if (internal) await internal.listen({ port: options.internalPort!, host: process.env.INTERNAL_HOST ?? "127.0.0.1" });

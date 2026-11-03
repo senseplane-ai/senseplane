@@ -1,0 +1,69 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+[project]
+name = "senseplane"
+version = "0.1.0"
+description = "Eyes and ears for your agent: Python SDK for the Senseplane API"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "The Senseplane Authors" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+  "Framework :: AsyncIO",
+]
+dependencies = [
+  "httpx>=0.27,<1",
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.3"]
+
+[project.urls]
+Homepage = "https://github.com/senseplane-ai/senseplane"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.12",
+  "mypy>=1.17",
+  "datamodel-code-generator>=0.33",
+  "pyyaml>=6",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/senseplane"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs a running Senseplane API (SENSEPLANE_TEST_API_URL)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["src/senseplane/_generated"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Written from the async sources, where `yield from` has no async form.
+"src/senseplane/_sync_*.py" = ["UP028"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src", "tests", "examples", "scripts"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["langchain_core.*", "yaml"]
+ignore_missing_imports = true

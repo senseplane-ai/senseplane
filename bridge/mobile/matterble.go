@@ -232,7 +232,8 @@ func MatterCodeInfo(code string) (string, error) {
 }
 
 // SetMatterStrictRevocation refuses Matter devices whose certificates
-// couldn't be checked against the CSA's revocation lists (ADR 0073). Call before Start.
+// couldn't be checked against the CSA's revocation lists (ADR 0073). It can
+// be changed at any time; it applies to the next device added.
 func (b *Box) SetMatterStrictRevocation(strict bool) {
-	b.matter.StrictRevocation = strict
+	b.matter.SetStrictRevocation(strict)
 }

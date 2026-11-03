@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/api"
@@ -141,6 +142,9 @@ type Controller struct {
 	// the network once it has the credentials (zero: 2 minutes).
 	JoinWait time.Duration
 
+	// strict is SetStrictRevocation's, for a setting changed while it runs.
+	strict atomic.Bool
+
 	mu    sync.Mutex
 	rev   *RevocationList
 	f     *fabric
@@ -153,6 +157,9 @@ type Controller struct {
 	// nodes are Run's devices, kept current by their reports (written under mu).
 	nodes map[uint64]*matter.Node
 }
+
+// SetStrictRevocation turns strict revocation on or off; safe while devices are being added.
+func (c *Controller) SetStrictRevocation(on bool) { c.strict.Store(on) }
 
 // Devices is how many devices have been added.
 func (c *Controller) Devices() int {

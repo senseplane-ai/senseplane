@@ -108,7 +108,7 @@ func (c *Controller) checkRevocation(ctx context.Context, att *Attestation, trus
 
 func (c *Controller) unchecked(att *Attestation, why error) error {
 	att.Revocation = revocationNotChecked + strings.ReplaceAll(why.Error(), "\n", "; ")
-	if c.StrictRevocation {
+	if c.StrictRevocation || c.strict.Load() {
 		return fmt.Errorf("couldn't check whether the device's certificates have been revoked (%v), and this box only adds devices it could check", why)
 	}
 	c.log().Warn("Matter device's certificates not checked for revocation; adding it anyway", "why", why)

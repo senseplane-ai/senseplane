@@ -99,6 +99,7 @@ func withMQTT(ctx context.Context, o *bridge.Options, log *slog.Logger) {
 	if mo == nil {
 		return
 	}
+	mo.AwaitOutputs = 5 * time.Second // connect once, with the will the outputs call for
 	l := mqtt.New(*mo)
 	if o.Sensors == nil {
 		o.Sensors = map[string]bridge.SensorLink{}

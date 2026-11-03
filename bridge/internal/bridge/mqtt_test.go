@@ -26,6 +26,35 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/mqtt"
 )
 
+// settled waits until the box is on the broker once, on its connection with a will, subscribed to topic.
+func settled(t *testing.T, srv *mochi.Server, topic string) {
+	t.Helper()
+	eventually(t, "the box's final connection", func() bool {
+		box := 0
+		for _, cl := range srv.Clients.GetAll() {
+			if !cl.Net.Inline && !cl.Closed() && cl.Properties.Will.TopicName != "" {
+				box++
+			}
+		}
+		return box == 1 && len(srv.Topics.Subscribers(topic).Subscriptions) > 0
+	})
+}
+
+// closeWithin runs stop, failing the test rather than hanging the suite when it doesn't return in time.
+func closeWithin(t *testing.T, what string, d time.Duration, stop func()) {
+	t.Helper()
+	finished := make(chan struct{})
+	go func() {
+		stop()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(d):
+		t.Errorf("%s didn't stop within %v", what, d)
+	}
+}
+
 // mqttSensors makes the MQTT link a SensorLink, as cmd/bridge does.
 type mqttSensors struct{ *mqtt.Link }
 
@@ -50,7 +79,8 @@ func TestMQTTSensorsInAndEventsOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = srv.Serve() }()
-	defer srv.Close()
+	// The broker closes last, and never holds up the suite: mochi's Close waits for its clients to go.
+	t.Cleanup(func() { closeWithin(t, "the MQTT broker", 5*time.Second, func() { _ = srv.Close() }) })
 	var mu sync.Mutex
 	person := ""
 	_ = srv.Subscribe("senseplane/+/camera/+/person", 1, func(_ *mochi.Client, _ packets.Subscription, pk packets.Packet) {
@@ -87,7 +117,7 @@ func TestMQTTSensorsInAndEventsOut(t *testing.T) {
 	}))
 	defer apiSrv.Close()
 
-	link := mqtt.New(mqtt.Options{URL: "mqtt://" + addr, Log: quiet, MinBackoff: 20 * time.Millisecond})
+	link := mqtt.New(mqtt.Options{URL: "mqtt://" + addr, Log: quiet, MinBackoff: 20 * time.Millisecond, AwaitOutputs: 3 * time.Second})
 	b := New(Options{
 		Client: api.New(apiSrv.URL, "brg_t"), Log: quiet, Poll: 50 * time.Millisecond, Heartbeat: time.Hour, SendEvery: 20 * time.Millisecond,
 		Sensors: map[string]SensorLink{"mqtt": mqttSensors{link}}, Outputs: link,
@@ -95,23 +125,45 @@ func TestMQTTSensorsInAndEventsOut(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { b.Run(ctx); close(done) }()
+	// Before the broker closes, even when the test fails half way: the box leaves the broker first.
+	t.Cleanup(func() {
+		cancel()
+		closeWithin(t, "the box", 5*time.Second, func() { <-done })
+	})
 
 	eventually(t, "the two MQTT sensors listed", func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return len(f.listed) > 0 && len(f.listed[len(f.listed)-1]) == 2
 	})
-	_ = srv.Publish("kitchen/humidity", []byte("51"), false, 0)
-	_ = srv.Publish("kitchen/temperature", []byte("21.5"), false, 0)
-	eventually(t, "the chosen temperature", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.readings) == 1 })
+	// Once it publishes, the box connects again with its will. A reading published while it does, or while
+	// this broker (mochi) is still clearing the old connection's subscriptions, which go by client id, is
+	// lost: real sensors publish again, so this one does too until a reading arrives.
+	settled(t, srv, "kitchen/temperature")
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+		_ = srv.Publish("kitchen/humidity", []byte("51"), false, 0)
+		_ = srv.Publish("kitchen/temperature", []byte("21.5"), false, 0)
+		f.mu.Lock()
+		n := len(f.readings)
+		f.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("timed out waiting for the chosen temperature")
+		}
+	}
 	eventually(t, "the person on the broker", func() bool { mu.Lock(); defer mu.Unlock(); return person == "ON" })
 	cancel()
 	<-done
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if r := f.readings[0]; r["sense"] != "temperature" || r["value"] != 21.5 || r["unit"] != "celsius" || r["device"].(map[string]any)["id"] != "mqtt.sensor_kitchen_t" {
-		t.Fatalf("reading %v", r)
+	// Only the chosen sensor's readings were sent, however many times it published.
+	for _, r := range f.readings {
+		if r["sense"] != "temperature" || r["value"] != 21.5 || r["unit"] != "celsius" || r["device"].(map[string]any)["id"] != "mqtt.sensor_kitchen_t" {
+			t.Fatalf("reading %v", r)
+		}
 	}
 	for _, e := range f.listed[len(f.listed)-1] {
 		if e["entity_id"] == "mqtt.sensor_kitchen_h" && (e["sense"] != "humidity" || e["area"] != nil) {

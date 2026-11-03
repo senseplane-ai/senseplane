@@ -58,6 +58,11 @@ type Options struct {
 	// MaxPayload is the largest message read (default 64 KiB); MaxEntities the most discovered entities kept (default 2,000).
 	MaxPayload, MaxEntities int
 	Log                     *slog.Logger
+	// AwaitOutputs, when set, is how long the first connection waits for the API's first outputs answer, so
+	// the box connects once, with the will it keeps (the bridge sets it; a link without outputs doesn't wait).
+	// Connecting again for the will right after connecting races some brokers' cleanup of the first
+	// connection, which can drop the new one's subscriptions (they go by client id).
+	AwaitOutputs time.Duration
 }
 
 // CheckURL tells whether a broker URL can be used, without repeating it (it may hold a password).
@@ -94,6 +99,11 @@ type Link struct {
 	// will is the status topic to set as the will on the next connection ("" while the box doesn't publish);
 	// connWill is the one the current connection has.
 	will, connWill string
+	// willKnown closes once the outputs said whether the box publishes (the will to connect with).
+	willKnown chan struct{}
+	willOnce  sync.Once
+	// rewill is set when the link drops its connection to connect again with another will.
+	rewill atomic.Bool
 
 	// bad is set when the broker URL can't be used (the link then does nothing).
 	bad error
@@ -155,7 +165,7 @@ func New(o Options) *Link {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	l := &Link{o: o, msgs: make(chan *mq.Message, 4096), outs: make(chan api.Outputs, 8), up: make(chan *mq.BaseClient, 1),
+	l := &Link{o: o, msgs: make(chan *mq.Message, 4096), outs: make(chan api.Outputs, 8), up: make(chan *mq.BaseClient, 1), willKnown: make(chan struct{}),
 		entities: map[string]*entity{}, byState: map[string][]*entity{}, subbed: map[string]bool{}, bad: bad}
 	l.out = newOutputs(l)
 	for i := range o.Topics {
@@ -186,14 +196,25 @@ func (l *Link) Outputs(o api.Outputs) {
 	select {
 	case l.outs <- o:
 	default:
-		// Full: drop the oldest so the newest state is never lost.
+		// Full (the worker is busy): the oldest answer's state gives way to the newest, but its events
+		// travel on in it, so a detection or a watch firing is never lost to a slow moment.
 		select {
-		case <-l.outs:
+		case old := <-l.outs:
+			if len(old.Events) > 0 {
+				events := append(append([]api.OutputEvent(nil), old.Events...), o.Events...)
+				o.Events = events[max(0, len(events)-maxCarriedEvents):]
+			}
 		default:
 		}
-		l.outs <- o
+		l.outs <- o // one caller (the outputs poll): there is room now
 	}
 }
+
+// rewillPause is how long the link waits before connecting again for a new will.
+const rewillPause = 300 * time.Millisecond
+
+// maxCarriedEvents bounds the events carried from dropped answers into the newest one.
+const maxCarriedEvents = 500
 
 func (l *Link) client() *mq.BaseClient {
 	l.mu.Lock()
@@ -218,6 +239,14 @@ func (l *Link) Run(ctx context.Context, sink Sink) {
 
 func (l *Link) connectLoop(ctx context.Context, sink Sink) {
 	wait := l.o.MinBackoff
+	if l.o.AwaitOutputs > 0 {
+		select {
+		case <-l.willKnown:
+		case <-time.After(l.o.AwaitOutputs):
+		case <-ctx.Done():
+			return
+		}
+	}
 	for ctx.Err() == nil {
 		cli, will, err := l.connect(ctx)
 		if err != nil {
@@ -256,7 +285,16 @@ func (l *Link) connectLoop(ctx context.Context, sink Sink) {
 		select {
 		case <-cli.Done():
 			cancel()
-			l.o.Log.Warn("lost the MQTT broker; reconnecting", "err", cli.Err())
+			if l.rewill.Swap(false) {
+				// Dropped on purpose for the will: give the broker a moment to finish with the old connection,
+				// whose cleanup goes by client id, before the new one subscribes.
+				select {
+				case <-ctx.Done():
+				case <-time.After(rewillPause):
+				}
+			} else {
+				l.o.Log.Warn("lost the MQTT broker; reconnecting", "err", cli.Err())
+			}
 		case <-ctx.Done():
 			cancel()
 			// A clean goodbye: the box's entities show unavailable (the will isn't sent on a disconnect).
@@ -331,7 +369,9 @@ func (l *Link) setWill(on bool, status string) bool {
 	cli := l.cli
 	differs := cli != nil && l.connWill != want
 	l.mu.Unlock()
+	l.willOnce.Do(func() { close(l.willKnown) })
 	if differs {
+		l.rewill.Store(true)
 		l.o.Log.Info("connecting to the MQTT broker again, to set the box's status", "status", want)
 		// A clean goodbye, so the broker doesn't send the old will.
 		bye, stop := context.WithTimeout(context.Background(), l.o.CallTimeout)

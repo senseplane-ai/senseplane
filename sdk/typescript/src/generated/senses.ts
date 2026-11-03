@@ -47,4 +47,7 @@ export const SENSES = [
   { sense: "tamper", kind: "state", name: "tampering", on: "tampered", off: "clear" },
   { sense: "button", kind: "event", name: "button press" },
   { sense: "doorbell", kind: "event", name: "doorbell" },
+  { sense: "cover", kind: "state", name: "blind or cover", on: "open", off: "closed" },
+  { sense: "alarm", kind: "state", name: "alarm system", on: "armed", off: "disarmed" },
+  { sense: "setpoint", kind: "number", name: "thermostat setting", unit: "celsius" },
 ] as const;

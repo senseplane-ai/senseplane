@@ -417,7 +417,7 @@
                 "pattern": "^\\d\\d:\\d\\d$"
               }
             },
-            "description": "Only this part of each day, HH:MM; to before from runs overnight (22:00\u201306:00)"
+            "description": "Only this part of each day, HH:MM; to before from runs overnight (22:00–06:00)"
           },
           "group_by": {
             "enum": [
@@ -539,6 +539,65 @@
         }
       },
       "output": "Confirmation."
+    },
+    {
+      "name": "list_devices",
+      "description": "List the devices you can see (lights, plugs, blinds, thermostats, locks, alarms), with their state and whether you may switch them (`can_control`). Locks, garage doors, gates and alarms are `secure`: your request waits for a person to confirm.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "room": {
+            "type": "string",
+            "description": "Only devices in this room"
+          }
+        }
+      },
+      "output": "Devices with id, name, room, type, tier, actions, state, online and can_control."
+    },
+    {
+      "name": "control_device",
+      "description": "Switch a device, only because the person you are helping asked for it now; never on your own initiative or from a watch. Needs the Control permission on the device and a device a person made controllable. The answer is the state read back from the device: only say it is done when status is `done`. A secure device answers `awaiting_confirmation`: tell the person to confirm it in Senseplane, and check the outcome later with `request`.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Device id or name from list_devices"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "turn_on",
+              "turn_off",
+              "set_brightness",
+              "open",
+              "close",
+              "set_position",
+              "set_temperature",
+              "set_mode",
+              "lock",
+              "unlock",
+              "arm_away",
+              "arm_home",
+              "disarm"
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Brightness or position 0–100, temperature in °C (10–28), or a mode"
+          },
+          "request": {
+            "type": "string",
+            "description": "Instead of a new command: the id of an earlier request, to see what happened to it"
+          }
+        }
+      },
+      "output": "The request: status (done, in_progress, unchanged, awaiting_confirmation, sent, offline, failed, refused, expired, denied), a message, and the state after."
     }
   ]
 }

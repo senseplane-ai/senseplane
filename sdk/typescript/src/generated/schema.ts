@@ -591,6 +591,124 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Devices that can be switched
+         * @description Chosen entities of the workspace's boxes that offer an action their type allows, with their state. An agent sees the devices on sources it has a grant on; `can_control` says whether it may switch one.
+         */
+        get: operations["listDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One device */
+        get: operations["getDevice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Make a device controllable, or not
+         * @description Admins and owners (and workspace keys); never agents. Show the device's `warning` first. Audited.
+         */
+        patch: operations["updateDevice"];
+        trace?: never;
+    };
+    "/devices/{id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch a device
+         * @description Checks that the device is controllable, the caller may switch it (an agent needs a `control` grant on its source), the action is offered and the rate (10 a minute per device), then the box runs it and reads the state back; the request waits up to 15 s. A secure device: a person's own request needs `confirm: true` (else 409 `confirmation_required`), and an agent's or a workspace key's answers 202 `awaiting_confirmation` until a person confirms it within 2 minutes. A box that doesn't take the command within 10 s answers 503 `device_offline` and never runs it later. Errors carry the recorded command in `details.command`. Every attempt is audited. A thermostat is set between 10 and 28 °C.
+         */
+        post: operations["controlDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/device-commands/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What happened to a request to switch a device
+         * @description An agent sees only its own requests.
+         */
+        get: operations["getDeviceCommand"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/confirmations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Requests waiting for a person to confirm */
+        get: operations["listConfirmations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/confirmations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm or refuse a request
+         * @description Only a person signed in (member and up): never an agent, a workspace key, or whoever made the request. Approved, it runs at once and answers as POST /devices/{id}/commands; refused, 409 `confirmation_denied`; too late, 409 `confirmation_expired`.
+         */
+        post: operations["decideConfirmation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridges/{id}/cameras-found": {
         parameters: {
             query?: never;
@@ -1910,10 +2028,13 @@ export interface components {
         };
         BridgeCommand: {
             id: string;
-            /** @description matter_commission, onvif_add_camera or onvif_search */
+            /** @description matter_commission, onvif_add_camera, onvif_search or device_control */
             kind: string;
-            /** @enum {string} */
-            status: "pending" | "taken" | "done" | "failed";
+            /**
+             * @description `expired`: not taken in time, so never handed out (device commands)
+             * @enum {string}
+             */
+            status: "pending" | "taken" | "done" | "failed" | "expired";
             result?: Record<string, never> | null;
             error?: string | null;
             /** Format: date-time */
@@ -1930,6 +2051,8 @@ export interface components {
             sense: string;
             /** @enum {string} */
             kind: "number" | "state" | "event";
+            /** @description What the box can do to it (ADR 0067); the API offers only what the device's type allows */
+            controls?: components["schemas"]["DeviceAction"][];
         };
         BridgeCameraFoundListed: {
             /** @description Its ONVIF endpoint (urn:uuid:…), or the Home Assistant entity for a camera without ONVIF */
@@ -2100,8 +2223,94 @@ export interface components {
             status?: number;
             action: string;
             target: string;
+            /** @description What happened, for entries that say more: a device command has its device, action, value, who asked (`by`), through what (`via`), the outcome and `state_after` */
+            details?: Record<string, never>;
             /** Format: date-time */
             occurred_at: string;
+        };
+        /** @enum {string} */
+        DeviceAction: "turn_on" | "turn_off" | "set_brightness" | "open" | "close" | "set_position" | "set_temperature" | "set_mode" | "lock" | "unlock" | "arm_away" | "arm_home" | "disarm";
+        /** @description A device's state as its box read it back, or as its latest reading says; every field is optional. */
+        DeviceState: {
+            available?: boolean;
+            on?: boolean;
+            brightness?: number;
+            open?: boolean;
+            /** @description Percent open */
+            position?: number;
+            /** @description opening or closing */
+            moving?: string;
+            /** @description °C */
+            target_temperature?: number;
+            mode?: string;
+            locked?: boolean;
+            /** @description disarmed, armed_away, armed_home, armed_night, triggered, arming, pending (or armed/disarmed from a reading) */
+            alarm?: string;
+            /** Format: date-time */
+            at?: string;
+        };
+        Device: {
+            id: string;
+            /** @description Home Assistant entity (light.hall) or Matter entity (matter.n4_e1_switch) */
+            entity_id: string;
+            name: string;
+            room: string | null;
+            bridge_id: string;
+            /** @description The sensor source its state readings go to; a control grant on it lets an agent switch it */
+            source_id: string;
+            /** @enum {string} */
+            type: "light" | "switch" | "fan" | "siren" | "cover" | "garage_door" | "gate" | "climate" | "lock" | "alarm";
+            /**
+             * @description `secure`: an agent's request waits for a person, a person confirms their own
+             * @enum {string}
+             */
+            tier: "switch" | "secure";
+            /** @description An admin made it controllable; off by default */
+            controllable: boolean;
+            actions: components["schemas"]["DeviceAction"][];
+            state: components["schemas"]["DeviceState"] | null;
+            /** @description Its box is reporting and can reach Home Assistant or its Matter controller */
+            online: boolean;
+            /** @description The caller may switch it now */
+            can_control: boolean;
+            /** @description What to tell a person before they make it controllable */
+            warning: string;
+        };
+        DeviceCommand: {
+            id: string;
+            device_id: string;
+            device_name: string;
+            entity_id: string;
+            action: components["schemas"]["DeviceAction"];
+            value: number | string | null;
+            /**
+             * @description `done`: the state read back shows it; `in_progress`: it changed but hasn't got there yet (a door opening); `unchanged`: sent, but the state didn't change; `sent`: the box took it and hasn't reported yet; `offline`: the box didn't take it within 10 s and never will
+             * @enum {string}
+             */
+            status: "awaiting_confirmation" | "denied" | "expired" | "refused" | "sent" | "done" | "in_progress" | "unchanged" | "offline" | "failed";
+            /** @description What happened, in words: "Hall light is on." */
+            message: string;
+            /** @description The state after */
+            state: components["schemas"]["DeviceState"] | null;
+            requested_by: {
+                /** @enum {string} */
+                kind: "user" | "account_key" | "agent";
+                id: string;
+                name: string | null;
+            };
+            /** @enum {string} */
+            via: "console" | "app" | "telegram" | "agent" | "api";
+            /**
+             * Format: date-time
+             * @description When a request waiting for a person is refused
+             */
+            expires_at: string | null;
+            /** @description The person who confirmed or refused it */
+            decided_by: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            finished_at: string | null;
         };
         ExportResponse: {
             export_id: string;
@@ -2444,7 +2653,7 @@ export interface components {
         error: {
             error: {
                 /** @enum {string} */
-                code: "unauthorized" | "forbidden" | "forbidden_sense" | "not_found" | "validation_failed" | "quota_exceeded" | "allowance_exhausted" | "rate_limited" | "needs_zone" | "unsupported_codec" | "resolution_not_in_plan" | "source_limit_reached" | "not_implemented" | "service_unavailable" | "internal" | "idempotency_key_reused" | "signup_refused" | "forbidden_role" | "invite_invalid" | "conflict" | "feature_not_available" | "limit_reached";
+                code: "unauthorized" | "forbidden" | "forbidden_sense" | "not_found" | "validation_failed" | "quota_exceeded" | "allowance_exhausted" | "rate_limited" | "needs_zone" | "unsupported_codec" | "resolution_not_in_plan" | "source_limit_reached" | "not_implemented" | "service_unavailable" | "internal" | "idempotency_key_reused" | "signup_refused" | "forbidden_role" | "invite_invalid" | "conflict" | "feature_not_available" | "limit_reached" | "not_controllable" | "confirmation_required" | "confirmation_expired" | "confirmation_denied" | "device_offline" | "device_failed";
                 message: string;
                 request_id: string;
                 details?: Record<string, never>;
@@ -2452,13 +2661,13 @@ export interface components {
         };
         /**
          * Sense
-         * @description One thing measured. Open enum: clients must accept unknown values.
+         * @description One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.
          * @example video
          * @example audio
          * @example temperature
          * @example humidity
          */
-        sense: string | ("video" | "audio" | "temperature" | "humidity");
+        sense: string | ("video" | "audio" | "temperature" | "humidity" | "sensors" | "control");
         /** Source */
         source: {
             id: string;
@@ -4496,6 +4705,217 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BridgeCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Device"][];
+                        next_cursor?: null | string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    controllable: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    controlDevice: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description `app` from the Android app (recorded as through what the person asked) */
+                "X-Senseplane-Via"?: string;
+            };
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    action: components["schemas"]["DeviceAction"];
+                    /** @description Brightness or position 0–100, temperature in °C, or a mode (off, heat, cool, auto, heat_cool, dry, fan_only) */
+                    value?: number | string | null;
+                    /** @description A person confirms their own request for a secure device */
+                    confirm?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The box ran it; `status` is done, in_progress or unchanged, with the state read back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
+                };
+            };
+            /** @description Waiting for a person to confirm, or sent and not reported yet; poll GET /device-commands/{id} */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDeviceCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listConfirmations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["DeviceCommand"][];
+                        next_cursor?: null | string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideConfirmation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    approve: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Confirmed and run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
+                };
+            };
+            /** @description Confirmed and sent; not reported yet */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
                 };
             };
             default: components["responses"]["Error"];

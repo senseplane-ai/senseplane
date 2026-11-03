@@ -24,9 +24,9 @@ export function senseInfo(sense: string): SenseInfo | undefined {
   return BY_SENSE.get(sense);
 }
 
-/** video and audio are camera senses; every other sense is a sensor's. */
+/** video and audio are camera senses, and control (switching devices, ADR 0067) is a permission; every other sense is a sensor's. */
 export function isSensorSense(sense: string): boolean {
-  return sense !== "video" && sense !== "audio";
+  return sense !== "video" && sense !== "audio" && sense !== "control";
 }
 
 /** What people read for a sense ("door or window", "power use"); unknown ones read as words. */

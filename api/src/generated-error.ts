@@ -25,5 +25,11 @@ export interface components {
     | "invite_invalid"
     | "conflict"
     | "feature_not_available"
-    | "limit_reached";
+    | "limit_reached"
+    | "not_controllable"
+    | "confirmation_required"
+    | "confirmation_expired"
+    | "confirmation_denied"
+    | "device_offline"
+    | "device_failed";
 }

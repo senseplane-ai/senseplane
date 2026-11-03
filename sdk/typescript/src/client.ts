@@ -28,6 +28,9 @@ export type Invite = S["Invite"];
 export type Conversation = S["Conversation"];
 export type Message = S["Message"];
 export type Moment = S["Moment"];
+export type Device = S["Device"];
+export type DeviceAction = S["DeviceAction"];
+export type DeviceCommand = S["DeviceCommand"];
 export type SuggestedWatch = S["SuggestedWatch"];
 /** One event of a streamed answer: status, delta, moment, suggested_watch, then done (or error). */
 export type ConversationStreamEvent = S["ConversationStreamEvent"];
@@ -249,6 +252,29 @@ export class Senseplane {
     /** The key is in `api_key`, shown only this once. */
     create: (name: string) => unwrap(this.raw.POST("/keys", { body: { name } })),
     delete: (id: string) => unwrap(this.raw.DELETE("/keys/{id}", { params: { path: { id } } })),
+  };
+
+  /**
+   * Devices a person (or an agent they granted Control) can switch (ADR 0067). `command`
+   * answers with the state the box read back; a lock, garage door, gate or alarm asked for
+   * by an agent comes back `awaiting_confirmation` until a person confirms it. Offline
+   * boxes and failures throw a SenseplaneError whose `details.command` is the request.
+   */
+  readonly devices = {
+    list: async () => (await unwrap(this.raw.GET("/devices"))).data,
+    get: (id: string) => unwrap(this.raw.GET("/devices/{id}", { params: { path: { id } } })),
+    /** Admins: show the device's `warning` first. */
+    setControllable: (id: string, controllable: boolean) => unwrap(this.raw.PATCH("/devices/{id}", { params: { path: { id } }, body: { controllable } })),
+    command: (id: string, body: { action: DeviceAction; value?: number | string | null; confirm?: boolean }) =>
+      unwrap(this.raw.POST("/devices/{id}/commands", { params: { path: { id } }, body })),
+    /** What happened to a request: poll one that is `sent` or `awaiting_confirmation`. */
+    request: (id: string) => unwrap(this.raw.GET("/device-commands/{id}", { params: { path: { id } } })),
+  };
+
+  /** Requests waiting for a person; only people signed in can answer them. */
+  readonly confirmations = {
+    list: async () => (await unwrap(this.raw.GET("/confirmations"))).data,
+    decide: (id: string, approve: boolean) => unwrap(this.raw.POST("/confirmations/{id}", { params: { path: { id } }, body: { approve } })),
   };
 
   /** Telegram chats that watches send to and that can ask (ADR 0059). */

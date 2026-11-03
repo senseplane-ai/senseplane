@@ -38,6 +38,9 @@
     { "sense": "vibration", "kind": "state", "on": "vibration", "off": "still", "name": "vibration", "words": ["vibration", "vibrating", "knock"] },
     { "sense": "tamper", "kind": "state", "on": "tampered", "off": "clear", "name": "tampering", "words": ["tamper", "tampered"] },
     { "sense": "button", "kind": "event", "name": "button press", "words": ["button", "pressed", "press"] },
-    { "sense": "doorbell", "kind": "event", "name": "doorbell", "words": ["doorbell", "rang", "ring"] }
+    { "sense": "doorbell", "kind": "event", "name": "doorbell", "words": ["doorbell", "rang", "ring"] },
+    { "sense": "cover", "kind": "state", "on": "open", "off": "closed", "name": "blind or cover", "words": ["blind", "blinds", "shutter", "shutters", "curtain", "curtains"] },
+    { "sense": "alarm", "kind": "state", "on": "armed", "off": "disarmed", "name": "alarm system", "words": ["burglar alarm", "alarm system", "armed", "disarmed"] },
+    { "sense": "setpoint", "kind": "number", "unit": "celsius", "name": "thermostat setting", "words": ["thermostat", "setpoint"] }
   ]
 }

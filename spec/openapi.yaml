@@ -53,6 +53,17 @@ tags:
     description: The bridge's own API, authenticated with a bridge token (ADR 0045), and pairing a box with a code (ADR 0061).
   - name: bridges
     description: Bridges and Home Assistant boxes, and which of their sensors Senseplane gets (ADR 0061).
+  - name: devices
+    description: >-
+      Switching devices, only when a person asks (ADR 0067). A device is an entity a box
+      lists with the actions it can run. It is switched only after an admin makes it
+      controllable, by a person (member and up, or a workspace key) or an agent with a
+      `control` grant on its source; `sensors` never implies `control`. Locks, garage
+      doors, gates and alarms are secure: a person confirms their own request
+      (`confirm: true`) and an agent's waits for a person (GET /confirmations). Heaters,
+      ovens, medical devices and machinery are never offered. The box reads the state back,
+      so an answer never says done when the state didn't change. Every attempt is in the
+      audit log. Watches, workflows and scheduled jobs never switch anything.
 paths:
   /sources:
     post:
@@ -939,6 +950,172 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/BridgeCommand'}
+        default: {$ref: '#/components/responses/Error'}
+  /devices:
+    get:
+      operationId: listDevices
+      summary: Devices that can be switched
+      description: >-
+        Chosen entities of the workspace's boxes that offer an action their type allows, with
+        their state. An agent sees the devices on sources it has a grant on; `can_control` says
+        whether it may switch one.
+      tags: [devices]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Device'}}
+                  next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+  /devices/{id}:
+    get:
+      operationId: getDevice
+      summary: One device
+      tags: [devices]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Device'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: updateDevice
+      summary: Make a device controllable, or not
+      description: Admins and owners (and workspace keys); never agents. Show the device's `warning` first. Audited.
+      tags: [devices]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [controllable]
+              properties:
+                controllable: {type: boolean}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Device'}
+        default: {$ref: '#/components/responses/Error'}
+  /devices/{id}/commands:
+    post:
+      operationId: controlDevice
+      summary: Switch a device
+      description: >-
+        Checks that the device is controllable, the caller may switch it (an agent needs a
+        `control` grant on its source), the action is offered and the rate (10 a minute per
+        device), then the box runs it and reads the state back; the request waits up to 15 s.
+        A secure device: a person's own request needs `confirm: true` (else 409
+        `confirmation_required`), and an agent's or a workspace key's answers 202
+        `awaiting_confirmation` until a person confirms it within 2 minutes. A box that
+        doesn't take the command within 10 s answers 503 `device_offline` and never runs it
+        later. Errors carry the recorded command in `details.command`. Every attempt is audited.
+        A thermostat is set between 10 and 28 °C.
+      tags: [devices]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+        - {name: X-Senseplane-Via, in: header, required: false, description: '`app` from the Android app (recorded as through what the person asked)', schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: {$ref: '#/components/schemas/DeviceAction'}
+                value: {type: [number, string, 'null'], description: 'Brightness or position 0–100, temperature in °C, or a mode (off, heat, cool, auto, heat_cool, dry, fan_only)'}
+                confirm: {type: boolean, description: A person confirms their own request for a secure device}
+      responses:
+        '200':
+          description: The box ran it; `status` is done, in_progress or unchanged, with the state read back
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceCommand'}
+        '202':
+          description: Waiting for a person to confirm, or sent and not reported yet; poll GET /device-commands/{id}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceCommand'}
+        default: {$ref: '#/components/responses/Error'}
+  /device-commands/{id}:
+    get:
+      operationId: getDeviceCommand
+      summary: What happened to a request to switch a device
+      description: An agent sees only its own requests.
+      tags: [devices]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceCommand'}
+        default: {$ref: '#/components/responses/Error'}
+  /confirmations:
+    get:
+      operationId: listConfirmations
+      summary: Requests waiting for a person to confirm
+      tags: [devices]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/DeviceCommand'}}
+                  next_cursor: {type: ['null', string]}
+        default: {$ref: '#/components/responses/Error'}
+  /confirmations/{id}:
+    post:
+      operationId: decideConfirmation
+      summary: Confirm or refuse a request
+      description: >-
+        Only a person signed in (member and up): never an agent, a workspace key, or whoever
+        made the request. Approved, it runs at once and answers as POST /devices/{id}/commands;
+        refused, 409 `confirmation_denied`; too late, 409 `confirmation_expired`.
+      tags: [devices]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [approve]
+              properties:
+                approve: {type: boolean}
+      responses:
+        '200':
+          description: Confirmed and run
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceCommand'}
+        '202':
+          description: Confirmed and sent; not reported yet
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceCommand'}
         default: {$ref: '#/components/responses/Error'}
   /bridges/{id}/cameras-found:
     get:
@@ -2835,8 +3012,8 @@ components:
       required: [id, kind, status]
       properties:
         id: {type: string}
-        kind: {type: string, description: 'matter_commission, onvif_add_camera or onvif_search'}
-        status: {type: string, enum: [pending, taken, done, failed]}
+        kind: {type: string, description: 'matter_commission, onvif_add_camera, onvif_search or device_control'}
+        status: {type: string, enum: [pending, taken, done, failed, expired], description: '`expired`: not taken in time, so never handed out (device commands)'}
         result: {type: ['object', 'null']}
         error: {type: ['string', 'null']}
         created_at: {type: string, format: date-time}
@@ -2852,6 +3029,11 @@ components:
         device_class: {type: string, maxLength: 64}
         sense: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
         kind: {type: string, enum: [number, state, event]}
+        controls:
+          type: array
+          maxItems: 20
+          description: What the box can do to it (ADR 0067); the API offers only what the device's type allows
+          items: {$ref: '#/components/schemas/DeviceAction'}
     BridgeCameraFoundListed:
       type: object
       additionalProperties: false
@@ -3019,7 +3201,75 @@ components:
         status: {type: integer, description: HTTP status of the request}
         action: {type: string}
         target: {type: string}
+        details: {type: object, description: 'What happened, for entries that say more: a device command has its device, action, value, who asked (`by`), through what (`via`), the outcome and `state_after`'}
         occurred_at: {type: string, format: date-time}
+    DeviceAction:
+      type: string
+      enum: [turn_on, turn_off, set_brightness, open, close, set_position, set_temperature, set_mode, lock, unlock, arm_away, arm_home, disarm]
+    DeviceState:
+      type: object
+      description: A device's state as its box read it back, or as its latest reading says; every field is optional.
+      properties:
+        available: {type: boolean}
+        'on': {type: boolean}
+        brightness: {type: number, minimum: 0, maximum: 100}
+        open: {type: boolean}
+        position: {type: number, minimum: 0, maximum: 100, description: Percent open}
+        moving: {type: string, description: opening or closing}
+        target_temperature: {type: number, description: °C}
+        mode: {type: string}
+        locked: {type: boolean}
+        alarm: {type: string, description: 'disarmed, armed_away, armed_home, armed_night, triggered, arming, pending (or armed/disarmed from a reading)'}
+        at: {type: string, format: date-time}
+    Device:
+      type: object
+      required: [id, entity_id, name, room, bridge_id, source_id, type, tier, controllable, actions, state, online, can_control, warning]
+      properties:
+        id: {type: string}
+        entity_id: {type: string, description: 'Home Assistant entity (light.hall) or Matter entity (matter.n4_e1_switch)'}
+        name: {type: string}
+        room: {type: [string, 'null']}
+        bridge_id: {type: string}
+        source_id: {type: string, description: The sensor source its state readings go to; a control grant on it lets an agent switch it}
+        type: {type: string, enum: [light, switch, fan, siren, cover, garage_door, gate, climate, lock, alarm]}
+        tier: {type: string, enum: [switch, secure], description: '`secure`: an agent''s request waits for a person, a person confirms their own'}
+        controllable: {type: boolean, description: An admin made it controllable; off by default}
+        actions: {type: array, items: {$ref: '#/components/schemas/DeviceAction'}}
+        state: {oneOf: [{$ref: '#/components/schemas/DeviceState'}, {type: 'null'}]}
+        online: {type: boolean, description: Its box is reporting and can reach Home Assistant or its Matter controller}
+        can_control: {type: boolean, description: The caller may switch it now}
+        warning: {type: string, description: What to tell a person before they make it controllable}
+    DeviceCommand:
+      type: object
+      required: [id, device_id, device_name, entity_id, action, value, status, message, state, requested_by, via, expires_at, decided_by, created_at, finished_at]
+      properties:
+        id: {type: string}
+        device_id: {type: string}
+        device_name: {type: string}
+        entity_id: {type: string}
+        action: {$ref: '#/components/schemas/DeviceAction'}
+        value: {type: [number, string, 'null']}
+        status:
+          type: string
+          enum: [awaiting_confirmation, denied, expired, refused, sent, done, in_progress, unchanged, offline, failed]
+          description: >-
+            `done`: the state read back shows it; `in_progress`: it changed but hasn't got there yet (a door
+            opening); `unchanged`: sent, but the state didn't change; `sent`: the box took it and hasn't
+            reported yet; `offline`: the box didn't take it within 10 s and never will
+        message: {type: string, description: 'What happened, in words: "Hall light is on."'}
+        state: {oneOf: [{$ref: '#/components/schemas/DeviceState'}, {type: 'null'}], description: The state after}
+        requested_by:
+          type: object
+          required: [kind, id, name]
+          properties:
+            kind: {type: string, enum: [user, account_key, agent]}
+            id: {type: string}
+            name: {type: [string, 'null']}
+        via: {type: string, enum: [console, app, telegram, agent, api]}
+        expires_at: {type: [string, 'null'], format: date-time, description: When a request waiting for a person is refused}
+        decided_by: {type: [string, 'null'], description: The person who confirmed or refused it}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: [string, 'null'], format: date-time}
     ExportResponse:
       type: object
       required: [export_id, status]

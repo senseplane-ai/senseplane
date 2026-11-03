@@ -185,6 +185,33 @@ export function ttsConfigFromEnv(env = process.env): TtsConfig | undefined {
 
 export class TtsError extends Error {}
 
+/** The largest answer taken from the speech service (30 s of 48 kHz stereo WAV is under 6 MB). */
+export const MAX_TTS_BYTES = 10 * 1024 * 1024;
+
+/** Reads a response body, giving up (and cancelling it) past `max` bytes. */
+async function readCapped(res: Response, max: number): Promise<Buffer> {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (declared > max) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new TtsError(`the speech service's answer is larger than ${max / 1024 / 1024} MB`);
+  }
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new TtsError(`the speech service's answer is larger than ${max / 1024 / 1024} MB`);
+    }
+    parts.push(value);
+  }
+  return Buffer.concat(parts);
+}
+
 /** Text to mono PCM through POST {baseUrl}/audio/speech. */
 export async function synthesize(cfg: TtsConfig, text: string): Promise<Pcm> {
   let res: Response;
@@ -199,8 +226,9 @@ export async function synthesize(cfg: TtsConfig, text: string): Promise<Pcm> {
     throw new TtsError(`the speech service couldn't be reached (${(err as Error).message})`);
   }
   if (!res.ok) throw new TtsError(`the speech service answered ${res.status}`);
+  const body = await readCapped(res, MAX_TTS_BYTES);
   try {
-    return parseWav(Buffer.from(await res.arrayBuffer()));
+    return parseWav(body);
   } catch (err) {
     throw new TtsError(`the speech service's audio couldn't be read: ${(err as Error).message}`);
   }

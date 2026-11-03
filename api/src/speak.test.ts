@@ -40,6 +40,17 @@ function fakeTts() {
     const body = JSON.parse(String(init?.body ?? "{}"));
     asked.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), body });
     if (String(url) !== "http://tts.test/v1/audio/speech" || body.response_format !== "wav") return new Response("no", { status: 400 });
+    if (/HUGE/.test(String(body.input))) {
+      // A misbehaving service: 11 MB, streamed with no length.
+      let sent = 0;
+      return new Response(new ReadableStream({
+        pull(c) {
+          if (sent >= 11 * 1024 * 1024) return c.close();
+          sent += 1024 * 1024;
+          c.enqueue(new Uint8Array(1024 * 1024));
+        },
+      }));
+    }
     return new Response(new Uint8Array(encodeWav({ rate: RATE, samples: speechFor(String(body.input)) })), { headers: { "content-type": "audio/wav" } });
   }) as typeof fetch;
   return { asked, fetch: fetchImpl };
@@ -233,6 +244,15 @@ describe("talk-back", () => {
     expect(long.statusCode).toBe(400);
     expect(long.json().error).toMatchObject({ code: "message_too_long", details: { message: { status: "refused" } } });
     expect(long.json().error.message).toMatch(/the most is 30/);
+  });
+
+  it("gives up on a speech service answer larger than 10 MB", async () => {
+    await clear();
+    const r = await speak(owner, phone, "HUGE answer please");
+    expect(r.statusCode).toBe(503);
+    expect(r.json().error).toMatchObject({ code: "service_unavailable", details: { message: { status: "failed" } } });
+    expect(r.json().error.message).toMatch(/larger than 10 MB/);
+    await clear();
   });
 
   it("speaks in one plainly synthetic voice: choosing or cloning a voice is refused", async () => {

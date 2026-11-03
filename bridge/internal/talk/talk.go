@@ -219,6 +219,22 @@ func play(ctx context.Context, o Options, sp Speaker, started time.Time, packets
 		res.Talked = time.Duration(written) * time.Second / rate
 		return res, nil
 	}
+	// The person let go: what is buffered (at most the lag bound) is still said, at its pace, then the end.
+	released := func() (Result, error) {
+		for playing && len(pcm) >= frame {
+			select {
+			case <-ctx.Done():
+				return end(EndReleased)
+			case <-sp.Gone():
+				return end(EndCamera)
+			case <-tickC:
+			}
+			if err := writeFrame(sp, &pcm, silence, &written); err != nil {
+				return end(EndCamera)
+			}
+		}
+		return end(EndReleased)
+	}
 	check := time.NewTicker(250 * time.Millisecond)
 	defer check.Stop()
 	defer func() {
@@ -236,9 +252,9 @@ func play(ctx context.Context, o Options, sp Speaker, started time.Time, packets
 		case <-sp.Gone():
 			return end(EndCamera)
 		case <-closed:
-			return end(EndReleased)
+			return released()
 		case <-trackEnded:
-			return end(EndReleased)
+			return released()
 		case <-firstWait.C:
 			if !haveSeq {
 				return res, errors.New("no audio came from the person talking")

@@ -77,7 +77,9 @@ func talkBox(t *testing.T, f *talkAPI, o Options) *Bridge {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	o.Dial = func(context.Context, string, string) (relay.Publisher, error) { return &pub{done: make(chan error)}, nil }
+	o.Dial = func(context.Context, string, string) (relay.Publisher, error) {
+		return &pub{done: make(chan error)}, nil
+	}
 	b := New(o)
 	ctx, cancel := context.WithCancel(context.Background())
 	b.sync(ctx)

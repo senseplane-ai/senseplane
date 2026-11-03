@@ -35,6 +35,7 @@ type live struct {
 	mu         sync.Mutex
 	states     map[string]State
 	fahrenheit bool // Home Assistant's unit system is imperial
+	unitKnown  bool // get_config said which; without it a thermostat is never set
 }
 
 func (l *live) set(s State) {
@@ -135,11 +136,26 @@ func (cl *Client) Control(ctx context.Context, entityID string, c control.Comman
 	if err != nil {
 		return err
 	}
+	if c.Action == control.SetTemperature && !l.unitKnown {
+		return errors.New("Home Assistant didn't say which temperature unit it uses, so the thermostat wasn't changed")
+	}
 	service, data, err := serviceFor(domain, c, l.fahrenheit)
 	if err != nil {
 		return err
 	}
 	return cl.CallService(ctx, domain, service, data, entityID)
+}
+
+// toFahrenheit is a setting in °C as Home Assistant's °F, to the half degree, rounded towards the safe
+// range so that 28 °C never becomes more than 28 °C (nor 10 °C less than 10 °C).
+func toFahrenheit(c float64) float64 {
+	f := math.Round((c*9/5+32)*2) / 2
+	if back := (f - 32) * 5 / 9; back > control.MaxTemperature {
+		f = math.Floor((control.MaxTemperature*9/5+32)*2) / 2
+	} else if back < control.MinTemperature {
+		f = math.Ceil((control.MinTemperature*9/5+32)*2) / 2
+	}
+	return f
 }
 
 // serviceFor is the service (and its data) that does an action on an entity of this domain.
@@ -176,7 +192,7 @@ func serviceFor(domain string, c control.Command, fahrenheit bool) (string, map[
 		}
 		t := c.Value
 		if fahrenheit {
-			t = math.Round((t*9/5+32)*2) / 2
+			t = toFahrenheit(t)
 		} else {
 			t = math.Round(t*10) / 10
 		}

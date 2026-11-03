@@ -5,6 +5,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,12 +42,32 @@ func (b *Bridge) runCommands(ctx context.Context) {
 	}
 }
 
+// RunByGrace is how far past its run_by a command still runs, for clocks that disagree (the API's Date
+// header has whole seconds).
+const RunByGrace = 5 * time.Second
+
+// late says whether a command arrived after its run_by deadline, on the API's clock: a device command the
+// API already answered "the box is offline" for must never run (ADR 0067).
+func late(c api.Command, now time.Time) bool {
+	s, _ := c.Args["run_by"].(string)
+	if s == "" {
+		return false
+	}
+	runBy, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return true // a deadline it can't read: don't guess
+	}
+	return now.Add(c.Skew).After(runBy.Add(RunByGrace))
+}
+
 func (b *Bridge) runCommand(ctx context.Context, c api.Command) {
 	h := b.o.Commands[c.Kind]
 	var result map[string]any
 	var err error
 	if h == nil {
 		err = fmt.Errorf("this box can't do %s", c.Kind)
+	} else if late(c, time.Now()) {
+		err = errors.New("it reached the box too late to run safely, so it wasn't run; ask again")
 	} else {
 		b.o.Log.Info("running a command", "kind", c.Kind, "id", c.ID)
 		result, err = h(ctx, c.Args)

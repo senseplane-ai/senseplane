@@ -19,7 +19,12 @@ import (
 // A hall light that turns on, a switch that ignores its service, a light whose
 // service fails, and a Fahrenheit thermostat.
 func controlledHA(t *testing.T) (*fakeHA, *Client, *record, func()) {
-	f := &fakeHA{t: t, token: "llat", subs: map[*websocket.Conn]map[string]int{}, config: map[string]any{"unit_system": map[string]any{"temperature": "°F"}}}
+	return controlledHAWith(t, map[string]any{"unit_system": map[string]any{"temperature": "°F"}})
+}
+
+// controlledHAWith is controlledHA with Home Assistant's own get_config answer (nil: it says nothing).
+func controlledHAWith(t *testing.T, config map[string]any) (*fakeHA, *Client, *record, func()) {
+	f := &fakeHA{t: t, token: "llat", subs: map[*websocket.Conn]map[string]int{}, config: config}
 	f.extra = []map[string]any{
 		{"entity_id": "light.hall", "state": "off", "attributes": map[string]any{"friendly_name": "Hall light", "supported_color_modes": []string{"brightness"}}, "last_updated": "2026-10-16T08:00:00Z"},
 		{"entity_id": "switch.stuck", "state": "off", "attributes": map[string]any{}, "last_updated": "2026-10-16T08:00:00Z"},
@@ -156,6 +161,33 @@ func TestControls(t *testing.T) {
 	} {
 		if got := Controls(c.id, c.attrs); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("Controls(%s) = %v, want %v", c.id, got, c.want)
+		}
+	}
+}
+
+func TestAThermostatIsNeverSetWithoutKnowingTheUnit(t *testing.T) {
+	f, cl, _, stop := controlledHAWith(t, nil)
+	defer stop()
+	waitFor(t, "the session", func() bool { _, err := cl.Raw("climate.hall"); return err == nil })
+	err := cl.Control(context.Background(), "climate.hall", control.Command{Action: control.SetTemperature, Value: 21})
+	if err == nil || !strings.Contains(err.Error(), "temperature unit") {
+		t.Fatalf("unit unknown: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if c["service"] == "set_temperature" {
+			t.Fatal("the thermostat was set without knowing the unit")
+		}
+	}
+}
+
+func TestFahrenheitSettingsStayInsideTheSafeRange(t *testing.T) {
+	for _, c := range []struct{ in, want float64 }{{28, 82}, {10, 50}, {21, 70}, {27.5, 81.5}, {10.5, 51}} {
+		got := toFahrenheit(c.in)
+		back := (got - 32) * 5 / 9
+		if got != c.want || back > control.MaxTemperature || back < control.MinTemperature {
+			t.Errorf("%v °C → %v °F (%.2f °C), want %v °F", c.in, got, back, c.want)
 		}
 	}
 }

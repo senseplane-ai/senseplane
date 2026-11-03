@@ -165,6 +165,8 @@ type Client struct {
 	Base  string
 	Token string
 	HTTP  *http.Client
+	// date, when set, gets the response's Date header (the API's clock).
+	date *time.Time
 }
 
 // New returns a client with a 15 s timeout.
@@ -196,6 +198,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return err
 	}
 	defer res.Body.Close()
+	if c.date != nil {
+		if t, err := http.ParseTime(res.Header.Get("Date")); err == nil {
+			*c.date = t
+		}
+	}
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 	if res.StatusCode >= 300 {
 		var env struct {
@@ -305,6 +312,8 @@ type Command struct {
 	ID   string         `json:"id"`
 	Kind string         `json:"kind"`
 	Args map[string]any `json:"args"`
+	// Skew is how far the API's clock is ahead of this box's when the command arrived (from its Date header; 0 if unknown).
+	Skew time.Duration `json:"-"`
 }
 
 // Commands waits up to `wait` for work and takes what is there.
@@ -314,8 +323,16 @@ func (c *Client) Commands(ctx context.Context, wait time.Duration) ([]Command, e
 	}
 	hc := *c
 	hc.HTTP = &http.Client{Timeout: wait + 15*time.Second}
+	var date time.Time
+	hc.date = &date
 	if err := hc.do(ctx, http.MethodGet, fmt.Sprintf("/v1/bridge/commands?wait=%d", int(wait.Seconds())), nil, &out); err != nil {
 		return nil, err
+	}
+	if !date.IsZero() {
+		skew := date.Sub(time.Now())
+		for i := range out.Data {
+			out.Data[i].Skew = skew
+		}
 	}
 	return out.Data, nil
 }

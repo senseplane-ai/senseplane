@@ -301,7 +301,7 @@ func session(ctx context.Context, o Options, h Handler) error {
 	if raw, err := c.call(sctx, map[string]any{"type": "get_config"}); err == nil {
 		_ = json.Unmarshal(raw, &config)
 	}
-	l := &live{c: c, states: map[string]State{}, fahrenheit: strings.Contains(config.UnitSystem.Temperature, "F")}
+	l := &live{c: c, states: map[string]State{}, fahrenheit: strings.Contains(config.UnitSystem.Temperature, "F"), unitKnown: config.UnitSystem.Temperature != ""}
 	o.Log.Info("connected to Home Assistant", "entities", len(states))
 	h.Connected(true)
 	defer h.Connected(false)

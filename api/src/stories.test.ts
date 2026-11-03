@@ -8,7 +8,7 @@
 // and respects each agent's grants (video on every camera, audio only where
 // granted, never for a blurred-only agent).
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -19,6 +19,12 @@ import { createApi, type SenseplaneApi, sweepOnce } from "./index.js";
 import { handleMediaEvent } from "./indexer.js";
 import { createKeyRing, encryptSegment, envKeyWrapper, segmentIV, segmentKey } from "./keys.js";
 import { renderStory } from "./stories.js";
+import { claim } from "./claims.js";
+import { hashApiKey } from "./data/access.js";
+import { sweepWorkDirs } from "./ffmpeg.js";
+import { createMediaGuard } from "./media-access.js";
+import { createKeyRefSealer } from "./playback.js";
+import { reencryptKeys } from "./rotation.js";
 import { createObjectStorage, encryptingStorage, type StorageConfig } from "./storage.js";
 import { createTestDatabase } from "./testdb.js";
 
@@ -263,23 +269,129 @@ describe("multi-camera stories", () => {
     expect((await call(agent, "GET", "/v1/stories")).json().data.map((x: { id: string }) => x.id)).toContain(done.id);
   }, 120_000);
 
-  it("fast mode copies the recordings untouched, and deleting a story removes its objects", async () => {
+  /** A fast story of the nursery's latest recording (recorded again by the test above). */
+  const fastStory = async (key: string) => {
     const src = cams.nursery!;
     const seg = await api.data.withAccount(acc, (s) => s.db.selectFrom("segments").selectAll().where("source_id", "=", src).orderBy("start_at").execute());
     const from = new Date(seg[0]!.start_at).getTime();
-    const created = await call(owner, "POST", "/v1/stories", { mode: "fast", moments: [{ source: src, from: new Date(from).toISOString(), to: new Date(from + 5000).toISOString() }] });
-    const done = await render(created.json().id);
+    const created = await call(key, "POST", "/v1/stories", { mode: "fast", moments: [{ source: src, from: new Date(from).toISOString(), to: new Date(from + 5000).toISOString() }] });
+    expect(created.statusCode).toBe(202);
+    await renderStory(deps(), acc, created.json().id);
+    return (await call(key, "GET", `/v1/stories/${created.json().id}`)).json();
+  };
+
+  it("fast mode copies the recordings without re-encoding, under the story's own key, and deleting it removes its objects", async () => {
+    const done = await fastStory(owner);
     expect(done).toMatchObject({ status: "ready", mode: "fast" });
     const rows = await api.data.withAccount(acc, (s) => s.db.selectFrom("story_segments").selectAll().where("story_id", "=", done.id).execute());
-    expect(rows.every((r) => r.key_source === src)).toBe(true);
-    const { seconds, streams } = await decode(origin + new URL(done.playback_url).pathname);
+    expect(rows.every((r) => r.key_source === done.id)).toBe(true);
+    // Its link hands out the story's key, never the camera's.
+    const p = new URL(done.playback_url).pathname;
+    const list = (await api.public.inject(p)).body;
+    const keyUri = list.match(/URI="(k\/[^"]+)"/)![1]!;
+    const served = (await api.public.inject(p.replace(/index\.m3u8$/, "") + keyUri)).rawPayload;
+    const dk = await ring().get(acc, rows[0]!.enc_version!);
+    expect(served.equals(segmentKey(dk!, done.id))).toBe(true);
+    expect(served.equals(segmentKey(dk!, cams.nursery!))).toBe(false);
+    // Only story segments answer on it: a recording's segment id is not a story seq.
+    expect((await api.public.inject(p.replace(/index\.m3u8$/, "") + `k/${rows[0]!.enc_version}-9999.key`)).statusCode).toBe(404);
+    const { seconds, streams } = await decode(origin + p);
     expect(seconds).toBeGreaterThan(3);
     expect(streams).toEqual(expect.arrayContaining(["video", "audio"]));
 
     expect((await call(owner, "DELETE", `/v1/stories/${done.id}`)).statusCode).toBe(204);
     expect((await call(owner, "GET", `/v1/stories/${done.id}`)).statusCode).toBe(404);
-    expect((await api.public.inject(new URL(done.playback_url).pathname)).statusCode).toBe(404);
+    expect((await api.public.inject(p)).statusCode).toBe(404);
+    const left: string[] = [];
+    for await (const k of createObjectStorage(S3).list!(`stories/${acc}/${done.id}/`)) left.push(k);
+    expect(left).toEqual([]);
   }, 120_000);
+
+  it("fast mode for an agent without audio: no key, no audio track", async () => {
+    const agent = await agentWith([{ source_ids: [cams.nursery], senses: ["video"] }]);
+    const done = await fastStory(agent);
+    expect(done.pieces[0].audio).toBe(false);
+    const p = new URL(done.playback_url).pathname;
+    const list = (await api.public.inject(p)).body;
+    expect(list).not.toContain("#EXT-X-KEY");
+    const init = (await api.public.inject(p.replace(/index\.m3u8$/, "") + list.match(/#EXT-X-MAP:URI="([^"]+)"/)![1])).rawPayload;
+    expect(audioTrackIds(init).size).toBe(0);
+    expect((await decode(origin + p)).streams).toEqual(["video"]);
+  }, 120_000);
+
+  it("a link stops working when the agent's grant is taken away", async () => {
+    const agentKey = await agentWith([{ source_ids: [cams.nursery], senses: ["video"] }]);
+    const done = await fastStory(agentKey);
+    const sealer = createKeyRefSealer("guard-test");
+    const guard = createMediaGuard(api.data, sealer, 0); // no cache: the revocation is seen at once
+    const scope = { kind: "story" as const, accountId: acc, storyId: done.id, kr: sealer.seal(hashApiKey(agentKey)) };
+    await expect(guard(scope)).resolves.toMatchObject({ blurredOnly: false });
+    const agentId = (await api.data.principalForKeyHash(hashApiKey(agentKey)))!.agentId!;
+    await api.data.withAccount(acc, (s) => s.db.deleteFrom("grants").where("agent_id", "=", agentId).execute());
+    await expect(guard(scope)).rejects.toMatchObject({ status: 403 });
+  }, 120_000);
+
+  it("key rotation re-encrypts story segments, and the story keeps playing", async () => {
+    const done = await fastStory(owner);
+    const before = await api.data.withAccount(acc, (s) => s.db.selectFrom("story_segments").select("enc_version").where("story_id", "=", done.id).execute());
+    expect((await call(owner, "POST", "/v1/account/keys/rotate")).statusCode).toBe(202);
+    const wrapper = envKeyWrapper(MASTER);
+    await reencryptKeys({ data: api.data, storage: createObjectStorage(S3), keys: createKeyRing(api.data, wrapper), wrapper }, 60_000);
+    const after = await api.data.withAccount(acc, (s) => s.db.selectFrom("story_segments").select("enc_version").where("story_id", "=", done.id).execute());
+    expect(after.every((r) => r.enc_version! > before[0]!.enc_version!)).toBe(true);
+    const fresh = (await call(owner, "GET", `/v1/stories/${done.id}`)).json();
+    expect((await decode(origin + new URL(fresh.playback_url).pathname)).seconds).toBeGreaterThan(3);
+  }, 120_000);
+
+  it("only one process holds a render; a lost claim writes and deletes nothing; claims stop after three attempts", async () => {
+    const src = cams.nursery!;
+    const seg = await api.data.withAccount(acc, (s) => s.db.selectFrom("segments").selectAll().where("source_id", "=", src).orderBy("start_at").execute());
+    const from = new Date(seg.at(-1)!.start_at).getTime() - 4000;
+    const make = async () => (await call(owner, "POST", "/v1/stories", { mode: "fast", moments: [{ source: src, from: new Date(from).toISOString(), to: new Date(from + 3000).toISOString() }] })).json().id as string;
+    const id = await make();
+    const [a, b] = await Promise.all([claim(api.data, "stories", 10), claim(api.data, "stories", 10)]);
+    const mine = [...a, ...b].filter((x) => x.id === id);
+    expect(mine).toHaveLength(1); // two processes, one claim
+    const first = mine[0]!;
+    // Its lease runs out (the process hangs); another takes it over with a new token.
+    await api.data.withAccount(acc, (s) => s.db.updateTable("stories").set({ claimed_until: new Date(Date.now() - 1000) }).where("id", "=", id).execute());
+    const second = (await claim(api.data, "stories", 10)).find((x) => x.id === id)!;
+    expect(second.token).not.toBe(first.token);
+    await renderStory(deps(), acc, id, undefined, second);
+    const ready = await api.data.withAccount(acc, (s) => s.db.selectFrom("stories").selectAll().where("id", "=", id).executeTakeFirstOrThrow());
+    expect(ready.status).toBe("ready");
+    const objects = async () => {
+      const out: string[] = [];
+      for await (const k of createObjectStorage(S3).list!(`stories/${acc}/${id}/`)) out.push(k);
+      return out.sort();
+    };
+    const kept = await objects();
+    expect(kept.length).toBeGreaterThan(1);
+    // The first process wakes up: its claim is gone, so it renders, writes and deletes nothing of the ready story.
+    await renderStory(deps(), acc, id, undefined, first);
+    expect(await objects()).toEqual(kept);
+    expect((await api.data.withAccount(acc, (s) => s.db.selectFrom("stories").selectAll().where("id", "=", id).executeTakeFirstOrThrow())).ready_at).toEqual(ready.ready_at);
+
+    // A story whose process keeps dying is given up after three claims.
+    const doomed = await make();
+    await api.data.withAccount(acc, (s) => s.db.updateTable("stories").set({ attempts: 3, claimed_until: new Date(Date.now() - 1000), status: "rendering" }).where("id", "=", doomed).execute());
+    expect((await claim(api.data, "stories", 10)).find((x) => x.id === doomed)).toBeUndefined();
+    expect((await call(owner, "GET", `/v1/stories/${doomed}`)).json()).toMatchObject({ status: "failed" });
+  }, 120_000);
+
+  it("sweeps work dirs a crashed process left, and keeps ones in use", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sp-sweep-"));
+    const old = join(dir, "sp-story-old");
+    const fresh = join(dir, "sp-follow-new");
+    mkdirSync(old);
+    mkdirSync(fresh);
+    writeFileSync(join(old, "piece.mp4"), "x");
+    utimesSync(old, new Date(Date.now() - 3600_000), new Date(Date.now() - 3600_000));
+    mkdirSync(join(dir, "unrelated"));
+    utimesSync(join(dir, "unrelated"), new Date(0), new Date(0));
+    expect(await sweepWorkDirs(20 * 60_000, dir)).toBe(1);
+    expect(readdirSync(dir).sort()).toEqual(["sp-follow-new", "unrelated"]);
+  });
 
   it("checks its limits", async () => {
     const many = Array.from({ length: 21 }, (_, i) => ({ source: cams.hall, from: at(i * 10_000), to: at(i * 10_000 + 1000) }));

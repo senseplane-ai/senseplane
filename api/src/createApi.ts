@@ -54,6 +54,7 @@ import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { makeStory, registerStoryRoutes } from "./routes/stories.js";
 import { startStoryWorker, toStory } from "./stories.js";
+import { sweepWorkDirs } from "./ffmpeg.js";
 import { registerFollowRoutes } from "./routes/follows.js";
 import { startFollowWorker } from "./follow.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
@@ -565,10 +566,15 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     if (options.workers !== false) stoppers.push(startClipWorker(data, storage, app.log));
     // Stories (ADR 0070): rendered by a background job, played through the same signed links.
     registerStoryRoutes(app, { data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900, keyRefs, bus, audit });
-    if (options.workers !== false) stoppers.push(startStoryWorker({ data, storage, keys: keyRing, bus }, app.log));
+    if (options.workers !== false) {
+      // Work dirs a process that died mid-render left behind (ADR 0070): nothing decrypted may linger.
+      void sweepWorkDirs().then((n) => n && app.log.info({ removed: n }, "swept leftover story and follow work dirs"), (err) => app.log.warn({ err }, "work dir sweep failed"));
+      stoppers.push(startStoryWorker({ data, storage, keys: keyRing, bus }, app.log));
+    }
     // Following an object or a pet (ADR 0070): a background job reads the recordings, a brain looks.
     registerFollowRoutes(app, { data, storage, keys: keyRing, bus, audit, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900, keyRefs });
-    if (options.workers !== false) stoppers.push(startFollowWorker({ data, storage, keys: keyRing, bus, audit }, app.log));
+    const checksUsedUp = (id: string) => over(id, (m) => m === "ai_checks");
+    if (options.workers !== false) stoppers.push(startFollowWorker({ data, storage, keys: keyRing, bus, audit, checksUsedUp }, app.log));
   }
   if (options.workers !== false) {
     // Housekeeping, each job once per interval across every API process (ADR 0058).

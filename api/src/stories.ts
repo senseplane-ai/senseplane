@@ -9,8 +9,8 @@
 // of the story's own (ADR 0066), so it outlives the raw recordings like a
 // saved clip. Fast mode copies the recorded segments untouched instead: no
 // labels, no cards, no re-encoding.
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyBaseLogger, FastifyRequest } from "fastify";
 import { type Selectable, sql } from "kysely";
@@ -21,11 +21,12 @@ import type { DataAccess } from "./data/access.js";
 import { newId } from "./data/ids.js";
 import type { Database, StoriesTable, StoryPiecesTable } from "./data/schema.js";
 import { ApiError } from "./errors.js";
-import { ffmpeg, h264Encoder } from "./ffmpeg.js";
-import { audioTrackIds } from "./fmp4.js";
+import { type Claimed, LEASE_S, MAX_ATTEMPTS, claim, hold } from "./claims.js";
+import { ffmpeg, h264Encoder, workDir } from "./ffmpeg.js";
 import type { ApiBus } from "./indexer.js";
 import { startClaimLoop } from "./jobs.js";
-import { type KeyRing, decryptSegment, encryptSegment, segmentIV, segmentKey } from "./keys.js";
+import { type KeyRing, encryptSegment, segmentIV, segmentKey } from "./keys.js";
+import { type Run, runBytes, runsOf, segmentDecrypter } from "./recordings.js";
 import { wall } from "./local-time.js";
 import { segmentsIn } from "./routes/playback.js";
 import { type ObjectStorage, readObject } from "./storage.js";
@@ -50,8 +51,6 @@ const SEARCH_MIN_SCORE = 0.25;
 const WIDTH = 1280;
 const HEIGHT = 720;
 const FPS = 25;
-const LEASE_S = 900;
-const MAX_ATTEMPTS = 3;
 
 export type StoryRow = Selectable<StoriesTable>;
 export type PieceRow = Selectable<StoryPiecesTable>;
@@ -230,74 +229,6 @@ export function toStory(row: StoryRow, pieces: PieceRow[], playback?: { url: str
   };
 }
 
-// --- reading recordings ---------------------------------------------------------
-
-/** A stretch of one recording session as a local fMP4 file (its init and decrypted segments). */
-export interface LocalRun {
-  file: string;
-  start: number;
-  end: number;
-  hasAudio: boolean;
-}
-
-/**
- * Writes the recorded segments of [from, to) on a camera to local files, one per recorder session
- * (init segment), decrypted (ADR 0066). Used by story rendering and by object following.
- */
-export async function recordingToFiles(deps: Pick<StoryDeps, "data" | "storage" | "keys">, accountId: string, sourceId: string, from: number, to: number, dir: string, name: string): Promise<LocalRun[]> {
-  const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, sourceId, from, to));
-  return segmentsToFiles(deps, accountId, sourceId, rows, dir, name);
-}
-
-type SegmentRow = Awaited<ReturnType<typeof segmentsIn>>[number];
-
-/** Recorded segments (in time order) as local files, one per stretch without a break. */
-export async function segmentsToFiles(deps: Pick<StoryDeps, "storage" | "keys">, accountId: string, sourceId: string, rows: SegmentRow[], dir: string, name: string): Promise<LocalRun[]> {
-  const runs: { init: string; rows: SegmentRow[] }[] = [];
-  for (const r of rows) {
-    const last = runs.at(-1);
-    const prevEnd = last ? new Date(last.rows.at(-1)!.start_at).getTime() + last.rows.at(-1)!.duration_ms : 0;
-    // A new session, or a gap in the recording, starts a new file (timestamps in one file must run on).
-    if (last && last.init === r.init_key && new Date(r.start_at).getTime() - prevEnd < 1500) last.rows.push(r);
-    else runs.push({ init: r.init_key, rows: [r] });
-  }
-  const keyCache = new Map<number, Buffer>();
-  const keyFor = async (version: number) => {
-    let k = keyCache.get(version);
-    if (!k) {
-      const dk = await deps.keys.get(accountId, version);
-      if (!dk) throw new Error("this recording's key no longer exists");
-      k = segmentKey(dk, sourceId);
-      keyCache.set(version, k);
-    }
-    return k;
-  };
-  const out: LocalRun[] = [];
-  for (const [i, run] of runs.entries()) {
-    const init = await readObject(deps.storage, run.init);
-    const parts: Buffer[] = [init];
-    for (let j = 0; j < run.rows.length; j += 8) {
-      const batch = await Promise.all(run.rows.slice(j, j + 8).map(async (r) => {
-        const body = await readObject(deps.storage, r.key);
-        return r.enc_version !== null && r.enc_iv ? decryptSegment(await keyFor(r.enc_version), r.enc_iv, body) : body;
-      }));
-      parts.push(...batch);
-    }
-    const file = join(dir, `${name}-${i}.mp4`);
-    await writeFile(file, Buffer.concat(parts));
-    const first = run.rows[0]!;
-    const last = run.rows.at(-1)!;
-    let hasAudio = false;
-    try {
-      hasAudio = audioTrackIds(init).size > 0;
-    } catch {
-      hasAudio = false;
-    }
-    out.push({ file, start: new Date(first.start_at).getTime(), end: new Date(last.start_at).getTime() + last.duration_ms, hasAudio });
-  }
-  return out;
-}
-
 // --- rendering ------------------------------------------------------------------
 
 const s3 = (ms: number) => (ms / 1000).toFixed(3);
@@ -309,16 +240,24 @@ function clock(at: number, timeZone: string): string {
   return `${w.d} ${months[w.m - 1]} ${p(w.hh)}:${p(w.mm)}:${p(w.ss)}`;
 }
 
-/** One rendered stretch: 1280×720, 25 fps, H.264, and AAC stereo when the story has sound. */
-async function renderRun(run: LocalRun, from: number, to: number, label: string, timeText: string, withAudio: boolean, audio: boolean, dir: string, out: string) {
+interface Ctx {
+  deps: StoryDeps;
+  accountId: string;
+  sourceId: string;
+  signal: AbortSignal;
+}
+
+/** One rendered stretch: 1280×720, 25 fps, H.264, and AAC stereo when the story has sound. The recording comes in on a pipe. */
+async function renderRun(c: Ctx, run: Run, from: number, to: number, label: string, timeText: string, withAudio: boolean, audio: boolean, out: string) {
   const bar = captionBar(WIDTH, label, timeText);
   const barFile = `${out}.bar.rgba`;
   await writeFile(barFile, bar.data);
   const offset = Math.max(0, from - run.start);
   const dur = Math.min(to, run.end) - Math.max(from, run.start);
   const useAudio = withAudio && audio && run.hasAudio;
-  const args = ["-y", "-ss", s3(offset), "-t", s3(dur), "-i", run.file, "-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${WIDTH}x${bar.height}`, "-i", barFile];
-  if (withAudio && !useAudio) args.push("-f", "lavfi", "-t", s3(dur), "-i", "anullsrc=r=48000:cl=stereo");
+  // A pipe can't be seeked: the piece is cut on the output side (decoded from the run's start, frames before it dropped).
+  const args = ["-y", "-f", "mp4", "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${WIDTH}x${bar.height}`, "-i", barFile];
+  if (withAudio && !useAudio) args.push("-f", "lavfi", "-t", s3(offset + dur), "-i", "anullsrc=r=48000:cl=stereo");
   const filter = [
     `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${FPS}[v]`,
     "[1:v]loop=loop=-1:size=1:start=0[bar]",
@@ -327,13 +266,13 @@ async function renderRun(run: LocalRun, from: number, to: number, label: string,
   if (useAudio) filter.push("[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a]");
   args.push("-filter_complex", filter.join(";"), "-map", "[out]");
   if (withAudio) args.push("-map", useAudio ? "[a]" : "2:a", "-c:a", "aac", "-b:a", "96k");
-  args.push(...(await h264Encoder()), "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", s3(dur), out);
-  await ffmpeg(args, 10 * 60_000);
+  args.push(...(await h264Encoder()), "-pix_fmt", "yuv420p", "-r", String(FPS), "-ss", s3(offset), "-t", s3(dur), out);
+  await ffmpeg(args, { timeoutMs: 10 * 60_000, input: runBytes(c.deps, c.accountId, c.sourceId, run), signal: c.signal });
   await rm(barFile, { force: true });
   return dur;
 }
 
-async function renderCard(big: string, small: string, withAudio: boolean, out: string) {
+async function renderCard(big: string, small: string, withAudio: boolean, out: string, signal: AbortSignal) {
   const card = gapCard(WIDTH, HEIGHT, big, small);
   const file = `${out}.rgba`;
   await writeFile(file, card.data);
@@ -343,59 +282,80 @@ async function renderCard(big: string, small: string, withAudio: boolean, out: s
   args.push("-filter_complex", `[0:v]loop=loop=${frames - 1}:size=1:start=0,setsar=1,format=yuv420p[out]`, "-map", "[out]");
   if (withAudio) args.push("-map", "1:a", "-c:a", "aac", "-b:a", "96k");
   args.push(...(await h264Encoder()), "-pix_fmt", "yuv420p", "-r", String(FPS), "-t", s3(STORY_LIMITS.gapCardMs), out);
-  await ffmpeg(args, 60_000);
+  await ffmpeg(args, { timeoutMs: 60_000, signal });
   await rm(file, { force: true });
 }
 
 interface StoredSegment { seq: number; piece: number | null; key: string; init_key: string; start_at: Date; duration_ms: number; key_source: string; strip_audio: boolean; enc_version: number | null; enc_iv: Buffer | null }
 
-/** Renders (or, in fast mode, copies) a story's segments; returns what to record. */
-async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], log: FastifyBaseLogger | undefined) {
+/** A failure that retrying won't fix. */
+export class StoryError extends Error {}
+
+/**
+ * Renders (or, in fast mode, copies) a story's segments under this attempt's own prefix; returns what to record.
+ * Every segment is encrypted with the story's own key (ADR 0066), so its links never hand out a camera's key,
+ * and each attempt's object keys (so IVs) are its own.
+ */
+async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], prefix: string, signal: AbortSignal, log: FastifyBaseLogger | undefined) {
   const accountId = story.account_id;
-  const prefix = `stories/${accountId}/${story.id}/`;
-  // A previous attempt may have left objects behind.
-  await deps.storage.deletePrefix(prefix);
   const segments: StoredSegment[] = [];
   const recorded = new Map<number, { recorded_ms: number; offset_ms: number }>();
   const created = new Date(story.created_at).getTime();
+  const dk = await deps.keys.current(accountId);
+  const storyKey = segmentKey(dk.key, story.id);
+  const seal = async (objectKey: string, plain: Buffer) => {
+    const iv = segmentIV(dk.key, objectKey);
+    const sealed = encryptSegment(storyKey, iv, plain);
+    await deps.storage.put(objectKey, sealed, "video/iso.segment");
+    return { iv, bytes: sealed.length };
+  };
+  const stop = () => {
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("stopped");
+  };
 
   if (story.mode === "fast") {
+    // The recordings as they are (no re-encoding), decrypted and encrypted again under the story's key.
     let offset = 0;
     let bytes = 0;
     for (const p of pieces) {
       const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, p.source_id, new Date(p.from_at).getTime(), new Date(p.to_at).getTime()));
       recorded.set(p.seq, { recorded_ms: rows.reduce((a, r) => a + r.duration_ms, 0), offset_ms: offset });
+      const decrypt = segmentDecrypter(deps, accountId, p.source_id);
       const inits = new Map<string, string>();
       for (const r of rows) {
+        stop();
         if (!inits.has(r.init_key)) {
           const to = `${prefix}init-${p.seq}-${inits.size}.mp4`;
-          await deps.storage.copy(r.init_key, to);
+          await deps.storage.put(to, await readObject(deps.storage, r.init_key), "video/mp4");
           inits.set(r.init_key, to);
         }
         const seq = segments.length;
         const key = `${prefix}${String(seq).padStart(5, "0")}.m4s`;
-        await deps.storage.copy(r.key, key);
-        // The same ciphertext as the recording: its camera's key and the same IV.
+        const { iv, bytes: n } = await seal(key, await decrypt(r, await readObject(deps.storage, r.key)));
         segments.push({ seq, piece: p.seq, key, init_key: inits.get(r.init_key)!, start_at: new Date(r.start_at), duration_ms: r.duration_ms,
-          key_source: p.source_id, strip_audio: !p.audio, enc_version: r.enc_version, enc_iv: r.enc_iv });
+          key_source: story.id, strip_audio: !p.audio, enc_version: dk.version, enc_iv: iv });
         offset += r.duration_ms;
-        bytes += Number(r.bytes);
+        bytes += n;
       }
     }
     return { segments, recorded, hasAudio: pieces.some((p) => p.audio), bytes };
   }
 
-  const dir = await mkdtemp(join(tmpdir(), "sp-story-"));
+  const dir = await mkdtemp(join(workDir(), "sp-story-"));
   try {
     const tz = (await deps.data.withAccount(accountId, (s) => s.account.get()))?.time_zone ?? "UTC";
-    // Fetch every piece first: whether the story has sound depends on all of them.
-    const runs = new Map<number, LocalRun[]>();
-    for (const p of pieces) runs.set(p.seq, await recordingToFiles(deps, accountId, p.source_id, new Date(p.from_at).getTime(), new Date(p.to_at).getTime(), dir, `p${p.seq}`));
+    // Every piece's runs first (only the inits are read): whether the story has sound depends on all of them.
+    const runs = new Map<number, Run[]>();
+    for (const p of pieces) {
+      const rows = await deps.data.withAccount(accountId, (s) => segmentsIn(s, p.source_id, new Date(p.from_at).getTime(), new Date(p.to_at).getTime()));
+      runs.set(p.seq, await runsOf(deps, rows));
+    }
     const withAudio = pieces.some((p) => p.audio && runs.get(p.seq)!.some((r) => r.hasAudio));
     const parts: string[] = [];
     let offset = 0;
     let prevEnd: number | undefined;
     for (const p of pieces) {
+      stop();
       const from = new Date(p.from_at).getTime();
       const to = new Date(p.to_at).getTime();
       const pieceRuns = runs.get(p.seq)!.filter((r) => Math.min(to, r.end) - Math.max(from, r.start) >= 200);
@@ -406,7 +366,7 @@ async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], 
       const shownFrom = Math.max(from, pieceRuns[0]!.start);
       if (prevEnd !== undefined && shownFrom - prevEnd > STORY_LIMITS.gapCardAfterMs) {
         const out = join(dir, `card-${p.seq}.mp4`);
-        await renderCard(gapText(shownFrom - prevEnd), `then ${p.source_name}`, withAudio, out);
+        await renderCard(gapText(shownFrom - prevEnd), `then ${p.source_name}`, withAudio, out, signal);
         parts.push(out);
         offset += STORY_LIMITS.gapCardMs;
       }
@@ -414,8 +374,7 @@ async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], 
       let shown = 0;
       for (const [i, run] of pieceRuns.entries()) {
         const out = join(dir, `piece-${p.seq}-${i}.mp4`);
-        const runFrom = Math.max(from, run.start);
-        shown += await renderRun(run, from, to, p.source_name, clock(runFrom, tz), withAudio, p.audio, dir, out);
+        shown += await renderRun({ deps, accountId, sourceId: p.source_id, signal }, run, from, to, p.source_name, clock(Math.max(from, run.start), tz), withAudio, p.audio, out);
         parts.push(out);
       }
       offset += shown;
@@ -431,22 +390,18 @@ async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], 
     // The parts share one format, so they join without encoding again; cut into ~4 s fMP4 segments like a recording.
     await ffmpeg(["-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-f", "hls", "-hls_time", "4", "-hls_playlist_type", "vod",
       "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", join(hls, "seg_%04d.m4s"), "-hls_list_size", "0",
-      join(hls, "index.m3u8")], 10 * 60_000);
+      join(hls, "index.m3u8")], { timeoutMs: 10 * 60_000, signal });
     const playlist = await readFile(join(hls, "index.m3u8"), "utf8");
     const entries = [...playlist.matchAll(/#EXTINF:([\d.]+),\s*\n([^\n#]+)/g)].map((m) => ({ ms: Math.round(Number(m[1]) * 1000), file: m[2]!.trim() }));
     const initKey = `${prefix}init.mp4`;
     await deps.storage.put(initKey, await readFile(join(hls, "init.mp4")), "video/mp4");
-    // Encrypted at rest like the recordings (ADR 0066): HLS AES-128, with a key of the story's own.
-    const dk = await deps.keys.current(accountId);
-    const key = segmentKey(dk.key, story.id);
     let at = created;
     let bytes = 0;
     for (const [seq, e] of entries.entries()) {
+      stop();
       const objectKey = `${prefix}${String(seq).padStart(5, "0")}.m4s`;
-      const iv = segmentIV(dk.key, objectKey);
-      const sealed = encryptSegment(key, iv, await readFile(join(hls, e.file)));
-      await deps.storage.put(objectKey, sealed, "video/iso.segment");
-      bytes += sealed.length;
+      const { iv, bytes: n } = await seal(objectKey, await readFile(join(hls, e.file)));
+      bytes += n;
       segments.push({ seq, piece: null, key: objectKey, init_key: initKey, start_at: new Date(at), duration_ms: e.ms, key_source: story.id, strip_audio: false, enc_version: dk.version, enc_iv: iv });
       at += e.ms;
     }
@@ -457,55 +412,83 @@ async function buildStory(deps: StoryDeps, story: StoryRow, pieces: PieceRow[], 
   }
 }
 
-/** A failure that retrying won't fix. */
-export class StoryError extends Error {}
+/** Claims one story for this caller (tests, tools); the worker uses claim() for due ones. */
+async function claimStory(data: DataAccess, accountId: string, id: string): Promise<Claimed | undefined> {
+  const token = randomUUID();
+  const r = await data.withAccount(accountId, (s) => s.db.updateTable("stories")
+    .set({ claim_token: token, claimed_until: new Date(Date.now() + LEASE_S * 1000), status: "rendering", attempts: sql<number>`attempts + 1` })
+    .where("id", "=", id).where("due_at", "is not", null).where("attempts", "<", MAX_ATTEMPTS)
+    .where((eb) => eb.or([eb("claimed_until", "is", null), eb("claimed_until", "<", new Date())])).executeTakeFirst());
+  return Number(r.numUpdatedRows) ? { id, account_id: accountId, token } : undefined;
+}
 
-/** Renders one claimed story and records the outcome; a failure is retried twice, then the story fails. */
-export async function renderStory(deps: StoryDeps, accountId: string, storyId: string, log?: FastifyBaseLogger): Promise<void> {
+/**
+ * Renders one claimed story and records the outcome, if the claim is still this one's. A failure is retried
+ * (at most MAX_ATTEMPTS claims in all), then the story fails. Without a claim, claims the story first.
+ */
+export async function renderStory(deps: StoryDeps, accountId: string, storyId: string, log?: FastifyBaseLogger, claimed?: Claimed, o: { deadlineMs?: number } = {}): Promise<void> {
+  const c = claimed ?? (await claimStory(deps.data, accountId, storyId));
+  if (!c) return;
   const loaded = await deps.data.withAccount(accountId, async (s) => {
     const story = await s.db.selectFrom("stories").selectAll().where("id", "=", storyId).executeTakeFirst();
     const pieces = story ? await s.db.selectFrom("story_pieces").selectAll().where("story_id", "=", storyId).orderBy("seq").execute() : [];
     return story ? { story, pieces } : undefined;
   });
-  if (!loaded) return;
+  if (!loaded || loaded.story.claim_token !== c.token) return;
   const { story, pieces } = loaded;
+  const held = hold(deps.data, "stories", c, o);
+  // This attempt's objects: its own prefix, so a slower attempt that lost its claim can never overwrite or delete the winner's.
+  const prefix = `stories/${accountId}/${storyId}/${c.token.slice(0, 8)}/`;
   try {
-    const out = await buildStory(deps, story, pieces, log);
+    const out = await buildStory(deps, story, pieces, prefix, held.signal, log);
     if (!out.segments.length) throw new StoryError("nothing was recorded in any of the story's moments");
-    const bytes = out.bytes;
-    await deps.data.withAccount(accountId, async (s) => {
-      // Deleted while it rendered: leave nothing behind.
-      if (!(await s.db.selectFrom("stories").select("id").where("id", "=", storyId).executeTakeFirst())) return;
+    const won = await deps.data.withAccount(accountId, async (s) => {
+      const r = await s.db.updateTable("stories").set({
+        status: "ready", error: null, duration_ms: out.segments.reduce((a, x) => a + x.duration_ms, 0), bytes: out.bytes, has_audio: out.hasAudio,
+        ready_at: new Date(), due_at: null, claimed_until: null, claim_token: null,
+      }).where("id", "=", storyId).where("claim_token", "=", c.token).executeTakeFirst();
+      if (!Number(r.numUpdatedRows)) return false;
       await s.db.deleteFrom("story_segments").where("story_id", "=", storyId).execute();
       for (let i = 0; i < out.segments.length; i += 500) {
         await s.db.insertInto("story_segments").values(out.segments.slice(i, i + 500).map((x) => ({ ...x, story_id: storyId, account_id: accountId }))).execute();
       }
-      for (const [seq, r] of out.recorded) {
-        await s.db.updateTable("story_pieces").set(r).where("story_id", "=", storyId).where("seq", "=", seq).execute();
+      for (const [seq, rec] of out.recorded) {
+        await s.db.updateTable("story_pieces").set(rec).where("story_id", "=", storyId).where("seq", "=", seq).execute();
       }
-      await s.db.updateTable("stories").set({
-        status: "ready", error: null, duration_ms: out.segments.reduce((a, x) => a + x.duration_ms, 0), bytes: bytes, has_audio: out.hasAudio,
-        ready_at: new Date(), due_at: null, claimed_until: null,
-      }).where("id", "=", storyId).execute();
+      return true;
     });
-    if (!(await deps.data.withAccount(accountId, (s) => s.db.selectFrom("stories").select("id").where("id", "=", storyId).executeTakeFirst()))) {
-      await deps.storage.deletePrefix(`stories/${accountId}/${storyId}/`);
+    if (!won) {
+      // Taken over, or deleted, while it rendered: this attempt's objects go, nothing else.
+      await deps.storage.deletePrefix(prefix);
+      return;
     }
+    await deleteOtherAttempts(deps.storage, accountId, storyId, prefix);
   } catch (err) {
+    await deps.storage.deletePrefix(prefix).catch(() => undefined);
     const final = err instanceof StoryError || story.attempts >= MAX_ATTEMPTS;
     log?.warn({ err, story: storyId, attempts: story.attempts }, final ? "story failed" : "story render failed; will retry");
-    if (final) await deps.storage.deletePrefix(`stories/${accountId}/${storyId}/`).catch(() => undefined);
     await deps.data.withAccount(accountId, (s) => s.db.updateTable("stories").set(final
-      ? { status: "failed", error: err instanceof StoryError ? err.message : "the story could not be made", due_at: null, claimed_until: null }
-      : { status: "queued", due_at: new Date(Date.now() + 30_000), claimed_until: null }).where("id", "=", storyId).execute());
+      ? { status: "failed", error: err instanceof StoryError ? err.message : "the story could not be made", due_at: null, claimed_until: null, claim_token: null }
+      : { status: "queued", due_at: new Date(Date.now() + 30_000), claimed_until: null, claim_token: null })
+      .where("id", "=", storyId).where("claim_token", "=", c.token).execute());
+  } finally {
+    held.release();
   }
+}
+
+/** Objects of earlier attempts that failed half way (their rows were never written). */
+async function deleteOtherAttempts(storage: ObjectStorage, accountId: string, storyId: string, keep: string) {
+  if (!storage.list) return;
+  const stale: string[] = [];
+  for await (const key of storage.list(`stories/${accountId}/${storyId}/`)) if (!key.startsWith(keep)) stale.push(key);
+  if (stale.length) await storage.deleteMany(stale);
 }
 
 /** Claims stories waiting to be rendered, one at a time per process (rendering is the API's heaviest work). */
 export function startStoryWorker(deps: StoryDeps, log: FastifyBaseLogger, intervalMs = 3000) {
   return startClaimLoop({
     name: "stories", intervalMs, log, kick: storyKick, batch: 1,
-    claim: async (max) => (await sql<{ id: string; account_id: string }>`select * from claim_stories(${max}, ${LEASE_S})`.execute(deps.data.db())).rows,
-    handle: (r) => renderStory(deps, r.account_id, r.id, log),
+    claim: (max) => claim(deps.data, "stories", max),
+    handle: (r) => renderStory(deps, r.account_id, r.id, log, r),
   });
 }

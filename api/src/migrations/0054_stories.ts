@@ -25,6 +25,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("has_audio", "boolean", (c) => c.notNull().defaultTo(false))
     .addColumn("due_at", "timestamptz", (c) => c.defaultTo(sql`now()`))
     .addColumn("claimed_until", "timestamptz")
+    .addColumn("claim_token", "text")
     .addColumn("attempts", "integer", (c) => c.notNull().defaultTo(0))
     .addColumn("created_at", "timestamptz", (c) => c.notNull().defaultTo(sql`now()`))
     .addColumn("ready_at", "timestamptz")
@@ -75,28 +76,35 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       USING (account_id = ${CURRENT_ACCOUNT}) WITH CHECK (account_id = ${CURRENT_ACCOUNT})`.execute(db);
   }
 
-  // Stories to render, claimed with a lease like event clips (ADR 0058).
-  await sql`CREATE FUNCTION claim_stories(max_rows integer, lease_s integer) RETURNS TABLE(id text, account_id uuid)
-    LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public SET row_security = off AS $$
-      UPDATE stories t SET claimed_until = now() + make_interval(secs => lease_s), attempts = t.attempts + 1, status = 'rendering'
-      WHERE t.id IN (
-        SELECT d.id FROM stories d
-        WHERE d.due_at IS NOT NULL AND d.due_at <= now() AND (d.claimed_until IS NULL OR d.claimed_until < now())
-        ORDER BY d.due_at LIMIT max_rows
-        FOR UPDATE SKIP LOCKED)
-      RETURNING t.id, t.account_id
-    $$`.execute(db);
-  await sql`REVOKE ALL ON FUNCTION claim_stories(integer, integer) FROM PUBLIC`.execute(db);
+  // Claimed with a lease and a token (ADR 0058): only the current claimant may write the outcome or delete
+  // objects; the worker renews the lease while it works. After max_attempts claims a job fails for good.
+  await sql`CREATE FUNCTION claim_stories(max_rows integer, lease_s integer, max_attempts integer) RETURNS TABLE(id text, account_id uuid, token text)
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public SET row_security = off AS $$
+    #variable_conflict use_column
+    BEGIN
+      UPDATE stories SET status = 'failed', error = 'the story could not be made', due_at = NULL, claimed_until = NULL, claim_token = NULL
+        WHERE due_at IS NOT NULL AND attempts >= max_attempts AND (claimed_until IS NULL OR claimed_until < now());
+      RETURN QUERY
+        UPDATE stories t SET claimed_until = now() + make_interval(secs => lease_s), attempts = t.attempts + 1, status = 'rendering',
+          claim_token = gen_random_uuid()::text
+        WHERE t.id IN (
+          SELECT d.id FROM stories d
+          WHERE d.due_at IS NOT NULL AND d.due_at <= now() AND (d.claimed_until IS NULL OR d.claimed_until < now()) AND d.attempts < max_attempts
+          ORDER BY d.due_at LIMIT max_rows
+          FOR UPDATE SKIP LOCKED)
+        RETURNING t.id, t.account_id, t.claim_token;
+    END $$`.execute(db);
+  await sql`REVOKE ALL ON FUNCTION claim_stories(integer, integer, integer) FROM PUBLIC`.execute(db);
   await sql`DO $$ BEGIN
     IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'senseplane_app') THEN
       GRANT SELECT, INSERT, UPDATE, DELETE ON stories, story_pieces, story_segments TO senseplane_app;
-      GRANT EXECUTE ON FUNCTION claim_stories(integer, integer) TO senseplane_app;
+      GRANT EXECUTE ON FUNCTION claim_stories(integer, integer, integer) TO senseplane_app;
     END IF;
   END $$`.execute(db);
 }
 
 export async function down(db: Kysely<unknown>): Promise<void> {
-  await sql`DROP FUNCTION claim_stories(integer, integer)`.execute(db);
+  await sql`DROP FUNCTION claim_stories(integer, integer, integer)`.execute(db);
   await db.schema.dropTable("story_segments").execute();
   await db.schema.dropTable("story_pieces").execute();
   await db.schema.dropTable("stories").execute();

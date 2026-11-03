@@ -43,7 +43,7 @@ export function registerFollowRoutes(app: FastifyInstance, deps: FollowRouteDeps
     return { playback_url: `${base(req)}/playback/${token}/index.m3u8`, playback_expires_at: expiresAt.toISOString() };
   };
   const toFollow = (req: FastifyRequest, row: FollowRow, withLinks: boolean) => {
-    const result = row.result as { route?: { source_id: string; from: string; to: string }[] } | null;
+    const result = visibleResult(req, row);
     return {
       id: row.id,
       status: row.status,
@@ -66,6 +66,31 @@ export function registerFollowRoutes(app: FastifyInstance, deps: FollowRouteDeps
       model_calls: row.model_calls,
       created_at: new Date(row.created_at).toISOString(),
       ...(row.finished_at ? { finished_at: new Date(row.finished_at).toISOString() } : {}),
+    };
+  };
+  type Result = {
+    route?: { source_id: string; from: string; to: string }[]; sightings?: { source_id: string; at: string }[];
+    cameras?: { source_id: string }[]; handovers?: { from_source: string; to_source: string }[]; gaps?: { from: string; to: string; note: string }[];
+  } & Record<string, unknown>;
+  /**
+   * What the caller may see of the result now: an agent whose grants no longer cover a camera of the follow
+   * gets nothing about that camera (no sightings, boxes or times), and gap notes that don't name cameras.
+   */
+  const visibleResult = (req: FastifyRequest, row: FollowRow): Result | null => {
+    const r = row.result as Result | null;
+    if (!r || !req.access?.grants) return r;
+    const from = new Date(row.from_at).getTime();
+    const to = new Date(row.to_at).getTime();
+    const ok = new Set(row.source_ids.filter((id) => (deps.keyRefs ? mediaClaims(req, deps.keyRefs, id, from, to) : {}) !== null));
+    if (ok.size === row.source_ids.length) return r;
+    return {
+      ...r,
+      route: (r.route ?? []).filter((v) => ok.has(v.source_id)),
+      sightings: (r.sightings ?? []).filter((s) => ok.has(s.source_id)),
+      cameras: (r.cameras ?? []).filter((x) => ok.has(x.source_id)),
+      handovers: (r.handovers ?? []).filter((h) => ok.has(h.from_source) && ok.has(h.to_source)),
+      gaps: (r.gaps ?? []).map((g) => ({ ...g, note: g.note.replace(/: .*$/, ": not seen") })),
+      first_seen: undefined, last_seen: undefined,
     };
   };
   /** An agent sees the follows it made; people with access to the workspace see them all. */

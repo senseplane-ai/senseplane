@@ -500,6 +500,7 @@ export interface StoriesTable {
   has_audio: ColumnType<boolean, boolean | undefined, boolean>;
   due_at: Nullable<Date>;
   claimed_until: Nullable<Date>;
+  claim_token: string | null;
   attempts: ColumnType<number, number | undefined, number>;
   created_at: Timestamp;
   ready_at: Nullable<Date>;
@@ -555,6 +556,7 @@ export interface FollowsTable {
   created_by_agent: string | null;
   due_at: Nullable<Date>;
   claimed_until: Nullable<Date>;
+  claim_token: string | null;
   attempts: ColumnType<number, number | undefined, number>;
   created_at: Timestamp;
   finished_at: Nullable<Date>;

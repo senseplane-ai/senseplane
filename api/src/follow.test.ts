@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import jpeg from "jpeg-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { namesAPerson, runFollow, sampleTimes } from "./follow.js";
+import { gapNote, namesAPerson, routePieces, runFollow, sampleTimes } from "./follow.js";
 import { createApi, type SenseplaneApi } from "./index.js";
 import type { ApiBus } from "./indexer.js";
 import { handleMediaEvent } from "./indexer.js";
@@ -52,7 +52,9 @@ function recording(colour: string, enable: string, person = false) {
 
 /** A stand-in brain: the reference is the box's mean colour; green is a "person"; a sighting is a blob of that colour. */
 function colourBrain() {
-  const seen: { method: string; frames: number }[] = [];
+  const seen: { method: string; frames: number; budget?: number; source?: string; payload?: Record<string, unknown> }[] = [];
+  /** phantom: also report a thing in the top right corner of every frame (behind a mask in one test); callsPerBatch: model calls each batch spends. */
+  const opts = { phantom: false, callsPerBatch: 0 };
   const decode = (b64: string) => jpeg.decode(Buffer.from(b64, "base64"), { useTArray: true });
   const bus: ApiBus = {
     async putSourceConfig() {},
@@ -79,8 +81,9 @@ function colourBrain() {
       }
       if (subject === "rpc.brain.follow_scan") {
         const frames = p.frames as { t: string; jpeg_b64: string }[];
-        seen.push({ method: "scan", frames: frames.length });
-        const ref = (p.reference as { vector: number[] }).vector;
+        seen.push({ method: p.find_only ? "find" : "scan", frames: frames.length, budget: p.budget as number, source: p.source_id as string, payload: p });
+        // A description: the first frame with something red in it gives the reference (one "model call").
+        const ref = p.reference ? (p.reference as { vector: number[] }).vector : [208, 32, 32];
         const sightings = [];
         for (const f of frames) {
           const img = decode(f.jpeg_b64);
@@ -94,13 +97,18 @@ function colourBrain() {
             }
           }
           if (n > 100) sightings.push({ t: f.t, box: [minX / img.width, minY / img.height, maxX / img.width, maxY / img.height], score: 0.9, confidence: 0.9, confirmed: null });
+          if (opts.phantom) sightings.push({ t: f.t, box: [0.8, 0.05, 0.95, 0.25], score: 0.95, confidence: 0.95, confirmed: null });
         }
-        return { sightings, frames_examined: frames.length, model_calls: 0 } as T;
+        const calls = Math.min(Number(p.budget ?? 0), opts.callsPerBatch);
+        if (p.find_only) {
+          return (sightings.length ? { reference: { vector: ref, colour: [], label: null, crop_jpeg_b64: null }, model_calls: calls } : { model_calls: calls }) as T;
+        }
+        return { sightings, frames_examined: frames.length, model_calls: calls } as T;
       }
       return { error: "unknown" } as T;
     },
   };
-  return { bus, seen };
+  return { bus, seen, opts };
 }
 
 describe("following an object", () => {
@@ -159,8 +167,18 @@ describe("following an object", () => {
     await drop?.();
   });
 
+  const PEOPLE = [
+    "the man in the red jacket", "my son", "a woman carrying a box", "the courier", "her", "Dad", "the delivery driver", "someone with a bag", "a child",
+    "the parcel thief", "the bin man", "the cat lady", "the dog walker", "the lad in the hoodie", "the bloke", "that dude", "the one in the red jacket",
+    "whoever took the parcel", "el hombre de rojo", "der Mann", "the postwoman", "a fireman", "the guy", "a toddler", "the baby", "them", "the kid with the ball",
+  ];
+  const THINGS = [
+    "the brown cardboard box with red tape", "my son's backpack", "the dog's ball", "the cat", "the box the courier left", "a red suitcase", "the grey dog",
+    "her bag", "the ottoman", "the doberman", "a parcel by the door", "the delivery box",
+  ];
+
   it("refuses a person, by description or by a box on one, and stores nothing", async () => {
-    for (const description of ["the man in the red jacket", "my son", "a woman carrying a box", "the courier", "her"]) {
+    for (const description of PEOPLE.slice(0, 8)) {
       const r = await call(owner, "POST", "/v1/follows", { reference: { description }, from: at(0), to: at(80_000) });
       expect(r.statusCode, description).toBe(403);
       expect(r.json().error.details.person).toBe(true);
@@ -171,12 +189,8 @@ describe("following an object", () => {
     expect(await api.data.withAccount(acc, (s) => s.db.selectFrom("follows").selectAll().execute())).toEqual([]);
   });
 
-  it("tells a person from a person's thing in descriptions", () => {
-    for (const d of ["the man in the red jacket", "my son", "Dad", "the delivery driver", "someone with a bag", "a child"]) expect(namesAPerson(d), d).toBe(true);
-    for (const d of ["the brown cardboard box with red tape", "my son's backpack", "the cat", "the box the courier left", "a red suitcase", "the grey dog"]) {
-      expect(namesAPerson(d), d).toBe(false);
-    }
-  });
+  it.each(PEOPLE)("refuses the description %j", (d) => expect(namesAPerson(d)).toBe(true));
+  it.each(THINGS)("allows the description %j", (d) => expect(namesAPerson(d)).toBe(false));
 
   it("finds the box on two cameras in time order, reports the gap, and makes a story", async () => {
     const created = await call(owner, "POST", "/v1/follows", { reference: { source: cams.hall, at: at(3000), box }, from: at(0), to: at(80_000) });
@@ -225,6 +239,122 @@ describe("following an object", () => {
     expect(b.statusCode).toBe(403);
     expect(b.json().error.details.blurred_only).toBe(true);
   }, 60_000);
+
+  const followOf = async (key: string, body: Record<string, unknown>, extra: Partial<ReturnType<typeof deps>> & { checksUsedUp?: (a: string) => Promise<boolean> } = {}) => {
+    const r = await call(key, "POST", "/v1/follows", { from: at(0), to: at(80_000), make_story: false, ...body });
+    expect(r.statusCode, r.body).toBe(202);
+    await runFollow({ ...deps(), ...extra }, acc, r.json().id);
+    return (await call(key, "GET", `/v1/follows/${r.json().id}`)).json();
+  };
+
+  it("blacks out the camera's privacy masks in every frame before the brain sees it, and drops what is behind them", async () => {
+    // The kitchen's right half is masked.
+    await api.data.withAccount(acc, (s) => s.db.updateTable("sources").set({ privacy_masks: JSON.stringify([[[0.5, 0], [1, 0], [1, 1], [0.5, 1]]]) }).where("id", "=", cams.kitchen!).execute());
+    brain.opts.phantom = true;
+    try {
+      const before = brain.seen.length;
+      const done = await followOf(owner, { reference: { source: cams.hall, at: at(3000), box }, sources: [cams.hall, cams.kitchen] });
+      const kitchenFrames = brain.seen.slice(before).filter((x) => x.source === cams.kitchen && x.method === "scan").flatMap((x) => (x.payload!.frames as { jpeg_b64: string }[]));
+      expect(kitchenFrames.length).toBeGreaterThanOrEqual(2);
+      for (const f of kitchenFrames) {
+        const img = jpeg.decode(Buffer.from(f.jpeg_b64, "base64"), { useTArray: true });
+        let lit = 0;
+        for (let y = 0; y < img.height; y += 4) for (let x = Math.ceil(img.width * 0.52); x < img.width; x += 4) lit += img.data[(y * img.width + x) * 4]! > 24 ? 1 : 0;
+        expect(lit).toBe(0); // masked area is black
+      }
+      // The phantom in the top right of every frame is behind the kitchen's mask: never reported there. (In the hall it is.)
+      const kitchenSightings = done.result.sightings.filter((s: { source_id: string }) => s.source_id === cams.kitchen);
+      expect(kitchenSightings.every((s: { box: number[] }) => s.box[0] < 0.5)).toBe(true);
+      expect(done.result.sightings.some((s: { source_id: string; box: number[] }) => s.source_id === cams.hall && s.box[0] === 0.8)).toBe(true);
+    } finally {
+      brain.opts.phantom = false;
+      await api.data.withAccount(acc, (s) => s.db.updateTable("sources").set({ privacy_masks: "[]" }).where("id", "=", cams.kitchen!).execute());
+    }
+  }, 120_000);
+
+  it("keeps its model calls after every batch, and calls no model once the AI checks are used up", async () => {
+    brain.opts.callsPerBatch = 1;
+    try {
+      const before = brain.seen.length;
+      const done = await followOf(owner, { reference: { source: cams.hall, at: at(3000), box } });
+      const scans = brain.seen.slice(before).filter((x) => x.method === "scan");
+      expect(done.model_calls).toBe(scans.length);
+      const row = await api.data.withAccount(acc, (s) => s.db.selectFrom("follows").select("model_calls").where("id", "=", done.id).executeTakeFirstOrThrow());
+      expect(row.model_calls).toBe(scans.length);
+
+      // A retry carries on with what was spent: from 11 of 12, one call is left in all.
+      const again = await call(owner, "POST", "/v1/follows", { from: at(0), to: at(80_000), make_story: false, reference: { source: cams.hall, at: at(3000), box } });
+      await api.data.withAccount(acc, (s) => s.db.updateTable("follows").set({ model_calls: 11 }).where("id", "=", again.json().id).execute());
+      const mark = brain.seen.length;
+      await runFollow(deps(), acc, again.json().id);
+      expect(brain.seen.slice(mark).filter((x) => x.method === "scan").reduce((a, x) => a + (x.budget ?? 0), 0)).toBeLessThanOrEqual(1 + 0);
+      expect((await call(owner, "GET", `/v1/follows/${again.json().id}`)).json().model_calls).toBe(12);
+
+      const mark2 = brain.seen.length;
+      const used = await followOf(owner, { reference: { source: cams.hall, at: at(3000), box } }, { checksUsedUp: async () => true });
+      expect(brain.seen.slice(mark2).filter((x) => x.method === "scan").every((x) => x.budget === 0)).toBe(true);
+      expect(used.model_calls).toBe(0);
+      expect(used.result.limits.ai_checks_used_up).toBe(true);
+    } finally {
+      brain.opts.callsPerBatch = 0;
+    }
+  }, 120_000);
+
+  it("finds a described thing first, then compares every frame, and says which stretches weren't checked", async () => {
+    brain.opts.callsPerBatch = 1;
+    try {
+      const before = brain.seen.length;
+      const done = await followOf(owner, { reference: { description: "the red box" }, sources: [cams.landing, cams.kitchen, cams.hall] });
+      const calls = brain.seen.slice(before);
+      const firstScan = calls.findIndex((x) => x.method === "scan");
+      // Pass 1 (find) comes before any comparison, and stops once found; pass 2 then compares every camera's frames.
+      expect(calls.slice(0, firstScan).every((x) => x.method === "find")).toBe(true);
+      expect(calls.slice(firstScan).every((x) => x.method === "scan")).toBe(true);
+      expect(new Set(calls.slice(firstScan).map((x) => x.source))).toEqual(new Set([cams.landing, cams.kitchen, cams.hall]));
+      expect(calls.find((x) => x.method === "find")!.payload!.person_check).toBe(true);
+      // Found on the hall's frames even though the landing came first.
+      expect(done.result.route.map((v: { source_id: string }) => v.source_id)).toEqual([cams.hall, cams.kitchen]);
+      expect(done.result.limits.frames_compared).toBe(done.frames_examined);
+    } finally {
+      brain.opts.callsPerBatch = 0;
+    }
+    // Frames read but never compared are "not checked", not "not seen".
+    const names = new Map([["a", "Hall"]]);
+    expect(gapNote(0, 60_000, names, new Map([["a", [{ from: 0, to: 60_000 }]]]), [])).toContain("not checked");
+    expect(gapNote(0, 60_000, names, new Map([["a", [{ from: 0, to: 60_000 }]]]), [{ source_id: "a", t: 30_000 }])).toContain("not seen on Hall");
+    expect(gapNote(0, 60_000, names, new Map(), [])).toContain("no camera was recording");
+  }, 120_000);
+
+  it("fits a long route's story into a story's limits", () => {
+    const visits = Array.from({ length: 25 }, (_, i) => ({ source_id: "src_a", source_name: "A", from: i * 600_000, to: i * 600_000 + 120_000, sightings: 3, confidence: 0.9, confirmed_by_model: false }));
+    const pieces = routePieces(visits);
+    expect(pieces).toHaveLength(20);
+    const total = pieces.reduce((a, p) => a + Date.parse(p.to) - Date.parse(p.from), 0);
+    expect(total).toBeLessThanOrEqual(10 * 60_000);
+    expect(pieces.every((p, i) => Date.parse(p.from) === visits[i]!.from - 2000)).toBe(true);
+  });
+
+  it("looks at the reference again with the creator's grants as they are, and shows an agent nothing of cameras it lost", async () => {
+    const agent = (await call(owner, "POST", "/v1/agents", { name: "Finder 2" })).json();
+    const g1 = (await call(owner, "POST", "/v1/grants", { agent_id: agent.id, source_ids: [cams.hall], senses: ["video"] })).json();
+    await call(owner, "POST", "/v1/grants", { agent_id: agent.id, source_ids: [cams.landing, cams.kitchen], senses: ["video"] });
+    const done = await followOf(agent.api_key, { reference: { source: cams.hall, at: at(3000), box } });
+    expect(done.result.route.map((v: { source_id: string }) => v.source_id)).toEqual([cams.hall, cams.kitchen]);
+    // The hall is taken away: its visits, sightings and camera entry go from what the agent sees.
+    expect((await call(owner, "DELETE", `/v1/grants/${g1.id}`)).statusCode).toBe(204);
+    const now = (await call(agent.api_key, "GET", `/v1/follows/${done.id}`)).json();
+    expect(now.result.route.map((v: { source_id: string }) => v.source_id)).toEqual([cams.kitchen]);
+    expect(now.result.sightings.every((s: { source_id: string }) => s.source_id !== cams.hall)).toBe(true);
+    expect(now.result.cameras.every((c: { source_id: string }) => c.source_id !== cams.hall)).toBe(true);
+    expect(now.result.gaps.every((g: { note: string }) => !g.note.includes("Hall"))).toBe(true);
+    // A follow queued before that, whose reference is on the hall, now fails when it runs.
+    const queued = await api.data.withAccount(acc, (s) => s.db.insertInto("follows").values({
+      id: "fol_01JREFCHECK0000000000000", account_id: acc, reference: JSON.stringify({ source_id: cams.hall, at: at(3000), box }), source_ids: [cams.landing, cams.kitchen],
+      from_at: new Date(base), to_at: new Date(base + 80_000), make_story: false, created_by: `agent:${agent.id}`, created_by_agent: agent.id,
+    }).returningAll().executeTakeFirstOrThrow());
+    await runFollow(deps(), acc, queued.id);
+    expect((await call(owner, "GET", `/v1/follows/${queued.id}`)).json().status).toBe("failed");
+  }, 120_000);
 
   it("samples densely around events and sparsely elsewhere, within its budget", () => {
     const times = sampleTimes([{ from: 0, to: 60_000 }], [{ from: 10_000, to: 15_000 }], 20);

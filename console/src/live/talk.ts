@@ -9,6 +9,7 @@
 // makes afterwards is closed at once. One press at a time: a second press
 // while one is held, or a new press while a release is finishing, never
 // leaves a second track behind.
+import type { TalkState } from "./heard";
 
 export interface TalkTrack {
   readonly id: string;
@@ -30,6 +31,8 @@ export interface Talk {
   start(): Promise<void>;
   stop(): Promise<void>;
   readonly active: boolean;
+  /** What the camera says about the press held now: connecting, heard, or ended by the camera's side (ADR 0074). */
+  onState?(fn: (s: TalkState) => void): () => void;
 }
 
 export function createTalk(d: TalkDeps): Talk & { /** The microphone is open (tests). */ readonly micOpen: boolean } {

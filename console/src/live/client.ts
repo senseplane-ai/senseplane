@@ -15,10 +15,13 @@
 // Push-to-talk (ADR 0069): with `talk`, the session may also send the
 // microphone to the camera's phone, heard by nobody else. `talk.start()`
 // (button held) sends one audio track with appData.source "talkback";
-// `talk.stop()` closes it and the microphone (talk.ts).
+// `talk.stop()` closes it and the microphone (talk.ts). The same works for an
+// IP camera behind a box (ADR 0074), whose box pulls the track; `talk.onState`
+// says when the camera hears it, and when the camera's side ended the press.
 import { Device } from "mediasoup-client";
 import type { Consumer, RtpCapabilities, RtpParameters, Transport, TransportOptions } from "mediasoup-client/types";
 import { PROTOCOL_VERSION, SignallingClient, SignallingError } from "../capture/signalling";
+import { createHeard } from "./heard";
 import { type Talk, createTalk } from "./talk";
 
 export interface OpenLiveOptions {
@@ -29,7 +32,7 @@ export interface OpenLiveOptions {
   video: HTMLVideoElement;
   /** Also play the camera's audio (needs an audio grant; default false). */
   audio?: boolean;
-  /** Push-to-talk through the camera's speaker (member and up, a phone camera; default false). */
+  /** Push-to-talk through the camera's speaker (member and up, a camera whose `talk` is true; default false). */
   talk?: boolean;
 }
 
@@ -82,6 +85,8 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
   let transport: Transport | undefined;
   let send: Transport | undefined;
   let talkStop: (() => void) | undefined;
+  // Whether the camera hears a press; one nobody hears is stopped (heard.ts).
+  const heard = createHeard({ onEnd: () => talkStop?.() });
   let device: Device | undefined;
   let closed = false;
   const cleanups: (() => void)[] = [];
@@ -94,6 +99,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     for (const c of consumers.values()) c.close();
     consumers.clear();
     talkStop?.();
+    heard.close();
     send?.close();
     transport?.close();
     for (const t of stream.getTracks()) stream.removeTrack(t);
@@ -129,6 +135,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     };
 
     cleanups.push(sig.onEvent((e) => {
+      if (e.event === "talkbackListening" || e.event === "talkbackEnded") return heard.event(e);
       if (e.event === "producerAppeared" || e.event === "newProducer") void consume(e as unknown as Producer).catch(() => undefined);
       else if (e.event === "producerClosed") {
         const c = consumers.get(String(e.producerId));
@@ -196,8 +203,15 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
   const machine = session.talk ? createTalk({
     // Speech, not a camera's room sound: the browser's call processing helps here.
     microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
-    produce: async (track) => (await sendTransport()).produce({ track, stopTracks: false, appData: { source: "talkback" } }),
-    closed: (id) => sig.request("closeProducer", { producerId: id }).then(() => undefined),
+    produce: async (track) => {
+      const p = await (await sendTransport()).produce({ track, stopTracks: false, appData: { source: "talkback" } });
+      heard.press(p.id);
+      return p;
+    },
+    closed: (id) => {
+      heard.release();
+      return sig.request("closeProducer", { producerId: id }).then(() => undefined);
+    },
     ended: () => closed,
   }) : undefined;
   talkStop = machine ? () => void machine.stop() : undefined;
@@ -216,6 +230,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
       }
     },
     stop: () => machine.stop(),
+    onState: (fn) => heard.subscribe(fn),
   } : undefined;
 
   return {

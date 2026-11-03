@@ -1,7 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Source } from "senseplane";
 import { errorText } from "../../api/extra";
 import { Link } from "../../router";
@@ -12,17 +12,37 @@ import type { Talk } from "../../live/client";
 import { formatLatency, useDetection, useFeed } from "./feed";
 import { lastSeen } from "./Tile";
 
-/** Push-to-talk through a phone camera (ADR 0069): people who are members and up. */
+/**
+ * Push-to-talk (ADR 0069, 0074): a camera whose `talk` is true (a phone, or an IP camera whose box can carry
+ * live audio), for people who are members and up. An API before `talk` offered it on phones with a speaker.
+ */
 export const canTalk = (source: Source, role: string | undefined) =>
-  source.type === "browser" && !!source.speaker && (!role || ["owner", "admin", "member"].includes(role));
+  (source.talk ?? (source.type === "browser" && !!source.speaker)) && (!role || ["owner", "admin", "member"].includes(role));
+
+/** Why a camera with a speaker has no Hold to talk, for the people who could otherwise talk. */
+export const noTalkReason = (source: Source) =>
+  source.speaker && source.type === "rtsp" && !canTalk(source, undefined)
+    ? "Its box plays agents' messages here, but can't carry push-to-talk: the box needs updating, or the camera's speaker isn't G.711."
+    : undefined;
 
 /** Hold to talk: the microphone goes to the camera's speaker while the button is held. */
 export function TalkButton({ talk, name }: { talk: Talk; name: string }) {
   const toast = useToast();
   const [on, setOn] = useState(false);
+  const [heard, setHeard] = useState(false);
+  useEffect(() => talk.onState?.((s) => {
+    if (s.state === "listening") setHeard(true);
+    else if (s.state === "connecting") setHeard(false);
+    else {
+      setOn(false);
+      setHeard(false);
+      toast(s.message, "error");
+    }
+  }), [talk, toast]);
   const start = () => {
     if (on) return;
     setOn(true);
+    setHeard(!talk.onState); // no word from the camera's side: as before, talking at once
     void talk.start().catch((e) => {
       setOn(false);
       toast(e instanceof Error ? e.message : "Couldn't use the microphone.", "error");
@@ -31,16 +51,18 @@ export function TalkButton({ talk, name }: { talk: Talk; name: string }) {
   const stop = () => {
     if (!on) return;
     setOn(false);
+    setHeard(false);
     void talk.stop();
   };
+  const label = !on ? "Hold to talk" : heard ? "Talking… release to stop" : "Connecting to the speaker…";
   return (
     <button type="button" className={`btn btn-sm lv-talk${on ? " lv-talk-on" : ""}`} aria-pressed={on}
-      aria-label={on ? `Talking through ${name}; release to stop` : `Hold to talk through ${name}`}
+      aria-label={on ? (heard ? `Talking through ${name}; release to stop` : `Connecting to ${name}'s speaker; release to stop`) : `Hold to talk through ${name}`}
       onPointerDown={(e) => { e.preventDefault(); start(); }} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop}
       onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); start(); } }}
       onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") stop(); }}
       onBlur={stop}>
-      {on ? "Talking… release to stop" : "Hold to talk"}
+      {label}
     </button>
   );
 }
@@ -114,7 +136,14 @@ export function Focus({ source, others, detections, onBack, onPick, onLiveError 
           <Link className="btn btn-ghost btn-sm" to={`/?camera=${source.id}`}>Ask about this camera</Link>
           {feed.talk && <TalkButton talk={feed.talk} name={source.name} />}
         </div>
-        {feed.talk && <p className="muted lv-talk-note">Whoever is near {source.name} hears you. The phone shows that someone is speaking, and it&apos;s in the audit log.</p>}
+        {feed.talk && (
+          <p className="muted lv-talk-note">
+            {source.type === "browser"
+              ? <>Whoever is near {source.name} hears you. The phone shows that someone is speaking, and it&apos;s in the audit log.</>
+              : <>Whoever is near {source.name} hears you through its speaker, a moment after you speak. It&apos;s in the audit log.</>}
+          </p>
+        )}
+        {!feed.talk && canTalk({ ...source, talk: true }, me?.role) && noTalkReason(source) && <p className="muted lv-talk-note">{noTalkReason(source)}</p>}
       </div>
       {others.length > 0 && (
         <div className="lv-others">

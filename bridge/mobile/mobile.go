@@ -33,6 +33,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/onvif"
 	"github.com/senseplane-ai/senseplane/bridge/internal/pairing"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
+	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
 	"github.com/senseplane-ai/senseplane/bridge/internal/whip"
 )
 
@@ -43,6 +44,13 @@ const PhoneCameraURL = "rtsp://this-phone.senseplane.invalid/camera"
 // Listener hears the box's status, as JSON (see Status).
 type Listener interface {
 	OnStatus(statusJSON string)
+}
+
+// Speaker is the phone's own speaker (talk-back, ADR 0069): Play gets an agent's or a watch's message,
+// chime included, as 16-bit little-endian mono PCM at `rate`, plays it and returns when it has finished.
+// The app shows that something is speaking while it plays.
+type Speaker interface {
+	Play(pcm []byte, rate int) error
 }
 
 // Box is one phone acting as a box.
@@ -65,6 +73,7 @@ type Box struct {
 	camAdded bool
 	whipBase string
 	matter   *native.Controller
+	speaker  Speaker
 }
 
 type status struct {
@@ -101,6 +110,40 @@ func (b *Box) SetWHIPBase(url string) {
 	b.mu.Lock()
 	b.whipBase = strings.TrimRight(url, "/")
 	b.mu.Unlock()
+}
+
+// SetSpeaker lets the box play messages for this phone's own camera (ADR 0069). Call before Start.
+func (b *Box) SetSpeaker(s Speaker) {
+	b.mu.Lock()
+	b.speaker = s
+	b.mu.Unlock()
+}
+
+// playHere plays a message on this phone when the camera is this phone's own.
+func (b *Box) playHere(_ context.Context, sourceID string, p speak.PCM) (bool, error) {
+	b.mu.Lock()
+	mine := sourceID != "" && sourceID == b.status.PhoneCamera
+	s := b.speaker
+	b.mu.Unlock()
+	if !mine {
+		return false, nil
+	}
+	if s == nil {
+		return true, errors.New("this phone's app can't play sound")
+	}
+	pcm := make([]byte, 2*len(p.Samples))
+	for i, v := range p.Samples {
+		pcm[2*i], pcm[2*i+1] = byte(v), byte(uint16(v)>>8)
+	}
+	return true, s.Play(pcm, p.Rate)
+}
+
+// probeSpeaker: the phone's own camera has a speaker; other cameras are asked for an ONVIF backchannel.
+func probeSpeaker(ctx context.Context, rtspURL string) (bool, error) {
+	if rtspURL == PhoneCameraURL {
+		return true, nil
+	}
+	return speak.Probe(ctx, rtspURL)
 }
 
 // SetLogger sends the box's log lines to the app (for its logcat), one line per call.
@@ -240,6 +283,8 @@ func (b *Box) run(ctx context.Context, token string) bool {
 		Sensors: map[string]bridge.SensorLink{"phone": b.phone, "bluetooth": b.bt},
 		Finder:  &bridge.Finder{Discover: discover},
 		Matter:  b.matter,
+		// Talk-back (ADR 0069): messages for this phone's camera play on the phone, others over the camera's backchannel.
+		LocalSpeaker: b.playHere, ProbeSpeaker: probeSpeaker,
 		// bridge.New adds device_control (ADR 0067): the Matter controller switches what a person asks.
 		Commands: map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			code, _ := args["code"].(string)
@@ -308,7 +353,8 @@ func (b *Box) SetCamera(on bool, name string) {
 func (b *Box) addCamera(ctx context.Context, client *api.Client, name string) {
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	cam, err := client.Claim(cctx, PhoneCameraURL, name)
+	speaker := true // a phone can always play sound (ADR 0069)
+	cam, err := client.ClaimWith(cctx, PhoneCameraURL, name, &speaker)
 	if err != nil {
 		b.set(func(s *status) { s.Error = "couldn't add this phone's camera: " + err.Error() })
 		return

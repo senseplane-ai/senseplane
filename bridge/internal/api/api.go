@@ -96,6 +96,8 @@ type CameraHealth struct {
 	SourceID string `json:"source_id"`
 	State    string `json:"state"`
 	Detail   string `json:"detail,omitempty"`
+	// Speaker is what the box found about the camera's two-way audio (ADR 0069); nil: not checked.
+	Speaker *bool `json:"speaker,omitempty"`
 }
 
 // Health is the body of POST /v1/bridge/health.
@@ -235,15 +237,54 @@ func (c *Client) Config(ctx context.Context) (*Config, error) {
 
 // Claim registers a camera by RTSP URL: it claims a camera waiting for one or adds a new one.
 func (c *Client) Claim(ctx context.Context, rtspURL, name string) (*Camera, error) {
-	in := map[string]string{"rtsp_url": rtspURL}
+	return c.ClaimWith(ctx, rtspURL, name, nil)
+}
+
+// ClaimWith claims a camera and says whether it has a speaker the box can play to (ADR 0069); nil leaves it unsaid.
+func (c *Client) ClaimWith(ctx context.Context, rtspURL, name string, speaker *bool) (*Camera, error) {
+	in := map[string]any{"rtsp_url": rtspURL}
 	if name != "" {
 		in["name"] = name
+	}
+	if speaker != nil {
+		in["speaker"] = *speaker
 	}
 	var cam Camera
 	if err := c.do(ctx, http.MethodPost, "/v1/bridge/cameras", in, &cam); err != nil {
 		return nil, err
 	}
 	return &cam, nil
+}
+
+// MaxClip is the largest message the box fetches (30 s of 48 kHz 16-bit audio is under 3 MB).
+const MaxClip = 8 << 20
+
+// Fetch gets a message to play (talk-back, ADR 0069) from a path on the API, such as
+// /media/{token}/speak.wav: the link is its own credential, so the bridge token isn't sent.
+func (c *Client) Fetch(ctx context.Context, path string) ([]byte, error) {
+	if !strings.HasPrefix(path, "/media/") || strings.Contains(path, "..") {
+		return nil, errors.New("not a link to a message on the API")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("the API answered %d for the message", res.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, MaxClip+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxClip {
+		return nil, errors.New("the message is too large")
+	}
+	return b, nil
 }
 
 // Report sends a heartbeat with every camera's state.

@@ -42,6 +42,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/onvif"
 	"github.com/senseplane-ai/senseplane/bridge/internal/pairing"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
+	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
 	"github.com/senseplane-ai/senseplane/bridge/internal/whip"
 )
 
@@ -210,7 +211,9 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	refused := false
-	o := bridge.Options{Client: client, Pull: camera.Pull, Dial: dialWHIP, Version: health.Version, WHIPBase: whipBase, Log: log, HomeAssistant: ha}
+	o := bridge.Options{Client: client, Pull: camera.Pull, Dial: dialWHIP, Version: health.Version, WHIPBase: whipBase, Log: log, HomeAssistant: ha,
+		// Talk-back (ADR 0069): which cameras have two-way audio, and messages played over it.
+		ProbeSpeaker: speak.Probe}
 	if matterURL != "" {
 		// Matter devices are sensors too, and a person can add one with a code shared from its app (ADR 0062).
 		var mc interface {

@@ -21,6 +21,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/homeassistant"
 	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
+	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
 )
 
 // Options configure a bridge.
@@ -55,6 +56,14 @@ type Options struct {
 	Finder *Finder
 	// Outputs, when set, takes what the API lets this box publish (an MQTT broker, ADR 0071).
 	Outputs OutputSink
+	// ProbeSpeaker, when set, checks a camera for two-way audio (an ONVIF backchannel) when it is added
+	// and when the box starts relaying it, and the box reports it (ADR 0069).
+	ProbeSpeaker func(ctx context.Context, rtspURL string) (bool, error)
+	// PlaySpeaker plays a message on a camera's speaker (default: the ONVIF backchannel).
+	PlaySpeaker func(ctx context.Context, rtspURL string, p speak.PCM) (time.Duration, error)
+	// LocalSpeaker, when set, plays messages for cameras that are this device itself (the phone in the
+	// Android app); it returns false for a camera it isn't.
+	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, error)
 }
 
 // SensorLink feeds readings from somewhere else than Home Assistant or Matter.
@@ -97,6 +106,8 @@ type Bridge struct {
 	ha *homeassistant.Client
 	// controls are the links that switch devices, by link name.
 	controls map[string]Controllable
+	// speakers is what the box found about each camera's two-way audio (ADR 0069).
+	speakers map[string]bool
 	settle   time.Duration // how long device_control waits for the state
 	// emptyWait is the pause after an outputs answer without a cursor.
 	emptyWait time.Duration
@@ -108,7 +119,10 @@ func New(o Options) *Bridge {
 		o.Log = slog.Default()
 	}
 	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1),
-		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait}
+		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait, speakers: map[string]bool{}}
+	if o.PlaySpeaker == nil {
+		o.PlaySpeaker = speak.Play
+	}
 	if o.HomeAssistant != nil || o.Matter != nil || len(o.Sensors) > 0 {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
 	}
@@ -138,6 +152,12 @@ func New(o Options) *Bridge {
 		}
 		o.Commands = cmds
 	}
+	// Every box can play a message on a camera's speaker (talk-back, ADR 0069).
+	cmds := map[string]Handler{"speak": b.speak}
+	for k, h := range o.Commands {
+		cmds[k] = h
+	}
+	o.Commands = cmds
 	b.o = o
 	return b
 }
@@ -181,6 +201,9 @@ func (b *Bridge) Cameras() []api.CameraHealth {
 	defer b.mu.Unlock()
 	out := make([]api.CameraHealth, 0, len(b.states))
 	for _, s := range b.states {
+		if v, ok := b.speakers[s.SourceID]; ok {
+			s.Speaker = &v
+		}
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SourceID < out[j].SourceID })
@@ -326,6 +349,9 @@ func (b *Bridge) start(ctx context.Context, cam relay.Camera) *worker {
 		defer close(w.done)
 		relay.Run(wctx, cam, o)
 	}()
+	if b.o.ProbeSpeaker != nil {
+		go b.probeSpeaker(wctx, cam)
+	}
 	return w
 }
 

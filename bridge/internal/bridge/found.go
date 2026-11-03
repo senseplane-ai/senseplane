@@ -253,7 +253,16 @@ func (b *Bridge) addONVIF(ctx context.Context, args map[string]any) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	cam, err := b.o.Client.Claim(ctx, rtsp, name)
+	// Whether it has a speaker the box can play to (talk-back, ADR 0069), checked now so it shows at once.
+	var speaker *bool
+	if b.o.ProbeSpeaker != nil {
+		pctx, pcancel := context.WithTimeout(ctx, 8*time.Second)
+		if ok, perr := b.o.ProbeSpeaker(pctx, rtsp); perr == nil {
+			speaker = &ok
+		}
+		pcancel()
+	}
+	cam, err := b.o.Client.ClaimWith(ctx, rtsp, name, speaker)
 	if err != nil {
 		var ae *api.Error
 		if errors.As(err, &ae) && ae.Message != "" {
@@ -263,8 +272,12 @@ func (b *Bridge) addONVIF(ctx context.Context, args map[string]any) (map[string]
 	}
 	b.o.Log.Info("camera added from the network", "source", cam.SourceID, "profile", p.Name, "width", p.Width, "height", p.Height)
 	b.resyncSoon()
-	return map[string]any{"source_id": cam.SourceID, "name": cam.Name, "profile": p.Name, "width": p.Width, "height": p.Height,
-		"manufacturer": info.Manufacturer, "model": info.Model}, nil
+	out := map[string]any{"source_id": cam.SourceID, "name": cam.Name, "profile": p.Name, "width": p.Width, "height": p.Height,
+		"manufacturer": info.Manufacturer, "model": info.Model}
+	if speaker != nil {
+		out["speaker"] = *speaker
+	}
+	return out, nil
 }
 
 // searchONVIF does `onvif_search`: look again now (a person pressed "Look again").

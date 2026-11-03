@@ -93,6 +93,25 @@ describe("AgentsPage", () => {
     expect(grantBody({ sources: ["s"], permissions: ["environment"] }).senses).toEqual(["sensors"]);
   });
 
+  it("limits an app to blurred pictures with blurred_only, off by default", async () => {
+    const { props, api } = setup(routes());
+    render(<AgentsPage {...props} />);
+    await screen.findByRole("listitem", { name: "Claude Code" });
+    fireEvent.click(within(card("Claude Code")).getByRole("button", { name: "Edit access for Claude Code" }));
+    const c = within(card("Claude Code"));
+    expect(c.getByRole("button", { name: "Only blurred pictures" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(c.getByRole("button", { name: "Only blurred pictures" }));
+    expect(c.getByText(/no recordings, clips or live view/)).toBeTruthy();
+    fireEvent.click(c.getByRole("button", { name: "Save access" }));
+    await waitFor(() => expect(api.called("POST", "/grants")).toHaveLength(1));
+    expect(api.called("POST", "/grants")[0]!.body.blurred_only).toBe(true);
+
+    const g = (blurred_only: boolean) => [{ id: "g", agent_id: "a", source_ids: ["s"], senses: ["video"], abilities: [], blurred_only, created_at: "" }] as never;
+    expect(accessOf(g(true)).permissions).toEqual(["look", "blurred"]);
+    expect(accessOf(g(false)).permissions).toEqual(["look"]);
+    expect(grantBody({ sources: ["s"], permissions: ["look"] })).not.toHaveProperty("blurred_only");
+  });
+
   it("disconnects an app after confirming", async () => {
     const { props, api } = setup(routes());
     render(<AgentsPage {...props} />);

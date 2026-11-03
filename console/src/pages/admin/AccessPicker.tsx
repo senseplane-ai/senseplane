@@ -6,11 +6,12 @@
 // Agents page. Permissions map onto grants: look, listen and read environment
 // are senses (video, audio, and "sensors" for every sensor sense); control devices is
 // the sense "control", never implied by "sensors" and off by default; set watches and
-// see history are the grant's abilities.
+// see history are the grant's abilities; only blurred pictures is the grant's
+// blurred_only (ADR 0068).
 import { type Grant, type Source, isSensorSense } from "senseplane";
 import { Chip, MultiChips } from "./kit";
 
-export type Permission = "look" | "listen" | "environment" | "control" | "watch" | "history";
+export type Permission = "look" | "listen" | "environment" | "control" | "watch" | "history" | "blurred";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string; senses?: string[]; ability?: "watch" | "history" }[] = [
   { id: "look", label: "Look", hint: "see live pictures and ask about them", senses: ["video"] },
@@ -24,6 +25,11 @@ export const PERMISSIONS: { id: Permission; label: string; hint: string; senses?
   },
   { id: "watch", label: "Set watches", hint: "watch for something and report it", ability: "watch" },
   { id: "history", label: "See history and replay", hint: "events, search and recordings older than two hours", ability: "history" },
+  // Not a sense: a limit on the others (ADR 0068).
+  {
+    id: "blurred", label: "Only blurred pictures",
+    hint: "faces and number plates blurred in every picture and answer; no recordings, clips or live view",
+  },
 ];
 
 export interface Access {
@@ -35,12 +41,13 @@ export interface Access {
 export const defaultPermissions: Permission[] = ["look", "environment", "watch", "history"];
 
 /** The grant body for an access choice. */
-export function grantBody(a: Access): { source_ids: string[]; senses: string[]; abilities: ("watch" | "history")[] } {
+export function grantBody(a: Access): { source_ids: string[]; senses: string[]; abilities: ("watch" | "history")[]; blurred_only?: true } {
   const picked = PERMISSIONS.filter((p) => a.permissions.includes(p.id));
   return {
     source_ids: a.sources,
     senses: picked.flatMap((p) => p.senses ?? []),
     abilities: picked.flatMap((p) => (p.ability ? [p.ability] : [])),
+    ...(a.permissions.includes("blurred") ? { blurred_only: true as const } : {}),
   };
 }
 
@@ -53,7 +60,10 @@ export function accessOf(grants: Grant[]): Access {
   return {
     sources: [...new Set(grants.flatMap((g) => g.source_ids))],
     // Older grants name sensor senses one by one (temperature, humidity): they read as "Read sensors" too.
-    permissions: PERMISSIONS.filter((p) => (p.id === "environment" ? reads.length > 0 : p.senses ? p.senses.some((s) => senses.has(s)) : abilities.has(p.ability!))).map((p) => p.id),
+    permissions: PERMISSIONS.filter((p) =>
+      p.id === "environment" ? reads.length > 0
+      : p.id === "blurred" ? grants.some((g) => (g as { blurred_only?: boolean }).blurred_only)
+      : p.senses ? p.senses.some((s) => senses.has(s)) : abilities.has(p.ability!)).map((p) => p.id),
   };
 }
 

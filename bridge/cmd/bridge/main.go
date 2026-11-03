@@ -63,6 +63,7 @@ func main() {
 	haURL := flag.String("ha-url", os.Getenv("HA_URL"), "read sensors from this Home Assistant, e.g. http://homeassistant.local:8123 (env HA_URL; as an add-on the Supervisor's is used)")
 	haToken := flag.String("ha-token", os.Getenv("HA_TOKEN"), "a Home Assistant long-lived access token (env HA_TOKEN)")
 	matterURL := flag.String("matter-url", os.Getenv("MATTER_URL"), "read Matter devices through this Matter Server, e.g. ws://localhost:5580/ws, or \"builtin\" for the bridge's own controller, which keeps its keys in --state-dir (env MATTER_URL)")
+	flag.BoolVar(&strictRevocation, "matter-strict-revocation", os.Getenv("MATTER_STRICT_REVOCATION") == "true", "with --matter-url builtin, refuse a Matter device whose certificates couldn't be checked against the CSA's revocation lists (default: add it and record that; env MATTER_STRICT_REVOCATION=true)")
 	findCameras := flag.Bool("find-cameras", os.Getenv("SENSEPLANE_FIND_CAMERAS") != "false", "look for ONVIF cameras on the local network so they can be picked in the console (env SENSEPLANE_FIND_CAMERAS=false turns it off; needs host networking)")
 	stateDir := flag.String("state-dir", os.Getenv("SENSEPLANE_STATE_DIR"), "keep the token got by pairing here (env SENSEPLANE_STATE_DIR; the add-on uses /data)")
 	boxName := flag.String("box-name", envOr("SENSEPLANE_BOX_NAME", "Home Assistant"), "the name a person sees when pairing")
@@ -194,6 +195,9 @@ func main() {
 }
 
 // run relays and reads until ctx ends; a paired box also stops when the API refuses its token (true).
+// strictRevocation is --matter-strict-revocation (ADR 0073).
+var strictRevocation bool
+
 func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string, name, whipBase string, ha *bridge.HomeAssistant, matterURL, stateDir string, findCameras bool, log *slog.Logger, started func(*bridge.Bridge)) bool {
 	client := api.New(apiURL, token)
 
@@ -221,7 +225,7 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 			Commission(ctx context.Context, code string) (map[string]any, error)
 		}
 		if matterURL == "builtin" {
-			mc = &native.Controller{StateDir: filepath.Join(stateDir, "matter"), Log: log} // ADR 0065
+			mc = &native.Controller{StateDir: filepath.Join(stateDir, "matter"), Log: log, StrictRevocation: strictRevocation} // ADR 0065, 0073
 		} else {
 			mc = &matter.Controller{URL: matterURL, Log: log}
 		}

@@ -12,7 +12,7 @@
     "test": "pnpm -r test",
     "codegen": "pnpm --filter @senseplane/spec codegen",
     "docs:build": "pnpm --filter @senseplane/docs build",
-    "check:drift": "pnpm codegen && git diff --exit-code -- spec/schemas spec/brain spec/media/vectors sdk/typescript/src/generated mcp/src/generated api/src/generated brain/src/senseplane_brain/spec",
+    "check:drift": "pnpm codegen && git diff --exit-code -- spec/schemas spec/brain spec/media/vectors sdk/typescript/src/generated mcp/src/generated api/src/generated brain/src/senseplane_brain/spec sdk/python/src/senseplane/_generated sdk/python/src/senseplane/_sync_client.py sdk/python/src/senseplane/_sync_tools.py",
     "e2e": "node e2e/run.ts",
     "check:version": "node scripts/version.mjs check",
     "check:licenses": "node scripts/check-licenses.mjs"

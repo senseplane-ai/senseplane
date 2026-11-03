@@ -106,11 +106,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      # The brain's generated spec models come from its dev environment (datamodel-code-generator).
+      # The brain's and the Python SDK's generated code come from their dev environments (datamodel-code-generator).
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: brain/uv.lock
+          cache-dependency-glob: |
+            brain/uv.lock
+            sdk/python/uv.lock
       # The media WHIP bridge test builds the bridge's Go WHIP client.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -120,6 +122,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pnpm install --frozen-lockfile
       - run: (cd brain && uv sync --frozen)
+      - run: (cd sdk/python && uv sync --frozen)
       - name: Licences (production npm dependencies)
         run: pnpm check:licenses
       - name: Spec drift (generated code matches spec/)
@@ -144,6 +147,12 @@ jobs:
           aws --endpoint-url "$TEST_S3_ENDPOINT" s3api create-bucket --bucket senseplane
       - name: Tests (every package)
         run: pnpm test
+      # The Python SDK end to end: the built API on a fresh database (sdk/python/scripts/integration-api.mjs).
+      - name: Python SDK against the API
+        working-directory: sdk/python
+        env:
+          SENSEPLANE_INTEGRATION: "1"
+        run: uv run --frozen pytest -q -m integration
 
   # The brain: pytest, perception precision/recall on fixtures/ included, with the int8 detector built once and cached.
   brain:
@@ -179,6 +188,35 @@ jobs:
           key: brain-models-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('brain/src/senseplane_brain/models.py', 'brain/src/senseplane_brain/quantize.py', 'brain/uv.lock') }}
       - run: uv run --frozen --group quantize python scripts/fetch_models.py
       - run: uv run --frozen pytest -q
+
+  # The Python SDK: lint, types, unit tests and licences, on the oldest and newest Python it supports.
+  # Its generated code is checked by the node job's spec drift step; its integration tests run there too.
+  python-sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: sdk/python/uv.lock
+      - run: uv sync --frozen --all-extras --python ${{ matrix.python }}
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen mypy
+      - run: uv run --frozen pytest -q
+      - name: Licences (runtime, extras and dev tools)
+        run: uv run --frozen python scripts/check_licenses.py
 
   bridge:
     runs-on: ubuntu-24.04
@@ -305,7 +343,7 @@ jobs:
   # skipped because it doesn't apply, like dependency review on main).
   ci-ok:
     if: always()
-    needs: [repo, node, brain, bridge, home-assistant, conformance, images, dependency-review]
+    needs: [repo, node, brain, python-sdk, bridge, home-assistant, conformance, images, dependency-review]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

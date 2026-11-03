@@ -9,7 +9,7 @@
     "labels": "node scripts/labels.mjs",
     "build": "node scripts/validate.mjs",
     "test": "node scripts/validate.mjs",
-    "codegen": "node scripts/labels.mjs && node scripts/media-vectors.mjs && node scripts/validate.mjs && pnpm --filter senseplane codegen && pnpm --filter @senseplane/mcp codegen && pnpm --filter @senseplane/api codegen && cd ../brain && uv run --frozen python scripts/codegen.py"
+    "codegen": "node scripts/labels.mjs && node scripts/media-vectors.mjs && node scripts/validate.mjs && pnpm --filter senseplane codegen && pnpm --filter @senseplane/mcp codegen && pnpm --filter @senseplane/api codegen && cd ../brain && uv run --frozen python scripts/codegen.py && cd ../sdk/python && uv run --frozen python scripts/codegen.py"
   },
   "devDependencies": {
     "@apidevtools/json-schema-ref-parser": "^16.0.5",

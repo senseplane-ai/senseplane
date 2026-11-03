@@ -66,7 +66,7 @@ import { createSecretBox, newSecretsKey } from "./secret-box.js";
 import { expireIdempotencyKeys, registerIdempotency } from "./idempotency.js";
 import { registerTeamRoutes } from "./routes/team.js";
 import { registerSpeakRoutes } from "./routes/speak.js";
-import { type Speech, type TtsConfig, createSpeech, startSpeechWorker, ttsConfigFromEnv } from "./speak.js";
+import { type Speech, type TtsConfig, createSpeech, startSpeechWorker, sweepLostSpeech, ttsConfigFromEnv } from "./speak.js";
 import { type AuthConfig, authConfig, httpOAuthClient, type OAuthClient, registerAuthRoutes } from "./routes/auth.js";
 
 declare module "fastify" {
@@ -565,6 +565,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       { name: "bridges.silent", everyS: 30, run: () => markSilentBridges(data, app.log) },
       // Refuses device requests nobody confirmed in two minutes, and gives up on ones a box never reported; it never switches anything.
       { name: "devices.confirmations", everyS: 15, run: async () => (await expireConfirmations(data, audit)) + (await sweepLostCommands(data, audit)) },
+      // Box messages never reported are given up (ADR 0069); it never plays anything.
+      { name: "speak.lost", everyS: 30, run: () => sweepLostSpeech(data, audit) },
       { name: "activities.close_stale", everyS: 30, run: () => closeStaleActivities(data) },
       { name: "accounts.purge", everyS: 30, leaseS: 1800, run: () => purgeDeletedAccounts({ data, bus, storage }, app.log) },
       // Key rotation (ADR 0066): accounts mid-rotation get their footage re-encrypted; old master keys re-wrapped.

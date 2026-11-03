@@ -14,7 +14,7 @@ import { coversSense } from "./access.js";
 import { type ApiBus, createApi, handleBrainEvent, type SenseplaneApi } from "./index.js";
 import { createPasswordUser } from "./routes/auth.js";
 import { requiredRole } from "./roles.js";
-import { MAX_SPEAK_MS, SPEAK_PER_MINUTE, chime, durationMs, encodeWav, parseWav, spokenMsEstimate, sweepSpeechClips, withChime } from "./speak.js";
+import { MAX_SPEAK_MS, SPEAK_PER_MINUTE, chime, durationMs, encodeWav, parseWav, spokenMsEstimate, sweepLostSpeech, sweepSpeechClips, withChime } from "./speak.js";
 import type { ObjectStorage } from "./storage.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
@@ -115,7 +115,16 @@ describe("talk-back", () => {
   /** Every message on a camera has finished playing (so the next isn't refused as "busy"). */
   const finishAll = () => api.data.withAccount(acc, (s) => s.db.updateTable("speak_messages").set({ ends_at: new Date(Date.now() - 1000) }).where("status", "in", ["playing", "sent"]).execute());
   const clear = () => api.data.withAccount(acc, (s) => s.db.deleteFrom("speak_messages").execute());
-  const audit = async () => (await call(owner, "GET", "/v1/audit?limit=200")).json().data as { action: string; target: string; actor: string; details?: Record<string, unknown> }[];
+  /** The whole audit log, every page. */
+  const audit = async () => {
+    const out: { action: string; target: string; actor: string; details?: Record<string, unknown> }[] = [];
+    for (let cursor = ""; ;) {
+      const page = (await call(owner, "GET", `/v1/audit?limit=100${cursor ? `&cursor=${cursor}` : ""}`)).json();
+      out.push(...page.data);
+      if (!page.next_cursor) return out;
+      cursor = page.next_cursor;
+    }
+  };
   /** The clip a camera was handed, fetched as the camera fetches it (a path on the API). */
   const clipAt = async (path: string) => {
     expect(path).toMatch(/^\/media\/[^/]+\/speak\.wav$/);
@@ -345,6 +354,23 @@ describe("talk-back", () => {
     expect(runBy).toBeGreaterThan(Date.now() - 10_000);
     expect(runBy).toBeLessThan(Date.now() + 10_000);
     expect(Array.from(heard[0]!.subarray(chime(RATE).length))).toEqual(Array.from(speechFor("Hello at the gate")));
+  });
+
+  it("gives up on a message a box took and never reported", async () => {
+    await clear();
+    const row = (at: number, id: string) => api.data.withAccount(acc, (s) => s.db.insertInto("speak_messages").values({
+      id, account_id: acc, source_id: ipcam, kind: "agent", actor: "owner:x", actor_kind: "account_key", via: "api", text: "Hi",
+      status: "sent", bridge_command_id: `bcm_${id}`, ends_at: new Date(Date.now() - at), tts_used: true,
+    }).execute());
+    await row(120_000, "spk_lost_old");
+    await row(10_000, "spk_lost_recent");
+    expect(await sweepLostSpeech(api.data, { write: async () => undefined })).toBe(1);
+    const get = async (id: string) => (await call(owner, "GET", `/v1/speak-messages/${id}`)).json();
+    expect(await get("spk_lost_old")).toMatchObject({ status: "failed", message: expect.stringMatching(/may or may not have/) });
+    expect((await get("spk_lost_recent")).status).toBe("sent");
+    // The box's report after that changes nothing.
+    expect(await sweepLostSpeech(api.data)).toBe(0);
+    await clear();
   });
 
   it("records what the box says when a message arrived too late to play", async () => {

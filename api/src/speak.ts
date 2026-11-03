@@ -506,6 +506,32 @@ export function createSpeech(deps: SpeakDeps) {
 
 export type Speech = ReturnType<typeof createSpeech>;
 
+/** A box message with no report this long after it should have finished is given up. */
+export const SPEAK_LOST_S = 60;
+
+/**
+ * Messages a box took and never reported (it went away mid-message): failed, "it may or may not have
+ * played", and audited. A late report from the box changes nothing.
+ */
+export async function sweepLostSpeech(data: DataAccess, audit?: AuditLog, seconds = SPEAK_LOST_S): Promise<number> {
+  const rows = (await sql<{ id: string; account_id: string }>`select * from lost_speak_messages(${seconds})`.execute(data.db())).rows;
+  let n = 0;
+  for (const r of rows) {
+    const row = await data.withAccount(r.account_id, (s) => s.db.updateTable("speak_messages").set({
+      status: "failed", finished_at: new Date(), ends_at: null,
+      message: "The box took the message and never said whether it played, so it may or may not have.",
+    }).where("id", "=", r.id).where("status", "=", "sent").returningAll().executeTakeFirst());
+    if (!row) continue;
+    n++;
+    const src = await data.withAccount(r.account_id, (s) => s.sources.get(row.source_id));
+    await audit?.write({
+      accountId: r.account_id, actor: row.actor, action: "speak.failed", target: row.source_id, status: 504,
+      details: { message: row.id, camera: src?.name ?? row.source_id, kind: row.kind, by: row.actor_name, via: row.via, text: row.text, duration_ms: row.duration_ms, outcome: "failed", why: row.message },
+    }).catch(() => undefined);
+  }
+  return n;
+}
+
 /** A watch fired: its speak actions are queued, said by the speech worker (ADR 0069). */
 export async function queueWatchSpeech(s: AccountScope, ev: { id: string; watch_id: string | null }, dests: Destination[]) {
   if (!ev.watch_id || !dests.length) return;

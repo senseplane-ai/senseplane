@@ -112,7 +112,10 @@ clips at the next sweep, and an account's go with it.
   Android app plays its own camera's messages through the phone's
   loudspeaker and shows "An automated message is playing on this phone".
   The request waits for the box's report; after that it answers 202 `sent`
-  and `GET /v1/speak-messages/{id}` has the outcome.
+  and `GET /v1/speak-messages/{id}` has the outcome. A message the box took
+  and never reported is given up a minute after it should have finished:
+  `failed`, "it may or may not have played", audited; a later report changes
+  nothing.
 
 **Watches may speak.** Unlike switching a device, telling people near a
 camera is what a watch is for ("say the shop is closed when someone comes in

@@ -236,7 +236,8 @@ func TestAMessageThatBecameLateIsNotPlayed(t *testing.T) {
 	RunByGrace = 0
 	defer func() { RunByGrace = grace }()
 	cam := speaktest.Start(t, true)
-	cam.Slow = 700 * time.Millisecond
+	// Longer than the second the API's Date header may round off, so the clock check can't be fooled.
+	cam.Slow = 2 * time.Second
 	f := &speakAPI{rtsp: cam.URL, clip: message(300 * time.Millisecond), runBy: 300 * time.Millisecond}
 	b, stop := speakBox(t, f, Options{})
 	defer stop()

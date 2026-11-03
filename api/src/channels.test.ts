@@ -56,6 +56,7 @@ describe("telegram channels", () => {
   let deps: ChannelDeps;
   const sent: Sent[] = [];
   const updates: TelegramUpdate[] = [];
+  const photos: Buffer[] = [];
   let failNext: { status: number; description: string; retry_after?: number } | undefined;
   const objects = new Map<string, Uint8Array>([["snapshots/k.jpg", new Uint8Array([0xff, 0xd8, 0xff, 0xd9])]]);
   let answer = "Someone came to the door **twice** today [1].";
@@ -66,6 +67,8 @@ describe("telegram channels", () => {
       ? Object.fromEntries([...init.body.entries()].map(([k, v]) => [k, typeof v === "string" ? v : "<file>"]))
       : JSON.parse(String(init?.body ?? "{}"));
     sent.push({ method, params });
+    const file = init?.body instanceof FormData ? init.body.get("photo") : null;
+    if (file instanceof Blob) photos.push(Buffer.from(await file.arrayBuffer()));
     const ok = (result: unknown) => new Response(JSON.stringify({ ok: true, result }), { status: 200 });
     if (method === "getMe") return ok(BOT);
     if (method === "getUpdates") return ok(updates.splice(0));
@@ -204,6 +207,41 @@ describe("telegram channels", () => {
     expect(sentTo(PRIVATE.id)).toHaveLength(before);
     await message(PRIVATE, "/mute off");
     expect((await channelFor(PRIVATE.id))!.muted_until).toBeNull();
+  });
+
+  it("blurs the photo for a chat whose agent only sees the camera blurred, or sends text only (ADR 0068)", async () => {
+    const ch = (await channelFor(PRIVATE.id))!;
+    await call(owner, "PATCH", `/v1/channels/${ch.id}`, { snapshots: true });
+    const watch = (await call(owner, "GET", "/v1/watches")).json().data.find((w: { notify: { id: string }[] }) => w.notify.some((d) => d.id === ch.id));
+    const grant = (await call(owner, "POST", "/v1/grants", { agent_id: ch.agent_id, source_ids: [kitchen], senses: ["video"], blurred_only: true })).json();
+    const asked: string[] = [];
+    deps.redact = async (_a, sourceId) => {
+      asked.push(sourceId);
+      return Buffer.from("blurred");
+    };
+    const alert = async (key: string) => {
+      await api.data.withAccount(acc, (s) => createEvent(s, { event_key: key, source_id: kitchen, type: "watch.triggered", sense: "video", occurred_at: new Date(),
+        summary: "Someone is at the door", labels: ["person"], confidence: 0.9, verified: true, watch_id: watch.id, snapshot_key: "snapshots/k.jpg" }));
+      await flush();
+    };
+    photos.splice(0);
+    await alert("blur-1");
+    expect(sentTo(PRIVATE.id).at(-1)!.method).toBe("sendPhoto");
+    expect(photos.map(String)).toEqual(["blurred"]);
+    expect(asked).toEqual([kitchen]);
+    // Blurring fails (no brain can blur): the alert goes as text, never with the raw photo.
+    deps.redact = async () => {
+      throw new Error("no brain");
+    };
+    await alert("blur-2");
+    expect(sentTo(PRIVATE.id).at(-1)!.method).toBe("sendMessage");
+    expect(photos).toHaveLength(1);
+    delete deps.redact;
+    await call(owner, "DELETE", `/v1/grants/${grant.id}`);
+    // Without it, the stored photo as it is.
+    await alert("blur-3");
+    expect(photos.at(-1)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    await call(owner, "PATCH", `/v1/channels/${ch.id}`, { snapshots: false }); // as the tests below expect
   });
 
   it("answers a question asked in the chat, as the chat's agent, with the moment as a button", async () => {

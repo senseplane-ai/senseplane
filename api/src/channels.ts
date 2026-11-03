@@ -20,6 +20,7 @@ import { type AccountScope, type DataAccess, hashApiKey } from "./data/access.js
 import { type Action, actionText, personChat } from "./devices.js";
 import { newId } from "./data/ids.js";
 import type { ChannelBody, ChannelsTable, EventsTable, StoredMoment } from "./data/schema.js";
+import { blurredOnly } from "./blur.js";
 import { ApiError } from "./errors.js";
 import { type Job, startClaimLoop } from "./jobs.js";
 import { wall } from "./local-time.js";
@@ -63,6 +64,8 @@ export interface ChannelDeps {
   log: FastifyBaseLogger;
   /** A person's answer to a device request waiting for confirmation (routes/devices.ts). */
   decideConfirmation?(accountId: string, id: string, approve: boolean, by: { actor: string; name: string }): Promise<{ status: string; message: string | null }>;
+  /** A snapshot blurred by a brain, for a chat whose agent only sees blurred media (ADR 0068). */
+  redact?(accountId: string, sourceId: string, jpeg: Buffer): Promise<Buffer>;
 }
 
 export const toChannel = (c: Channel) => ({
@@ -126,7 +129,7 @@ export async function sendChannelMessage(deps: ChannelDeps, id: string, accountI
   if (ch.status !== "active") return void (await set({ status: "skipped", last_error: `channel ${ch.status}` }));
   if (m.event_id && !ev) return void (await set({ status: "skipped", last_error: "event gone" }));
   if (ev && ch.muted_until && new Date(ch.muted_until) > new Date()) return void (await set({ status: "skipped", last_error: "muted" }));
-  const body = ev ? { ...eventMessage(ev, job.src?.name ?? "Camera", job.tz, deps.consoleUrl, ch.id), ...(ch.snapshots && ev.snapshot_key ? { photo_key: ev.snapshot_key } : {}) } : m.body!;
+  const body = ev ? { ...eventMessage(ev, job.src?.name ?? "Camera", job.tz, deps.consoleUrl, ch.id), ...(ch.snapshots && ev.snapshot_key ? { photo_key: ev.snapshot_key, photo_source: ev.source_id } : {}) } : m.body!;
   const attempts = m.attempts + 1;
   try {
     if (!deps.bot) throw new TelegramError("send", 0, "Telegram isn't set up on this server");
@@ -153,7 +156,8 @@ export async function sendChannelMessage(deps: ChannelDeps, id: string, accountI
 
 async function deliver(deps: ChannelDeps, ch: Channel, body: ChannelBody) {
   const bot = deps.bot!;
-  const photo = body.photo_key && deps.storage ? await readObject(deps.storage, body.photo_key).catch(() => undefined) : undefined;
+  const stored = body.photo_key && deps.storage ? await readObject(deps.storage, body.photo_key).catch(() => undefined) : undefined;
+  const photo = stored ? await photoFor(deps, ch, body, stored) : undefined;
   if (photo) {
     try {
       if (body.text.length <= 1024) return void (await bot.sendPhoto(ch.chat_id, photo, body.text, body.buttons));
@@ -164,6 +168,23 @@ async function deliver(deps: ChannelDeps, ch: Channel, body: ChannelBody) {
     }
   }
   await bot.sendMessage(ch.chat_id, fit(body.text, 4096), body.buttons);
+}
+
+/**
+ * The photo as this chat may see it (ADR 0068): when the chat's agent only sees that camera blurred, the
+ * snapshot is blurred by a brain first (it may predate the camera's blurring); if that fails, no photo, and
+ * the message goes as text. A photo whose camera isn't known is treated as blurred-only would be.
+ */
+async function photoFor(deps: ChannelDeps, ch: Channel, body: ChannelBody, jpeg: Buffer): Promise<Buffer | undefined> {
+  const grants = await deps.data.withAccount(ch.account_id, (s) =>
+    s.db.selectFrom("grants").select(["source_ids", "blurred_only"]).where("agent_id", "=", ch.agent_id).execute());
+  const blurred = body.photo_source ? blurredOnly(grants, body.photo_source) : grants.some((g) => g.blurred_only);
+  if (!blurred) return jpeg;
+  if (!deps.redact || !body.photo_source) return undefined;
+  return deps.redact(ch.account_id, body.photo_source, jpeg).catch((err) => {
+    deps.log.warn({ channel: ch.id, error: (err as Error).message }, "a blurred-only chat's photo could not be blurred; sending text only");
+    return undefined;
+  });
 }
 
 export function startChannelSender(deps: ChannelDeps, intervalMs = 1000) {
@@ -417,15 +438,15 @@ async function answerQuestion(deps: ChannelDeps, accountId: string, channelId: s
   const photo = ch.snapshots ? await data.withAccount(accountId, async (s) => {
     const row = await s.db.selectFrom("messages").select("moments").where("id", "=", message.id).executeTakeFirst();
     for (const mo of (row?.moments ?? []) as StoredMoment[]) {
-      if (mo.kind === "look" && mo.snapshot_key) return mo.snapshot_key;
+      if (mo.kind === "look" && mo.snapshot_key) return { photo_key: mo.snapshot_key, photo_source: mo.source_id };
       if (mo.kind === "event") {
-        const key = (await s.db.selectFrom("events").select("snapshot_key").where("id", "=", mo.event_id).executeTakeFirst())?.snapshot_key;
-        if (key) return key;
+        const ev = await s.db.selectFrom("events").select(["snapshot_key", "source_id"]).where("id", "=", mo.event_id).executeTakeFirst();
+        if (ev?.snapshot_key) return { photo_key: ev.snapshot_key, photo_source: ev.source_id };
       }
     }
     return undefined;
   }) : undefined;
-  await data.withAccount(accountId, (s) => queueBody(s, ch.id, { text: answerHtml(message.content || "I don't have an answer for that."), ...(buttons.length ? { buttons } : {}), ...(photo ? { photo_key: photo } : {}) }));
+  await data.withAccount(accountId, (s) => queueBody(s, ch.id, { text: answerHtml(message.content || "I don't have an answer for that."), ...(buttons.length ? { buttons } : {}), ...(photo ?? {}) }));
 }
 
 // --- devices (ADR 0067) ---------------------------------------------------------

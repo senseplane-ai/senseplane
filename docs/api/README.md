@@ -391,7 +391,9 @@ app.post("/hooks/senseplane", (req, res) => {
 });
 ```
 
-**Python** (standard library only):
+**Python** (with the SDK): `from senseplane import verify_webhook`, then
+`event = verify_webhook(request.get_data(), request.headers, SECRET)`; it raises
+`WebhookVerificationError`. Or with the standard library only:
 
 ```python
 import hashlib, hmac, json, time

@@ -276,6 +276,23 @@ const watch = await sp.watches.create({ instruction: "Tell me if a package is le
 const { data } = await sp.memory.search({ q: "when did the courier come?" });
 ```
 
+The Python SDK lives in `sdk/python` (also `senseplane`; `pip install ./sdk/python`),
+sync and async, with the MCP server's tools ready for Claude, OpenAI or LangChain:
+
+```python
+import os
+
+from senseplane import Senseplane
+
+sp = Senseplane(api_key=os.environ["SENSEPLANE_API_KEY"], base_url="http://localhost:58080/v1")
+for s in sp.sources.list():
+    print(s.id, s.name, s.status)
+watch = sp.watches.create(instruction="Tell me if a package is left at the door", sources=["src_…"])
+hits = sp.memory.search("when did the courier come?").data
+```
+
+See [its README](../sdk/python/README.md) for the event stream, webhooks and agent tools.
+
 ## Next
 
 - [API guide](api/README.md): authentication, errors, pagination, events and webhooks.

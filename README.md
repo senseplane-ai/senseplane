@@ -25,7 +25,7 @@ happens.
 
 Senseplane does perception, not decisions: it reports what it saw, how sure it
 is and the evidence, and your agent decides what to do. Agents connect through
-an MCP server, a REST API, webhooks and a TypeScript SDK.
+an MCP server, a REST API, webhooks and TypeScript and Python SDKs.
 
 > **Status:** early (v0.2). Expect rough edges, and please
 > [report what breaks](https://github.com/senseplane-ai/senseplane/issues).
@@ -56,6 +56,7 @@ backups and upgrades: [Run Senseplane on a VM](docs/self-host-vm.md).
 | API | `api/` | TypeScript (Fastify) | Public `/v1` REST API, webhooks, auth |
 | MCP server | `mcp/` | TypeScript | 12 tools for agents |
 | SDK | `sdk/typescript/` | TypeScript | `npm i senseplane` |
+| SDK | `sdk/python/` | Python | `pip install senseplane`; agent tools for Claude, OpenAI, LangChain |
 | Console | `console/` | TypeScript (React) | Web UI for sources, playback, watches, chat, access |
 | Bridge | `bridge/` | Go | RTSP cameras, outbound only |
 | Home Assistant | `integrations/home-assistant/` | Python | Forwards sensors as readings |

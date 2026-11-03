@@ -13,6 +13,11 @@ happens.
 - **Ask:** "when did the courier come?", answered with the event, a snapshot and a clip.
 - **Measure:** "how many meals today?", "how long did she sleep?", "is it quieter than usual?", answered exactly from activities, with a daily summary if you want one.
 - **Replay:** any range within your retention period (7 days by default).
+- **Stories:** "show me the parcel's morning", cut from several cameras into one video, or follow an object or a pet from camera to camera (never a person).
+- **Speak:** an agent or a workflow says something through a camera's speaker.
+- **Control, only when you allow it:** lights, switches and locks through Home Assistant or Matter, off by default per device and per agent; locks and doors wait for a person to confirm.
+- **Workflows:** "when this happens, do that" on a canvas: ask, tell, speak, clip and wait, started by events, schedules, n8n, Zapier or Home Assistant. A workflow never switches a device.
+- **Privacy:** faces and number plates blurred for agents that should only see blurred pictures, privacy masks, sound off unless you turn it on, and footage encrypted at rest.
 
 <img src="docs/images/ask-and-watch.png" alt="Asking about the yard camera: a suggested watch for when the truck leaves, and how long it has been parked">
 
@@ -58,8 +63,9 @@ backups and upgrades: [Run Senseplane on a VM](docs/self-host-vm.md).
 | SDK | `sdk/typescript/` | TypeScript | `npm i senseplane` |
 | SDK | `sdk/python/` | Python | `pip install senseplane`; agent tools for Claude, OpenAI, LangChain |
 | Console | `console/` | TypeScript (React) | Web UI for sources, playback, watches, chat, access |
-| Bridge | `bridge/` | Go | RTSP cameras, outbound only |
+| Bridge | `bridge/` | Go | RTSP cameras, Matter devices and MQTT sensors, outbound only |
 | Home Assistant | `integrations/home-assistant/` | Python | Forwards sensors as readings |
+| Android app | `android/` | Kotlin | An old phone as a camera and a box; adds Matter devices over Bluetooth |
 | Spec | `spec/` | OpenAPI + JSON Schema | Single source of truth for API, SDK and MCP |
 
 Everything runs on one machine from [one compose file](docker-compose.yml),

@@ -27,6 +27,11 @@ const { matches, checks_used } = await sp.watches.test({
 const { data: inbox } = await sp.inbox.list({ unseen: true });
 await sp.inbox.markSeen({ ids: inbox.map((i) => i.id) });
 
+// Say something through a camera's speaker (needs a speak grant for agents).
+await sp.sources.speak(src.id, "The parcel is by the door, thank you.");
+// Start a workflow that has a webhook trigger, as n8n or a script would (signed, no API key).
+await sp.workflows.trigger(workflowId, process.env.WORKFLOW_HOOK_SECRET!, { reason: "doorbell" });
+
 // In a webhook handler (throws on a bad signature or stale timestamp):
 const event = sp.webhooks.verify(rawBody, req.headers["senseplane-signature"], process.env.WEBHOOK_SECRET!);
 ```

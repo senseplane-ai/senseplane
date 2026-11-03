@@ -237,6 +237,7 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 		// ONVIF cameras on this network (and Home Assistant's) are listed to pick from (ADR 0063).
 		o.Finder = &bridge.Finder{Discover: func(ctx context.Context) ([]onvif.Found, error) { return onvif.Discover(ctx, onvif.DiscoverOptions{}) }}
 	}
+	withMQTT(ctx, &o, log) // ADR 0071, off without a broker
 	if paired {
 		o.OnRefused = func() { refused = true; cancel() }
 	}

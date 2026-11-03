@@ -53,6 +53,8 @@ type Options struct {
 	Sensors map[string]SensorLink
 	// Finder, when set, looks for ONVIF cameras on the network and adds one a person picks (ADR 0063).
 	Finder *Finder
+	// Outputs, when set, takes what the API lets this box publish (an MQTT broker, ADR 0071).
+	Outputs OutputSink
 }
 
 // SensorLink feeds readings from somewhere else than Home Assistant or Matter.
@@ -197,6 +199,9 @@ func (b *Bridge) Run(ctx context.Context) {
 	}
 	if b.found != nil {
 		go b.found.run(ctx)
+	}
+	if b.o.Outputs != nil {
+		go b.runOutputs(ctx)
 	}
 	if len(b.o.Commands) > 0 {
 		go b.runCommands(ctx)

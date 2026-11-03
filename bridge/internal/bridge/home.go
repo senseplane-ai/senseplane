@@ -188,7 +188,7 @@ func (h *home) health() (*api.HomeHealth, *api.MatterHealth) {
 	if l := h.links[linkHomeAssistant]; l != nil {
 		sending := 0
 		for id := range h.selected {
-			if !strings.HasPrefix(id, "matter.") {
+			if !strings.HasPrefix(id, "matter.") && !strings.HasPrefix(id, "mqtt.") {
 				sending++
 			}
 		}

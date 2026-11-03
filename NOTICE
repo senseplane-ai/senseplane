@@ -28,8 +28,7 @@ The self-host compose bundle runs, unmodified and as separate containers:
 RustFS (Apache License 2.0), PostgreSQL with pgvector (PostgreSQL License),
 Valkey (BSD 3-Clause License). The media image includes an LGPL build of FFmpeg
 (GNU LGPL 2.1+, https://ffmpeg.org), run as a separate process; so does the API
-image, for stories and object following, built with Cisco's OpenH264 encoder
-(BSD 2-Clause License, https://www.openh264.org, Debian's package). The optional
+image, for stories and object following (built with no H.264 encoder). The optional
 observability profile runs the OpenTelemetry Collector Contrib, Jaeger and
 Prometheus (all Apache License 2.0), unmodified.
 

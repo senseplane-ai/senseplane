@@ -170,6 +170,12 @@ class Source(BaseModel):
         ),
     ]
     record_audio: bool
+    speaker: Annotated[
+        bool | None,
+        Field(
+            description='The camera can play sound (ADR 0069): a phone always, an IP camera when its box found two-way audio (an ONVIF backchannel). Speak is offered only on cameras with a speaker.'
+        ),
+    ] = None
     zones: list[Zone]
     privacy_masks: list[PrivacyMask]
     ingest: Annotated[

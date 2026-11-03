@@ -41,6 +41,10 @@ class Code(StrEnum):
     confirmation_denied = 'confirmation_denied'
     device_offline = 'device_offline'
     device_failed = 'device_failed'
+    no_speaker = 'no_speaker'
+    speaker_busy = 'speaker_busy'
+    message_too_long = 'message_too_long'
+    camera_offline = 'camera_offline'
 
 
 class Error1(BaseModel):

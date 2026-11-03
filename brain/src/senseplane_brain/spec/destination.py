@@ -16,6 +16,7 @@ class Type(StrEnum):
     webhook = 'webhook'
     agent = 'agent'
     channel = 'channel'
+    speak = 'speak'
 
 
 class Destination(BaseModel):
@@ -26,8 +27,16 @@ class Destination(BaseModel):
     id: Annotated[
         str,
         Field(
-            description='A webhook id (whk_…), an agent id (agt_…) or a channel id (chn_…).',
+            description="A webhook id (whk_…), an agent id (agt_…), a channel id (chn_…) or, for speak, the camera's source id (src_…).",
             max_length=64,
             min_length=1,
         ),
     ]
+    text: Annotated[
+        str | None,
+        Field(
+            description="speak only: what to say through the camera's speaker, at most 30 seconds of speech. Required for speak.",
+            max_length=500,
+            min_length=1,
+        ),
+    ] = None

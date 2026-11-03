@@ -19,13 +19,14 @@ class Sense1(StrEnum):
     humidity = 'humidity'
     sensors = 'sensors'
     control = 'control'
+    speak = 'speak'
 
 
 class Sense2(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.",
+            description="One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) and `speak` (talking through the camera's speaker, ADR 0069) are only ever granted by name, like video and audio.",
             examples=['video', 'audio', 'temperature', 'humidity'],
             pattern='^[a-z][a-z0-9_]*$',
             title='Sense',
@@ -37,7 +38,7 @@ class Sense(RootModel[Sense1 | Sense2]):
     root: Annotated[
         Sense1 | Sense2,
         Field(
-            description="One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) is only ever granted by name, like video and audio.",
+            description="One thing measured. Open enum: clients must accept unknown values. In a grant, `sensors` covers every sensor sense, and `control` (switching the source's devices, ADR 0067) and `speak` (talking through the camera's speaker, ADR 0069) are only ever granted by name, like video and audio.",
             examples=['video', 'audio', 'temperature', 'humidity'],
             title='Sense',
         ),

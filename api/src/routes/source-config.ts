@@ -154,6 +154,9 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
             retention_max_bytes: { type: ["integer", "null"], minimum: 1 },
             zones: { type: "array", maxItems: 32, items: { type: "object", required: ["name", "polygon"], additionalProperties: false, properties: { name: { type: "string", pattern: "^[a-z0-9_]{1,40}$" }, polygon } } },
             privacy_masks: { type: "array", maxItems: 32, items: polygon },
+            // Privacy blurring (ADR 0068); null follows the account.
+            blur_faces: { type: ["boolean", "null"] },
+            blur_plates: { type: ["boolean", "null"] },
             sensor_thresholds: { type: ["object", "null"], propertyNames: { pattern: "^[a-z][a-z0-9_]*$" }, additionalProperties: bound },
           },
         },
@@ -170,7 +173,7 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
         && (await deps.data.withAccount(req.accountId!, (s) => s.account.get()))?.retention_max_bytes == null && (await deps.storageCap?.(req.accountId!)) == null) {
         throw new ApiError(400, "validation_failed", "fill mode needs retention_max_bytes on this source or the account");
       }
-      for (const k of ["name", "location", "site", "record_audio", "retention_days", "retention_mode", "retention_max_bytes"]) if (k in b) set[k] = b[k];
+      for (const k of ["name", "location", "site", "record_audio", "retention_days", "retention_mode", "retention_max_bytes", "blur_faces", "blur_plates"]) if (k in b) set[k] = b[k];
       for (const k of ["zones", "privacy_masks", "sensor_thresholds"]) if (k in b) set[k] = b[k] === null ? null : JSON.stringify(b[k]);
       if ("privacy_masks" in b) set.view_changed_at = null; // masks checked against the current view
       const row = await deps.data.withAccount(req.accountId!, async (s) => {

@@ -27,12 +27,17 @@ export const accessProperties = {
   senses: { type: "array", minItems: 1, items: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40 } },
   abilities: { type: "array", items: { enum: [...ABILITIES] } },
   window: { type: "object", additionalProperties: false, properties: { from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" } } },
+  // Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068, blur.ts).
+  blurred_only: { type: "boolean" },
 } as const;
-export interface AccessBody { source_ids: string[]; senses: string[]; abilities?: string[]; window?: { from?: string; to?: string } }
+export interface AccessBody { source_ids: string[]; senses: string[]; abilities?: string[]; window?: { from?: string; to?: string }; blurred_only?: boolean }
 
-type GrantRow = { id: string; agent_id: string; source_ids: string[]; senses: string[]; window_from: Date | null; window_to: Date | null; abilities: string[]; created_at: Date };
+type GrantRow = {
+  id: string; agent_id: string; source_ids: string[]; senses: string[]; window_from: Date | null; window_to: Date | null; abilities: string[]; blurred_only?: boolean;
+  created_at: Date;
+};
 export const toGrant = (g: GrantRow) => ({
-  id: g.id, agent_id: g.agent_id, source_ids: g.source_ids, senses: g.senses, abilities: g.abilities,
+  id: g.id, agent_id: g.agent_id, source_ids: g.source_ids, senses: g.senses, abilities: g.abilities, blurred_only: g.blurred_only ?? false,
   ...(g.window_from || g.window_to ? { window: { ...(g.window_from ? { from: iso(g.window_from) } : {}), ...(g.window_to ? { to: iso(g.window_to) } : {}) } } : {}),
   created_at: iso(g.created_at),
 });
@@ -46,6 +51,7 @@ export async function insertGrant(db: Kysely<Database>, sources: () => Promise<{
   return db.insertInto("grants").values({
     id: newId("grt"), account_id: accountId, agent_id: agentId, source_ids: [...new Set(b.source_ids)], senses: [...new Set(b.senses)],
     abilities: [...new Set(b.abilities ?? ABILITIES)], window_from: b.window?.from ?? null, window_to: b.window?.to ?? null,
+    blurred_only: b.blurred_only ?? false,
   }).returningAll().executeTakeFirstOrThrow();
 }
 

@@ -4,6 +4,7 @@
 // Watches: compiled by the brain once at creation (rpc.brain.compile), stored
 // here, shared with the brain through KV `watches`. Also look/ask and memory search.
 import { canSense, grantFilter, seesSource } from "../access.js";
+import { blurFor } from "../blur.js";
 import type { Database } from "../data/schema.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormatsModule from "ajv-formats";
@@ -351,7 +352,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       if (!jpeg) continue;
       type CheckReply = { yes?: boolean | null; answer?: string; confidence?: number; error?: string };
       const out: CheckReply = await bus()
-        .request<CheckReply>("rpc.brain.check", { account_id: accountId, source_id: c.source_id, prompt: verify.prompt, jpeg_b64: jpeg.toString("base64") }, 45_000)
+        .request<CheckReply>("rpc.brain.check", { account_id: accountId, source_id: c.source_id, prompt: verify.prompt, jpeg_b64: jpeg.toString("base64"), ...blurFor(req, c.source_id) }, 45_000)
         .catch((): CheckReply => ({ error: "timeout" }));
       if (out.error === "no_model") {
         noModel = true;
@@ -475,7 +476,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
       if (!src) throw new ApiError(404, "not_found", "source not found");
       type AskReply = { answer?: string; yes?: boolean | null; confidence?: number; snapshot_jpeg_b64?: string; error?: string };
       const out: AskReply = await bus()
-        .request<AskReply>("rpc.brain.ask", { account_id: accountId, source_id: src.id, question: req.body.question }, 45_000)
+        .request<AskReply>("rpc.brain.ask", { account_id: accountId, source_id: src.id, question: req.body.question, ...blurFor(req, src.id) }, 45_000)
         .catch((): AskReply => ({ error: "timeout" }));
       if (out.error === "no_live_frame") throw new ApiError(409, "not_found", "this source is not streaming right now");
       if (out.error === "no_model") throw new ApiError(503, "service_unavailable", "no vision model is configured on this instance");

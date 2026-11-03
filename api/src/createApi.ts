@@ -18,6 +18,7 @@ import { registerConversationRoutes } from "./routes/conversations.js";
 import { expireWatches, registerWatchRoutes } from "./routes/watches.js";
 import { registerInboxRoutes } from "./routes/inbox.js";
 import { checkRoute } from "./access.js";
+import { effectiveBlur } from "./blur.js";
 import { checkRole } from "./roles.js";
 import { purgeDeletedAccounts } from "./purge.js";
 import { registerTrustRoutes } from "./routes/trust.js";
@@ -310,7 +311,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
     if (principal.agentId) {
       // Read on every request, so a revoked grant stops working on the next one (ADR 0024).
       const grants = await data.withAccount(principal.accountId, (s) =>
-        s.db.selectFrom("grants").select(["source_ids", "senses", "window_from", "window_to", "abilities"]).where("agent_id", "=", principal.agentId!).execute());
+        s.db.selectFrom("grants").select(["source_ids", "senses", "window_from", "window_to", "abilities", "blurred_only"]).where("agent_id", "=", principal.agentId!).execute());
       req.access = { actor: `agent:${principal.agentId}`, agentId: principal.agentId, grants, keyHash: hashApiKey(key) };
     } else if (principal.userId && principal.role) {
       req.access = { actor: `user:${principal.userId}`, keyHash: hashApiKey(key), userId: principal.userId, role: principal.role };
@@ -377,7 +378,20 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   valkeyBus?.onSourceChanged((key) => masks.invalidate(key));
   const publishConfig = async (accountId: string, src: Source) => {
     masks.invalidate(`${accountId}.${src.id}`);
-    await bus?.putSourceConfig(accountId, src.id, { zones: src.zones ?? [], privacy_masks: src.privacy_masks ?? [], record_audio: src.record_audio });
+    // Privacy blurring (ADR 0068): the brain gets the camera's effective setting, source over account.
+    const blur = effectiveBlur(src, await data.withAccount(accountId, (s) => s.account.get()));
+    await bus?.putSourceConfig(accountId, src.id, { zones: src.zones ?? [], privacy_masks: src.privacy_masks ?? [], record_audio: src.record_audio, blur });
+  };
+  /** The account's blurring changed: every camera that follows it gets its new effective setting. */
+  const publishAllConfigs = async (accountId: string) => {
+    for (const src of await data.withAccount(accountId, (s) => s.sources.list())) await publishConfig(accountId, src);
+  };
+  /** A stored snapshot blurred by a brain, for a blurred-only agent (rpc.brain.redact). */
+  const redactSnapshot = async (accountId: string, sourceId: string, jpeg: Buffer) => {
+    const out = await bus?.request<{ jpeg_b64?: string; error?: string }>("rpc.brain.redact", { account_id: accountId, source_id: sourceId, jpeg_b64: jpeg.toString("base64") }, 20_000)
+      .catch(() => undefined);
+    if (!out?.jpeg_b64) throw new ApiError(503, "service_unavailable", "this snapshot can only be served blurred, and the brain did not answer");
+    return Buffer.from(out.jpeg_b64, "base64");
   };
   let secret = options.playbackSecret ?? process.env.PLAYBACK_SIGNING_SECRET;
   if (!secret) {
@@ -447,7 +461,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   registerDemoRoutes(app, { data, bus, media: mediaControl, signer, storage, urls: eventUrls, apiPublicUrl: options.apiPublicUrl, config: demo, ipSalt });
   registerSourceConfigRoutes(app, { data, signer: playbackSigner, base, maxRetentionDays, publishConfig, keyRefs, storageCap: async (id) => (await quotaFor(id)).storageCapBytes });
   const storageCap = async (accountId: string) => (await quotaFor(accountId)).storageCapBytes;
-  registerAccountRoutes(app, { data, maxRetentionDays, storageCap, quotaFor });
+  registerAccountRoutes(app, { data, maxRetentionDays, storageCap, quotaFor, onBlurChanged: publishAllConfigs });
   const liveIdleTimeoutSeconds = options.liveIdleTimeoutSeconds ?? Number(process.env.LIVE_IDLE_TIMEOUT_SECONDS ?? 600);
   registerLiveRoutes(app, {
     data, signer, media: mediaControl, audit, quotaFor,
@@ -497,6 +511,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900,
       keyRefs, guard: mediaGuard, keys: keyRing,
       latestSnapshot: bus ? (a, s) => bus!.latestSnapshot(a, s) : undefined,
+      ...(bus ? { redactSnapshot } : {}),
     });
     if (options.workers !== false) stoppers.push(startClipWorker(data, storage, app.log));
   }

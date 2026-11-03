@@ -16,6 +16,8 @@ export interface Grant {
   window_to: Date | null;
   /** `watch` and/or `history` (ADR 0048); absent means both. */
   abilities?: string[];
+  /** Blurred media only on these sources (ADR 0068, blur.ts). */
+  blurred_only?: boolean;
 }
 
 export const ABILITIES = ["watch", "history"] as const;

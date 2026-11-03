@@ -9,6 +9,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { sql } from "kysely";
 import type { Selectable } from "kysely";
 import { canSense, grantFilter, seesSource } from "../access.js";
+import { blurFor } from "../blur.js";
 import type { AccountScope, DataAccess } from "../data/access.js";
 import { newId } from "../data/ids.js";
 import type { ConversationsTable, Database, MessagesTable, StoredMoment } from "../data/schema.js";
@@ -232,6 +233,7 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
         zones: (x.zones ?? []).map((z) => z.name),
         senses: x.senses.filter((sense) => canSense(req, x.id, sense)),
         can_look: x.senses.includes("video") && canSense(req, x.id, "video"),
+        ...blurFor(req, x.id), // an agent that sees this camera only blurred (ADR 0068)
       }));
       // Watches the answer may measure (query_activity with watch_id, ADR 0057).
       const brainWatches = (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("watches").select(["id", "instruction", "mode", "sources", "status"]).execute()))

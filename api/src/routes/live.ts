@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { sql } from "kysely";
 import { canSense } from "../access.js";
+import { refuseRawFor } from "../blur.js";
 import type { DataAccess } from "../data/access.js";
 import { ApiError } from "../errors.js";
 import type { IngestSigner } from "../ingest.js";
@@ -58,6 +59,7 @@ export function registerLiveRoutes(app: FastifyInstance, deps: LiveDeps) {
       const source = await deps.data.withAccount(accountId, (s) => s.sources.get(req.params.id));
       if (!source) throw new ApiError(404, "not_found", "source not found");
       if (source.type === "sensor") throw new ApiError(409, "conflict", "this source has no video to watch");
+      refuseRawFor(req, source.id); // live video is not blurred (ADR 0068)
       // A video grant is required (checkRoute); audio needs its own grant as well as `audio: true`.
       const wantsAudio = req.body?.audio === true;
       if (wantsAudio && !canSense(req, source.id, "audio")) throw new ApiError(403, "forbidden_sense", "this agent has no audio grant for this source");

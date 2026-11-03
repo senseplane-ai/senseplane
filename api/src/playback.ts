@@ -19,6 +19,8 @@ export interface MediaClaims {
   sid?: string;
   f?: number;
   t?: number;
+  /** Blurred only (ADR 0068): snapshots are blurred before they are served, and video is refused. */
+  bo?: 1;
 }
 
 export type PlaybackScope = (

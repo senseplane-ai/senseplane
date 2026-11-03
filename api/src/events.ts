@@ -139,7 +139,9 @@ export function toEvent(row: EventRow, source: { name?: string; location: string
     if (row.snapshot_key) {
       media.snapshot_url = `${urls.base}/media/${urls.signer.sign({ kind: "object", accountId: row.account_id, key: row.snapshot_key, ...claims }, urls.ttlSeconds).token}/snapshot.jpg`;
     }
-    if (row.clip_id) {
+    if (claims.bo) {
+      // Blurred only (ADR 0068): the snapshot (blurred when served), never the recording.
+    } else if (row.clip_id) {
       media.clip_url = `${urls.base}/playback/${urls.signer.sign({ kind: "clip", accountId: row.account_id, clipId: row.clip_id, ...claims }, urls.ttlSeconds).token}/index.m3u8`;
     } else if (row.sense === "video" || row.sense === "audio") {
       // Until the event clip is cut, the URL plays the same window from raw segments.

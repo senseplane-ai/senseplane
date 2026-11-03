@@ -11,6 +11,7 @@
 // therefore reaches media within the cache window (30 s), not the link's TTL.
 import type { FastifyRequest } from "fastify";
 import { type Grant, sensesForRange } from "./access.js";
+import { blurredOnly } from "./blur.js";
 import type { DataAccess } from "./data/access.js";
 import { ApiError } from "./errors.js";
 import type { KeyRefSealer, MediaClaims, PlaybackScope } from "./playback.js";
@@ -24,6 +25,7 @@ export function mediaClaims(req: Pick<FastifyRequest, "access">, sealer: KeyRefS
   return {
     ...(access.keyHash ? { kr: sealer.seal(access.keyHash) } : {}),
     ...(senses !== "all" && !senses.has("audio") ? { na: 1 as const } : {}),
+    ...(blurredOnly(access.grants, sourceId) ? { bo: 1 as const } : {}),
     sid: sourceId,
     f: from,
     t: to,
@@ -33,6 +35,8 @@ export function mediaClaims(req: Pick<FastifyRequest, "access">, sealer: KeyRefS
 export interface MediaDecision {
   /** Serve video without its audio track. */
   stripAudio: boolean;
+  /** Blurred only (ADR 0068): blur snapshots before serving them; refuse video. */
+  blurredOnly: boolean;
 }
 
 export function createMediaGuard(data: DataAccess, sealer: KeyRefSealer, cacheMs = 30_000) {
@@ -51,23 +55,26 @@ export function createMediaGuard(data: DataAccess, sealer: KeyRefSealer, cacheMs
     const hit = grantsCache.get(agentId);
     if (hit && fresh(hit.at)) return hit.value;
     const value = await data.withAccount(accountId, (s) =>
-      s.db.selectFrom("grants").select(["source_ids", "senses", "window_from", "window_to"]).where("agent_id", "=", agentId).execute());
+      s.db.selectFrom("grants").select(["source_ids", "senses", "window_from", "window_to", "blurred_only"]).where("agent_id", "=", agentId).execute());
     grantsCache.set(agentId, { at: Date.now(), value });
     return value;
   };
 
-  /** Throws when the link's key or grants no longer allow it; otherwise says whether to strip audio. */
+  /** Throws when the link's key or grants no longer allow it; otherwise says whether to strip audio or blur. */
   return async function check(scope: PlaybackScope): Promise<MediaDecision> {
-    if (!scope.kr) return { stripAudio: Boolean(scope.na) };
+    const bo = Boolean(scope.bo);
+    if (!scope.kr) return { stripAudio: Boolean(scope.na), blurredOnly: bo };
     const keyHash = sealer.open(scope.kr);
     const who = keyHash ? await principal(keyHash) : undefined;
     if (!who || who.accountId !== scope.accountId) throw new ApiError(401, "unauthorized", "this media link's access was revoked");
-    if (!who.agentId) return { stripAudio: Boolean(scope.na) };
+    if (!who.agentId) return { stripAudio: Boolean(scope.na), blurredOnly: bo };
     if (!scope.sid) throw new ApiError(403, "forbidden_sense", "this media link has no source scope");
     const now = Date.now();
-    const senses = sensesForRange(await grantsOf(scope.accountId, who.agentId), scope.sid, new Date(scope.f ?? now), new Date(scope.t ?? now));
+    const grants = await grantsOf(scope.accountId, who.agentId);
+    const senses = sensesForRange(grants, scope.sid, new Date(scope.f ?? now), new Date(scope.t ?? now));
     if (senses !== "all" && !senses.has("video")) throw new ApiError(403, "forbidden_sense", "this agent no longer has a video grant for this media");
-    return { stripAudio: Boolean(scope.na) || (senses !== "all" && !senses.has("audio")) };
+    // A grant made blurred-only after the link was issued reaches it here, within the cache window.
+    return { stripAudio: Boolean(scope.na) || (senses !== "all" && !senses.has("audio")), blurredOnly: bo || blurredOnly(grants, scope.sid) };
   };
 }
 

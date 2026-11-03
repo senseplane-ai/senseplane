@@ -63,6 +63,8 @@ export function registerAccountRoutes(
   deps: {
     data: DataAccess; maxRetentionDays(accountId: string): Promise<number | null>; storageCap(accountId: string): Promise<number | null | undefined>;
     quotaFor?(accountId: string): Promise<Quota>;
+    /** The account's privacy blurring changed: send every camera's new effective setting to the brain (ADR 0068). */
+    onBlurChanged?(accountId: string): Promise<void>;
   },
 ) {
   const show = async (accountId: string) => {
@@ -79,6 +81,8 @@ export function registerAccountRoutes(
       retention_days: row.retention_days,
       retention_max_bytes: ownCap,
       retention_max_days: await deps.maxRetentionDays(accountId),
+      blur_faces: row.blur_faces ?? false,
+      blur_plates: row.blur_plates ?? false,
       storage: {
         ...storage,
         storage_cap_bytes: cap,
@@ -91,7 +95,7 @@ export function registerAccountRoutes(
 
   app.get("/v1/account", async (req) => show(req.accountId!));
 
-  app.patch<{ Body: { name?: string; time_zone?: string; retention_days?: number | null; retention_mode?: "days" | "fill"; retention_max_bytes?: number | null } }>(
+  app.patch<{ Body: { name?: string; time_zone?: string; retention_days?: number | null; retention_mode?: "days" | "fill"; retention_max_bytes?: number | null; blur_faces?: boolean; blur_plates?: boolean } }>(
     "/v1/account",
     {
       schema: {
@@ -104,6 +108,8 @@ export function registerAccountRoutes(
             retention_days: { type: ["integer", "null"], minimum: 1 },
             retention_mode: { type: "string", enum: ["days", "fill"] },
             retention_max_bytes: { type: ["integer", "null"], minimum: 1 },
+            blur_faces: { type: "boolean" },
+            blur_plates: { type: "boolean" },
           },
         },
       },
@@ -137,10 +143,15 @@ export function registerAccountRoutes(
             ...("retention_days" in b ? { retention_days: b.retention_days ?? null } : {}),
             ...(b.retention_mode ? { retention_mode: b.retention_mode } : {}),
             ...("retention_max_bytes" in b ? { retention_max_bytes: b.retention_max_bytes ?? null } : {}),
+            ...(b.blur_faces !== undefined ? { blur_faces: b.blur_faces } : {}),
+            ...(b.blur_plates !== undefined ? { blur_plates: b.blur_plates } : {}),
           })
           .where("id", "=", accountId)
           .execute();
       });
+      if ((b.blur_faces !== undefined && b.blur_faces !== current!.blur_faces) || (b.blur_plates !== undefined && b.blur_plates !== current!.blur_plates)) {
+        await deps.onBlurChanged?.(accountId);
+      }
       return show(accountId);
     },
   );

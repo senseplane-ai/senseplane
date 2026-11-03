@@ -77,6 +77,7 @@ export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
     retention_max_bytes: row.retention_max_bytes == null ? null : Number(row.retention_max_bytes),
     zones: row.zones ?? [],
     privacy_masks: row.privacy_masks ?? [],
+    ...(row.type !== "sensor" ? { blur_faces: row.blur_faces ?? null, blur_plates: row.blur_plates ?? null } : {}),
     sensor_thresholds: thresholds,
     status_since: row.status_since ? new Date(row.status_since).toISOString() : null,
     ...(row.type === "rtsp" ? { bridge_id: row.bridge_id ?? null, status_detail: row.bridge_detail ? redactUrls(row.bridge_detail) : null } : {}),

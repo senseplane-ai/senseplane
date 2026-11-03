@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { requireRange, seesSource } from "../access.js";
+import { refuseRawFor } from "../blur.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { type Selectable, sql } from "kysely";
 import type { AccountScope, DataAccess } from "../data/access.js";
@@ -36,6 +37,8 @@ export interface PlaybackDeps {
   guard?: MediaGuard;
   /** Account keys: encrypted segments' keys for players, and to decrypt where the API reads them (ADR 0066). */
   keys?: KeyRing;
+  /** A snapshot blurred by the brain, for blurred-only agents (ADR 0068). */
+  redactSnapshot?: (accountId: string, sourceId: string, jpeg: Buffer) => Promise<Buffer>;
 }
 
 const MAX_PLAYLIST_MS = 24 * 3600_000;
@@ -181,6 +184,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     const to = parseTime(req.query.to, "to");
     if (from >= to) throw new ApiError(400, "validation_failed", "from must be before to");
     if (to - from > MAX_PLAYLIST_MS) throw new ApiError(400, "validation_failed", "a playlist covers at most 24 hours");
+    refuseRawFor(req, req.params.id);
     const accountId = req.accountId!;
     const ranges = await deps.data.withAccount(accountId, async (s) => {
       if (!(await s.sources.get(req.params.id))) throw new ApiError(404, "not_found", "source not found");
@@ -203,14 +207,20 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
   /** Verifies the token, then re-checks the issuing key and its grants (revocation reaches media, ADR 0036). */
   const authorize = async (token: string) => {
     const scope = verifyToken(token);
-    const decision = deps.guard ? await deps.guard(scope) : { stripAudio: Boolean(scope.na) };
+    const decision = deps.guard ? await deps.guard(scope) : { stripAudio: Boolean(scope.na), blurredOnly: Boolean(scope.bo) };
     return { scope, ...decision };
+  };
+  /** Playlists, segments and keys are raw video: never for a blurred-only agent (ADR 0068). */
+  const authorizeVideo = async (token: string) => {
+    const out = await authorize(token);
+    if (out.blurredOnly) throw new ApiError(403, "forbidden_sense", "this agent sees this camera only blurred: recordings and clips aren't available to it", { blurred_only: true });
+    return out;
   };
 
   const encOf = (r: { enc_version: number | null; enc_iv: Buffer | null }) =>
     r.enc_version !== null && r.enc_iv ? { enc: { version: r.enc_version, iv: r.enc_iv } } : {};
   app.get<{ Params: { token: string } }>("/playback/:token/index.m3u8", async (req, reply) => {
-    const { scope, stripAudio } = await authorize(req.params.token);
+    const { scope, stripAudio } = await authorizeVideo(req.params.token);
     // Without audio the API serves the segments itself, decrypted: no keys in that playlist.
     const enc = (r: { enc_version: number | null; enc_iv: Buffer | null }) => (stripAudio ? {} : encOf(r));
     const segments = await deps.data.withAccount(scope.accountId, async (s) => {
@@ -284,7 +294,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     });
 
   app.get<{ Params: { token: string; ref: string } }>("/playback/:token/s/:ref", async (req, reply) => {
-    const { scope, stripAudio } = await authorize(req.params.token);
+    const { scope, stripAudio } = await authorizeVideo(req.params.token);
     const row = await lookup(scope, req.params.ref.replace(/\.m4s$/, ""));
     if (!row) throw new ApiError(404, "not_found", "segment not found");
     if (stripAudio) {
@@ -294,7 +304,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     return deliver(reply, row.key, "video/iso.segment");
   });
   app.get<{ Params: { token: string; ref: string } }>("/playback/:token/i/:ref", async (req, reply) => {
-    const { scope, stripAudio } = await authorize(req.params.token);
+    const { scope, stripAudio } = await authorizeVideo(req.params.token);
     const row = await lookup(scope, req.params.ref.replace(/\.mp4$/, ""));
     if (!row) throw new ApiError(404, "not_found", "init segment not found");
     if (stripAudio) return deliverWithoutAudio(reply, row.init_key, row.init_key, true);
@@ -309,7 +319,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
   };
   // The key players fetch for encrypted segments (#EXT-X-KEY); the playlist's token is the credential.
   app.get<{ Params: { token: string; version: string } }>("/playback/:token/k/:version", async (req, reply) => {
-    const { scope, stripAudio } = await authorize(req.params.token);
+    const { scope, stripAudio } = await authorizeVideo(req.params.token);
     // A video-only link is served decrypted segments without audio; the key would open the audio too.
     if (stripAudio) throw new ApiError(403, "forbidden_sense", "this link has no key");
     const version = Number(req.params.version.replace(/\.key$/, ""));
@@ -326,7 +336,18 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
 
   // Signed media objects (event snapshots) and a source's latest snapshot.
   app.get<{ Params: { token: string } }>("/media/:token/snapshot.jpg", async (req, reply) => {
-    const { scope } = await authorize(req.params.token);
+    const { scope, blurredOnly } = await authorize(req.params.token);
+    if (blurredOnly) {
+      // Blurred again by the brain on the way out: the snapshot may predate the camera's blurring (ADR 0068).
+      const sourceId = scope.kind === "latest" ? scope.sourceId : scope.sid;
+      if (!deps.redactSnapshot || !sourceId || (scope.kind !== "object" && scope.kind !== "latest")) {
+        throw new ApiError(503, "service_unavailable", "this snapshot can only be served blurred, and blurring isn't available right now");
+      }
+      const raw = scope.kind === "object" ? await readAll((await deps.storage.get(scope.key)).body) : await deps.latestSnapshot?.(scope.accountId, scope.sourceId);
+      if (!raw) throw new ApiError(404, "not_found", "no snapshot yet");
+      const jpeg = await deps.redactSnapshot(scope.accountId, sourceId, Buffer.from(raw));
+      return reply.header("content-type", "image/jpeg").header("cache-control", "private, no-store").send(jpeg);
+    }
     if (scope.kind === "object") return deliver(reply, scope.key, "image/jpeg");
     if (scope.kind === "latest" && deps.latestSnapshot) {
       const jpeg = await deps.latestSnapshot(scope.accountId, scope.sourceId);
@@ -363,6 +384,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
       if (to - from > MAX_CLIP_MS) throw new ApiError(400, "validation_failed", "a clip is at most 1 hour");
       const accountId = req.accountId!;
       requireRange(req, req.body.source, "video", new Date(from), new Date(to));
+      refuseRawFor(req, req.body.source);
       if (!(await deps.data.withAccount(accountId, (s) => s.sources.get(req.body.source)))) throw new ApiError(404, "not_found", "source not found");
       const clip = await createClip(deps, accountId, req.body.source, from, to, req.body.title ?? null);
       if (!clip) throw new ApiError(404, "not_found", "nothing was recorded in that range");
@@ -381,6 +403,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
   app.get<{ Params: { id: string } }>("/v1/clips/:id", async (req) => {
     const row = await deps.data.withAccount(req.accountId!, (s) => s.db.selectFrom("clips").selectAll().where("id", "=", req.params.id).executeTakeFirst());
     if (!row || !seesSource(req, row.source_id) || !visibleClip(req, row)) throw new ApiError(404, "not_found", "clip not found");
+    refuseRawFor(req, row.source_id);
     const claims = claimsFor(req, row.source_id, new Date(row.from_at).getTime(), new Date(row.to_at).getTime());
     return toClip(row, playbackUrl(req, { kind: "clip", accountId: req.accountId!, clipId: row.id, ...claims }));
   });

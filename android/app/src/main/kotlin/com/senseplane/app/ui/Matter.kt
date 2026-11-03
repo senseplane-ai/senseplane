@@ -187,7 +187,11 @@ private fun CodeField(code: String, onCode: (String) -> Unit, placeholder: Strin
         if (ok) scanning = true else problem = "Senseplane needs the camera to read the QR code. You can type the code instead."
     }
     Field("Pairing code", code, onCode, placeholder = placeholder, monoFont = true, hint = hint)
-    if (scanning) {
+    val status by BoxHolder.status.collectAsState()
+    val beACamera = remember { com.senseplane.app.Prefs(context).camera }
+    if (!MatterPairing.canScanQr(beACamera, status.running)) {
+        Body("The camera is sending this phone's video, so it can't read the QR code now. Type the code printed under the QR code instead.", color = Ink.muted, size = 13)
+    } else if (scanning) {
         QrScanner(onCode = { onCode(it); scanning = false }, onError = { problem = it; scanning = false })
         Secondary("Stop scanning") { scanning = false }
     } else {

@@ -42,6 +42,16 @@ class PhoneCamera(
     @Volatile var running = false
         private set
     private var warm = false
+    private var cameraId: String? = null
+    private val backoff = ReopenBackoff()
+    private val cameras get() = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+
+    /** Another app (or the app's QR scanner) giving the camera back: take it again. */
+    private val availability = object : CameraManager.AvailabilityCallback() {
+        override fun onCameraAvailable(id: String) {
+            if (running && device == null && id == cameraId) openCamera()
+        }
+    }
 
     @SuppressLint("MissingPermission") // the app asks for the camera before starting
     fun start() = handler.post {
@@ -78,29 +88,58 @@ class PhoneCamera(
         input = c.createInputSurface()
         c.start()
         codec = c
-        val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cm = cameras
         val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK }
             ?: cm.cameraIdList.firstOrNull()
         if (id == null) {
             Log.w(TAG, "no camera")
             return@post
         }
-        cm.openCamera(id, object : CameraDevice.StateCallback() {
-            override fun onOpened(camera: CameraDevice) {
-                device = camera
-                openSession()
-            }
-            override fun onDisconnected(camera: CameraDevice) {
-                camera.close()
-                device = null
-            }
-            override fun onError(camera: CameraDevice, error: Int) {
-                Log.w(TAG, "camera error $error")
-                camera.close()
-                device = null
-            }
-        }, handler)
+        cameraId = id
+        cm.registerAvailabilityCallback(availability, handler)
+        openCamera()
     }
+
+    /** Opens the camera; when it is taken away (or can't be had) it tries again, soon and then less often. */
+    @SuppressLint("MissingPermission")
+    private fun openCamera() {
+        val id = cameraId ?: return
+        if (!running || device != null) return
+        runCatching {
+            cameras.openCamera(id, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    if (!running) { camera.close(); return }
+                    device = camera
+                    backoff.reset()
+                    openSession()
+                }
+                override fun onDisconnected(camera: CameraDevice) = lost(camera, "camera taken away")
+                override fun onError(camera: CameraDevice, error: Int) = lost(camera, "camera error $error")
+            }, handler)
+        }.onFailure {
+            Log.w(TAG, "can't open the camera", it)
+            retry()
+        }
+    }
+
+    private fun lost(camera: CameraDevice, why: String) {
+        Log.w(TAG, "$why; opening it again")
+        camera.close()
+        if (device == camera) {
+            device = null
+            runCatching { session?.close() }
+            session = null
+        }
+        retry()
+    }
+
+    private fun retry() {
+        if (!running) return
+        handler.removeCallbacks(reopen)
+        handler.postDelayed(reopen, backoff.next())
+    }
+
+    private val reopen = Runnable { openCamera() }
 
     /** Shows the camera on this surface too (null: encode only). */
     fun setPreview(surface: Surface?) = handler.post {
@@ -145,6 +184,8 @@ class PhoneCamera(
     fun stop() = handler.post {
         if (!running) return@post
         running = false
+        runCatching { cameras.unregisterAvailabilityCallback(availability) }
+        handler.removeCallbacks(reopen)
         runCatching { session?.close() }
         runCatching { device?.close() }
         runCatching { codec?.stop() }
@@ -156,6 +197,13 @@ class PhoneCamera(
     fun close() {
         stop()
         thread.quitSafely()
+    }
+
+    /** When to try the camera again after losing it: after 1 s, doubling to every 30 s. */
+    class ReopenBackoff(private val first: Long = 1_000, private val max: Long = 30_000) {
+        private var next = first
+        fun next(): Long = next.also { next = (next * 2).coerceAtMost(max) }
+        fun reset() { next = first }
     }
 
     companion object {

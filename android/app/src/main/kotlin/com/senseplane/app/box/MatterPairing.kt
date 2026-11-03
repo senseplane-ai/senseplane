@@ -104,6 +104,12 @@ object MatterPairing {
         }
     }
 
+    /**
+     * Whether the QR scanner may open the camera: not while this phone sends
+     * its own video, which the scanner would take the camera from.
+     */
+    fun canScanQr(beACamera: Boolean, boxRunning: Boolean): Boolean = !(beACamera && boxRunning)
+
     /** A Wi-Fi name as Android gives it (in quotes, or unknown without location). */
     fun ssid(raw: String?): String {
         val s = raw?.trim()?.removeSurrounding("\"").orEmpty()

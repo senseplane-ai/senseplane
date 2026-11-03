@@ -91,12 +91,29 @@ The same check as the TypeScript SDK (tested against vectors it produced): an
 HMAC-SHA256 of `"<t>.<body>"`, timestamps within 5 minutes. Drop duplicates by
 the `Senseplane-Delivery` header.
 
+### Devices
+
+```python
+light = next(d for d in sp.devices.list() if d.name == "Hall light")
+done = sp.devices.command(light.id, "set_brightness", value=40)
+print(done.status, done.message, done.state)  # the state the box read back
+for request in person.confirmations.list():  # a signed-in person answers these
+    person.confirmations.decide(request.id, approve=True)
+```
+
+A command that fails or finds the box offline raises a `SenseplaneError` whose
+`details["command"]` is the recorded request; `sp.devices.request(id)` shows what
+happened to one later. Boxes are `sp.bridges` (and, with a bridge token, `sp.bridge`).
+
 ### Tools for Claude (and OpenAI, LangChain)
 
-`senseplane.tools` has the MCP server's ten tools (`look`, `listen`,
-`watch_for`, `what_happened`, `measure`, `check_history`, `replay`, …) with the
-same names, descriptions and results, and a dispatcher that runs them. Give the
-agent an agent key, so it sees only what its grants allow.
+`senseplane.tools` has the MCP server's twelve tools (`look`, `listen`,
+`read_environment`, `watch_for`, `what_happened`, `measure`, `check_history`,
+`replay`, `list_devices`, `control_device`, …) with the same names, descriptions
+and results, and a dispatcher that runs them. Give the agent an agent key, so it
+sees only what its grants allow; `control_device` also needs the Control
+permission, and a lock, garage door, gate or alarm it asks for waits for a person
+to confirm.
 
 ```python
 import anthropic
@@ -140,7 +157,8 @@ message; `senseplane.tools.langchain.langchain_tools(sp)` gives LangChain tools
   (`sp.integration.get()`, `sp.sources.push_readings(...)`) or a bridge token (`sp.bridge`).
 
 Examples: [`examples/`](examples). Labels and senses: `senseplane.LABELS`,
-`label_name("teddy_bear")`, `senseplane.SENSES`.
+`label_name("teddy_bear")`, the sensor senses `senseplane.SENSES` (`sense_name`,
+`reading_text`, …, as the TypeScript SDK's), and `senseplane.KNOWN_SENSES`.
 
 ## Development
 

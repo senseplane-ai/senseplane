@@ -18,8 +18,13 @@ uv run python scripts/codegen.py
 | `src/senseplane/_generated/models.py` | `spec/openapi.yaml`, by datamodel-code-generator (Pydantic v2) |
 | `src/senseplane/_generated/api.py` | `spec/openapi.yaml` (operations, which take an Idempotency-Key) and `spec/schemas` (error codes, senses) |
 | `src/senseplane/_generated/labels.py` | `spec/labels.json` |
+| `src/senseplane/_generated/senses.py` | `spec/senses.json` |
 | `src/senseplane/_generated/tools.json` | `spec/mcp/tools.json` |
 | `src/senseplane/_sync_client.py`, `_sync_tools.py` | `_async_client.py`, `_async_tools.py`, by dropping `async` and `await` |
+
+datamodel-code-generator numbers a name it has already used (`Device1`); when
+the spec's own schema loses its name that way, `RENAMES` in `scripts/codegen.py`
+gives it back (codegen stops if a listed class disappears).
 
 Don't edit generated files. The async client and tools are the hand-written
 source: change them and regenerate, and the sync versions follow. In them,

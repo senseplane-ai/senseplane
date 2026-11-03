@@ -34,6 +34,8 @@ type Camera struct {
 	Codec   string
 	// Digest: the camera asks for its password with an RTSP Digest challenge, as most do.
 	Digest bool
+	// Qop: its Digest challenge asks for qop=auth, and its realm has a comma in it, as some cameras' do.
+	Qop bool
 	// Slow: how long it takes to answer DESCRIBE (a camera on a slow network).
 	Slow time.Duration
 
@@ -179,8 +181,12 @@ func (c *Camera) handle(conn net.Conn) {
 			}
 			_, _ = conn.Write([]byte(out + "\r\n" + body))
 		}
-		if c.Digest && !digestOK(method, uri, h.Get("Authorization")) {
-			_, _ = conn.Write([]byte("RTSP/1.0 401 Unauthorized\r\nCSeq: " + cseq + "\r\nWWW-Authenticate: Digest realm=\"cam\", nonce=\"n0nce\"\r\n\r\n"))
+		if c.Digest && !c.digestOK(method, uri, h.Get("Authorization")) {
+			challenge := `Digest realm="cam", nonce="n0nce"`
+			if c.Qop {
+				challenge = `Digest realm="IP Camera, front door", qop="auth,auth-int", nonce="n0nce", opaque="0paque", algorithm=MD5`
+			}
+			_, _ = conn.Write([]byte("RTSP/1.0 401 Unauthorized\r\nCSeq: " + cseq + "\r\nWWW-Authenticate: " + challenge + "\r\n\r\n"))
 			continue
 		}
 		switch method {
@@ -203,12 +209,69 @@ func (c *Camera) handle(conn net.Conn) {
 	}
 }
 
-// digestOK checks an RTSP Digest answer for admin/secret (RFC 2617, MD5).
-func digestOK(method, uri, auth string) bool {
+// digestOK checks an RTSP Digest answer for admin/secret (RFC 2617, MD5; with qop=auth for a Qop camera).
+func (c *Camera) digestOK(method, uri, auth string) bool {
+	if !strings.HasPrefix(auth, "Digest ") {
+		return false
+	}
 	md := func(s string) string {
 		sum := md5.Sum([]byte(s))
 		return hex.EncodeToString(sum[:])
 	}
-	want := md(md("admin:cam:secret") + ":n0nce:" + md(method+":"+uri))
-	return strings.HasPrefix(auth, "Digest ") && strings.Contains(auth, `response="`+want+`"`) && strings.Contains(auth, `uri="`+uri+`"`)
+	p := params(auth[len("Digest "):])
+	if p["uri"] != uri || p["username"] != "admin" {
+		return false
+	}
+	if !c.Qop {
+		return p["realm"] == "cam" && p["response"] == md(md("admin:cam:secret")+":n0nce:"+md(method+":"+uri))
+	}
+	if p["realm"] != "IP Camera, front door" || p["qop"] != "auth" || p["nc"] == "" || p["cnonce"] == "" || p["opaque"] != "0paque" {
+		return false
+	}
+	ha1 := md("admin:IP Camera, front door:secret")
+	return p["response"] == md(ha1+":n0nce:"+p["nc"]+":"+p["cnonce"]+":auth:"+md(method+":"+uri))
+}
+
+// params reads a challenge's `k="v", k2=v2` list; a quoted value may hold commas and \" escapes.
+func params(s string) map[string]string {
+	out := map[string]string{}
+	i := 0
+	for i < len(s) {
+		for i < len(s) && (s[i] == ' ' || s[i] == ',' || s[i] == '\t') {
+			i++
+		}
+		start := i
+		for i < len(s) && s[i] != '=' && s[i] != ',' {
+			i++
+		}
+		key := strings.ToLower(strings.TrimSpace(s[start:i]))
+		if i >= len(s) || s[i] != '=' {
+			continue
+		}
+		i++
+		for i < len(s) && s[i] == ' ' {
+			i++
+		}
+		var val strings.Builder
+		if i < len(s) && s[i] == '"' {
+			i++
+			for i < len(s) && s[i] != '"' {
+				if s[i] == '\\' && i+1 < len(s) {
+					i++
+				}
+				val.WriteByte(s[i])
+				i++
+			}
+			i++ // the closing quote
+		} else {
+			for i < len(s) && s[i] != ',' {
+				val.WriteByte(s[i])
+				i++
+			}
+		}
+		if key != "" {
+			out[key] = strings.TrimSpace(val.String())
+		}
+	}
+	return out
 }

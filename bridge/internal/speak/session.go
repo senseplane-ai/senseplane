@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/textproto"
 	"net/url"
@@ -321,26 +322,53 @@ func (s *session) read() (int, textproto.MIMEHeader, []byte, error) {
 	}
 }
 
-// authFor answers a camera's challenge: Digest (MD5, RFC 2617) when offered, else Basic.
+// authFor answers a camera's challenge: Digest (MD5, RFC 2617, with qop=auth when the camera offers it)
+// when offered, else Basic.
 func authFor(challenges []string, user, pass string) func(method, uri string) string {
+	md := func(s string) string {
+		sum := md5.Sum([]byte(s))
+		return hex.EncodeToString(sum[:])
+	}
 	for _, c := range challenges {
-		if !strings.HasPrefix(strings.ToLower(c), "digest ") {
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c)), "digest ") {
 			continue
 		}
-		p := params(c[len("digest "):])
-		realm, nonce := p["realm"], p["nonce"]
-		md := func(s string) string {
-			sum := md5.Sum([]byte(s))
-			return hex.EncodeToString(sum[:])
+		p := params(strings.TrimSpace(c)[len("digest "):])
+		realm, nonce, opaque, algo := p["realm"], p["nonce"], p["opaque"], p["algorithm"]
+		if algo != "" && !strings.EqualFold(algo, "MD5") {
+			continue // MD5-sess and SHA-256 aren't spoken here
 		}
+		auth := false
+		for _, q := range strings.Split(p["qop"], ",") {
+			if strings.TrimSpace(strings.ToLower(q)) == "auth" {
+				auth = true
+			}
+		}
+		esc := func(s string) string { return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) }
+		nc := 0
 		return func(method, uri string) string {
 			ha1 := md(user + ":" + realm + ":" + pass)
 			ha2 := md(method + ":" + uri)
-			return fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`, user, realm, nonce, uri, md(ha1+":"+nonce+":"+ha2))
+			h := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s"`, esc(user), esc(realm), esc(nonce), uri)
+			if auth {
+				nc++
+				cnonce := fmt.Sprintf("%016x", rand.Uint64())
+				count := fmt.Sprintf("%08x", nc)
+				h += fmt.Sprintf(`, qop=auth, nc=%s, cnonce="%s", response="%s"`, count, cnonce, md(ha1+":"+nonce+":"+count+":"+cnonce+":auth:"+ha2))
+			} else {
+				h += fmt.Sprintf(`, response="%s"`, md(ha1+":"+nonce+":"+ha2))
+			}
+			if algo != "" {
+				h += ", algorithm=MD5"
+			}
+			if opaque != "" {
+				h += fmt.Sprintf(`, opaque="%s"`, esc(opaque))
+			}
+			return h
 		}
 	}
 	for _, c := range challenges {
-		if strings.HasPrefix(strings.ToLower(c), "basic") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c)), "basic") {
 			v := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
 			return func(string, string) string { return v }
 		}
@@ -348,13 +376,45 @@ func authFor(challenges []string, user, pass string) func(method, uri string) st
 	return nil
 }
 
-// params reads `k="v", k2=v2` from a challenge.
+// params reads a challenge's `k="v", k2=v2` list; a quoted value may hold commas and \" escapes.
 func params(s string) map[string]string {
 	out := map[string]string{}
-	for _, part := range strings.Split(s, ",") {
-		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if ok {
-			out[strings.ToLower(strings.TrimSpace(k))] = strings.Trim(strings.TrimSpace(v), `"`)
+	i := 0
+	for i < len(s) {
+		for i < len(s) && (s[i] == ' ' || s[i] == ',' || s[i] == '\t') {
+			i++
+		}
+		start := i
+		for i < len(s) && s[i] != '=' && s[i] != ',' {
+			i++
+		}
+		key := strings.ToLower(strings.TrimSpace(s[start:i]))
+		if i >= len(s) || s[i] != '=' {
+			continue
+		}
+		i++
+		for i < len(s) && s[i] == ' ' {
+			i++
+		}
+		var val strings.Builder
+		if i < len(s) && s[i] == '"' {
+			i++
+			for i < len(s) && s[i] != '"' {
+				if s[i] == '\\' && i+1 < len(s) {
+					i++
+				}
+				val.WriteByte(s[i])
+				i++
+			}
+			i++ // the closing quote
+		} else {
+			for i < len(s) && s[i] != ',' {
+				val.WriteByte(s[i])
+				i++
+			}
+		}
+		if key != "" {
+			out[key] = strings.TrimSpace(val.String())
 		}
 	}
 	return out

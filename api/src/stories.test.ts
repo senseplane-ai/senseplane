@@ -21,7 +21,7 @@ import { createKeyRing, encryptSegment, envKeyWrapper, segmentIV, segmentKey } f
 import { renderStory } from "./stories.js";
 import { claim } from "./claims.js";
 import { hashApiKey } from "./data/access.js";
-import { sweepWorkDirs } from "./ffmpeg.js";
+import { runningFfmpeg, sweepWorkDirs } from "./ffmpeg.js";
 import { createMediaGuard } from "./media-access.js";
 import { createKeyRefSealer } from "./playback.js";
 import { reencryptKeys } from "./rotation.js";
@@ -139,6 +139,7 @@ describe("multi-camera stories", () => {
     }
   }, 90_000);
   afterAll(async () => {
+    expect(runningFfmpeg()).toBe(0); // no render left an ffmpeg behind
     await api?.close();
     await drop?.();
   });
@@ -378,6 +379,20 @@ describe("multi-camera stories", () => {
     expect((await claim(api.data, "stories", 10)).find((x) => x.id === doomed)).toBeUndefined();
     expect((await call(owner, "GET", `/v1/stories/${doomed}`)).json()).toMatchObject({ status: "failed" });
   }, 120_000);
+
+  it("a render stopped by its deadline leaves no ffmpeg running and goes back to the queue", async () => {
+    const src = cams.nursery!;
+    const seg = await api.data.withAccount(acc, (s) => s.db.selectFrom("segments").selectAll().where("source_id", "=", src).orderBy("start_at").execute());
+    const from = new Date(seg[0]!.start_at).getTime();
+    const id = (await call(owner, "POST", "/v1/stories", { moments: [{ source: src, from: new Date(from).toISOString(), to: new Date(from + 5000).toISOString() }] })).json().id;
+    await renderStory(deps(), acc, id, undefined, undefined, { deadlineMs: 300 });
+    expect(runningFfmpeg()).toBe(0);
+    const row = await api.data.withAccount(acc, (s) => s.db.selectFrom("stories").selectAll().where("id", "=", id).executeTakeFirstOrThrow());
+    expect(row).toMatchObject({ status: "queued", claim_token: null });
+    const left: string[] = [];
+    for await (const k of createObjectStorage(S3).list!(`stories/${acc}/${id}/`)) left.push(k);
+    expect(left).toEqual([]);
+  }, 60_000);
 
   it("sweeps work dirs a crashed process left, and keeps ones in use", async () => {
     const dir = mkdtempSync(join(tmpdir(), "sp-sweep-"));

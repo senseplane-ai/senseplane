@@ -11,7 +11,7 @@
 // a tmpfs is best), swept of leftovers when the API starts. ffmpeg runs with
 // few threads (FFMPEG_THREADS, default 2) and a lower priority (FFMPEG_NICE,
 // default 10), so a render doesn't starve the requests it shares a host with.
-import { execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -69,6 +69,25 @@ export function h264Encoder(): Promise<string[]> {
 
 const NICE = ["/usr/bin/nice", "/bin/nice"].find((p) => existsSync(p));
 
+/** Every ffmpeg this process started and that hasn't exited: killed on timeout, abort, and when the process stops. */
+const children = new Set<ChildProcess>();
+/** How many ffmpeg children are running (tests check none is left behind). */
+export const runningFfmpeg = () => children.size;
+/** Their process ids (tests check each is really gone). */
+export const ffmpegPids = () => [...children].map((c) => c.pid).filter((p): p is number => typeof p === "number");
+/** Kills every ffmpeg child at once (the API is closing, or the process is exiting). */
+export function killAllFfmpeg() {
+  for (const c of children) {
+    try {
+      c.kill("SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+// A child must never outlive the API: on any exit (including after SIGINT/SIGTERM handlers) it is killed.
+process.once("exit", killAllFfmpeg);
+
 export interface FfmpegOptions {
   timeoutMs?: number;
   /** Fed to ffmpeg's standard input (use `-i pipe:0`), a buffer at a time. */
@@ -89,7 +108,8 @@ export async function ffmpeg(args: string[], o: FfmpegOptions | number = {}): Pr
   const nice = process.env.FFMPEG_NICE ?? "10";
   const [cmd, argv] = NICE && nice !== "0" ? [NICE, ["-n", nice, ffmpegPath(), ...full]] : [ffmpegPath(), full];
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn(cmd, argv, { stdio: [opts.input ? "pipe" : "ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, argv, { stdio: [opts.input ? "pipe" : "ignore", "pipe", "pipe"], detached: false });
+    children.add(child);
     const out: Buffer[] = [];
     let err = "";
     let why: string | undefined;
@@ -103,8 +123,12 @@ export async function ffmpeg(args: string[], o: FfmpegOptions | number = {}): Pr
     if (opts.signal?.aborted) kill("stopped");
     child.stdout!.on("data", (b: Buffer) => out.push(b));
     child.stderr!.on("data", (b: Buffer) => (err = (err + b.toString()).slice(-4000)));
-    child.on("error", (e) => kill(e.message));
+    child.on("error", (e) => {
+      children.delete(child);
+      kill(e.message);
+    });
     child.on("close", (code) => {
+      children.delete(child);
       clearTimeout(timer);
       opts.signal?.removeEventListener("abort", onAbort);
       if (code === 0 && !why) return resolve(Buffer.concat(out));

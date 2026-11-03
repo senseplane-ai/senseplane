@@ -54,6 +54,8 @@ export function hold(data: DataAccess, table: "stories" | "follows", c: Claimed,
     release() {
       clearInterval(renew);
       clearTimeout(deadline);
+      // Anything of this job still running (an ffmpeg) is stopped with it.
+      if (!ctrl.signal.aborted) ctrl.abort(new Error("released"));
     },
   };
 }

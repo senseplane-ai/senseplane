@@ -54,7 +54,7 @@ import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { makeStory, registerStoryRoutes } from "./routes/stories.js";
 import { startStoryWorker, toStory } from "./stories.js";
-import { sweepWorkDirs } from "./ffmpeg.js";
+import { killAllFfmpeg, sweepWorkDirs } from "./ffmpeg.js";
 import { registerFollowRoutes } from "./routes/follows.js";
 import { startFollowWorker } from "./follow.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
@@ -677,7 +677,9 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       if (internal) await internal.listen({ port: options.internalPort!, host: process.env.INTERNAL_HOST ?? "127.0.0.1" });
     },
     async close() {
-      // Background work finishes what it started before the database closes (ADR 0058).
+      // A render or follow in flight is stopped (its claim runs out and another process takes it over, ADR 0070);
+      // then background work finishes what it started before the database closes (ADR 0058).
+      killAllFfmpeg();
       await Promise.all(stoppers.map((stop) => stop()));
       await bus?.close();
       await app.close();

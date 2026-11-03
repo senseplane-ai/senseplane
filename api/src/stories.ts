@@ -260,7 +260,8 @@ async function renderRun(c: Ctx, run: Run, from: number, to: number, label: stri
   if (withAudio && !useAudio) args.push("-f", "lavfi", "-t", s3(offset + dur), "-i", "anullsrc=r=48000:cl=stereo");
   const filter = [
     `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${FPS}[v]`,
-    "[1:v]loop=loop=-1:size=1:start=0[bar]",
+    // Bounded: as many bar frames as the output can use, so no input of this ffmpeg is endless.
+    `[1:v]loop=loop=${Math.ceil(((offset + dur) / 1000) * FPS) + FPS}:size=1:start=0[bar]`,
     "[v][bar]overlay=0:H-h:shortest=1,format=yuv420p[out]",
   ];
   if (useAudio) filter.push("[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a]");

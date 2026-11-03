@@ -15,6 +15,7 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import jpeg from "jpeg-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gapNote, namesAPerson, routePieces, runFollow, sampleTimes } from "./follow.js";
+import { runningFfmpeg } from "./ffmpeg.js";
 import { createApi, type SenseplaneApi } from "./index.js";
 import type { ApiBus } from "./indexer.js";
 import { handleMediaEvent } from "./indexer.js";
@@ -163,6 +164,7 @@ describe("following an object", () => {
     }
   }, 90_000);
   afterAll(async () => {
+    expect(runningFfmpeg()).toBe(0); // no frame reading left an ffmpeg behind
     await api?.close();
     await drop?.();
   });

@@ -134,7 +134,7 @@ def test_a_sensor_watch_webhook_and_agent_flow(api: dict[str, str], sp: Sensepla
     )
     assert again.id == kitchen.id
     kitchen = sp.sources.update(kitchen.id, sensor_thresholds={"temperature": {"above": 25}})
-    assert kitchen.sensor_thresholds and kitchen.sensor_thresholds.temperature
+    assert kitchen.sensor_thresholds and "temperature" in kitchen.sensor_thresholds
     door = sp.sources.create(name="Front door", type="browser")
     assert {s.id for s in sp.sources.list(limit=1)} >= {kitchen.id, door.id}  # one per page
     assert sp.sources.update(door.id, location="Hall").location == "Hall"
@@ -223,6 +223,71 @@ def test_a_sensor_watch_webhook_and_agent_flow(api: dict[str, str], sp: Sensepla
     else:
         with pytest.raises(NotFoundError):
             sp.sources.get(door.id)
+
+
+def test_devices_through_a_box_and_a_person_confirming(api: dict[str, str], sp: Senseplane) -> None:
+    """Control (ADR 0067) with no hardware: this test plays the box, with the bridge's token."""
+    if "session" not in api:
+        pytest.skip("needs a signed-in person (the bundled API harness provides one)")
+    bridge = sp.bridges.create("Hall box")
+    assert bridge.token and bridge.id in {b.id for b in sp.bridges.list()}
+    entities = [
+        {"entity_id": "light.hall", "name": "Hall light", "area": "Hall", "sense": "switch", "kind": "state",
+         "controls": ["turn_on", "turn_off", "set_brightness"]},
+        {"entity_id": "lock.front_door", "name": "Front door", "area": "Hall", "sense": "lock", "kind": "state",
+         "controls": ["lock", "unlock"]},
+    ]  # fmt: skip
+    handed: list[dict[str, Any]] = []
+    stop = threading.Event()
+    with Senseplane(bridge.token, base_url=api["url"]) as box:
+        box.bridge.put_entities(entities=entities)
+        chosen = sp.bridges.choose_entities(bridge.id, choose=["light.hall", "lock.front_door"])
+        source_id = chosen.data[0].source_id
+        assert source_id
+        box.bridge.health(cameras=[], home_assistant={"connected": True, "entities": 2, "sending": 2})
+
+        def run_box() -> None:
+            while not stop.is_set():
+                for c in box.bridge.take_commands(wait=1).data:
+                    item = c.model_dump()
+                    handed.append(item)
+                    state = {"locked": False} if item["args"].get("action") == "unlock" else {"on": True}
+                    box.bridge.finish_command(
+                        item["id"], ok=True, result={"reached": True, "changed": True, "state": state, "before": {}}
+                    )
+
+        threading.Thread(target=run_box, daemon=True).start()
+        try:
+            devices = {d.entity_id: d for d in sp.devices.list()}
+            assert set(devices) == {"light.hall", "lock.front_door"}
+            for d in devices.values():
+                assert sp.devices.set_controllable(d.id, True).controllable is True
+
+            butler = sp.agents.create(name="Butler")
+            sp.grants.create(agent_id=butler.id, source_ids=[source_id], senses=["sensors", "control"])
+            with Senseplane(butler.api_key, base_url=api["url"]) as agent:
+                tools = Toolkit(agent)
+                listed = tools.call("list_devices", {"room": "Hall"}).value()["devices"]
+                assert sorted(d["name"] for d in listed) == ["Front door", "Hall light"]
+                assert all(d["can_control"] for d in listed)
+                done = tools.call("control_device", {"device": "hall light", "action": "turn_on"}).value()
+                assert done["status"] == "done" and done["state"]["on"] is True
+
+                # A lock asked for by an agent waits for a person.
+                waiting = tools.call("control_device", {"device": "Front door", "action": "unlock"}).value()
+                assert waiting["status"] == "awaiting_confirmation" and waiting["confirm_by"]
+                assert "person must confirm" in waiting["note"]
+                with Senseplane(api["session"], base_url=api["url"]) as person:
+                    assert waiting["request"] in {c.id for c in person.confirmations.list()}
+                    approved = person.confirmations.decide(waiting["request"], approve=True)
+                    assert approved.status == "done"
+                assert tools.call("control_device", {"request": waiting["request"]}).value()["status"] == "done"
+            assert [h["args"]["entity_id"] for h in handed] == ["light.hall", "lock.front_door"]
+        finally:
+            stop.set()
+            time.sleep(1.5)  # the box's last long poll ends
+    sp.bridges.remove(bridge.id)
+    assert bridge.id not in {b.id for b in sp.bridges.list()}
 
 
 @pytest.mark.anyio

@@ -3,7 +3,8 @@
 // The Python SDK's integration tests run against this: the real API (api/dist,
 // so `pnpm --filter @senseplane/api... build` first) on a fresh database on the
 // test Postgres, as api/src/testdb.ts makes them. It writes one line to stdout,
-// `senseplane-test-api {url, api_key, account_id}`, for the test process to read; serves
+// `senseplane-test-api {url, api_key, session, account_id}` (session: a signed-in person,
+// who can answer device confirmations), for the test process to read; serves
 // until stdin closes or it gets SIGTERM, then drops the database.
 //
 // Environment: PORT (required), TEST_ADMIN_DATABASE_URL and TEST_APP_USER as in api/vitest.config.ts,
@@ -15,6 +16,7 @@ const require = createRequire(new URL("../../../api/package.json", import.meta.u
 const pg = require("pg");
 const { Redis } = require("ioredis");
 const { createApi, migrateToLatest } = await import(new URL("../../../api/dist/index.js", import.meta.url));
+const { createPasswordUser } = await import(new URL("../../../api/dist/routes/auth.js", import.meta.url));
 
 const ADMIN = process.env.TEST_ADMIN_DATABASE_URL ?? "postgres://senseplane:senseplane@localhost:55432/senseplane";
 const APP_USER = process.env.TEST_APP_USER ?? "senseplane_app:senseplane_app";
@@ -87,11 +89,18 @@ try {
   api = await createApi({
     database: app.toString(), logger: false, media: { control: noMedia() }, valkeyUrl: VALKEY,
     captureUrl: "http://127.0.0.1/capture.html", apiPublicUrl: `http://127.0.0.1:${port}`,
+    auth: { password: true, attemptsPerMinute: 1000 },
   });
   await api.listen({ port, host: "127.0.0.1" });
   const account = await api.data.accounts.create("Python SDK integration");
   const { key } = await api.data.withAccount(account.id, (s) => s.apiKeys.create("pysdk"));
-  process.stdout.write("senseplane-test-api " + JSON.stringify({ url: `http://127.0.0.1:${port}/v1`, api_key: key, account_id: account.id, database: name }) + "\n");
+  const pw = randomBytes(12).toString("hex");
+  await createPasswordUser(api.data, account.id, "owner@pysdk.test", pw);
+  const login = await api.public.inject({ method: "POST", url: "/auth/login", payload: { email: "owner@pysdk.test", password: pw } });
+  const session = login.json().session;
+  if (!session) throw new Error(`console sign-in failed: ${login.statusCode}`);
+  const out = { url: `http://127.0.0.1:${port}/v1`, api_key: key, session, account_id: account.id, database: name };
+  process.stdout.write("senseplane-test-api " + JSON.stringify(out) + "\n");
 } catch (err) {
   console.error(err);
   await stop();

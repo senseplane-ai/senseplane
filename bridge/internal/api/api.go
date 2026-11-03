@@ -98,6 +98,8 @@ type CameraHealth struct {
 	Detail   string `json:"detail,omitempty"`
 	// Speaker is what the box found about the camera's two-way audio (ADR 0069); nil: not checked.
 	Speaker *bool `json:"speaker,omitempty"`
+	// Talk: the box can carry a person's push-to-talk to it (ADR 0074); sent to an API that lists `health_talk`.
+	Talk *bool `json:"talk,omitempty"`
 }
 
 // Health is the body of POST /v1/bridge/health.

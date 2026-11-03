@@ -22,6 +22,7 @@ import (
 	"github.com/senseplane-ai/senseplane/bridge/internal/matter"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
+	"github.com/senseplane-ai/senseplane/bridge/internal/talk"
 )
 
 // Options configure a bridge.
@@ -65,6 +66,19 @@ type Options struct {
 	// LocalSpeaker, when set, plays messages for cameras that are this device itself (the phone in the
 	// Android app); it returns false for a camera it isn't, and "muted" when the phone's volume was off.
 	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, string, error)
+	// OpenSpeaker holds a camera's speaker open for push-to-talk (default: the ONVIF backchannel, ADR 0074).
+	OpenSpeaker func(ctx context.Context, rtspURL string) (LiveSpeaker, error)
+	// Listen carries one press from the media plane to the speaker (default: talk.Listen).
+	Listen func(ctx context.Context, o talk.Options, sp talk.Speaker) (talk.Result, error)
+	// NoTalk, when set, names cameras that can't take push-to-talk though they have a speaker (the phone's
+	// own camera in the Android app plays messages itself, not live audio yet).
+	NoTalk func(rtspURL string) bool
+}
+
+// LiveSpeaker is a camera's speaker held open for live audio.
+type LiveSpeaker interface {
+	talk.Speaker
+	Close()
 }
 
 // SensorLink feeds readings from somewhere else than Home Assistant or Matter.
@@ -109,8 +123,10 @@ type Bridge struct {
 	controls map[string]Controllable
 	// speakers is what the box found about each camera's two-way audio (ADR 0069).
 	speakers map[string]bool
-	// speaking holds one lock per camera: two messages never play on it at once.
-	speaking map[string]*sync.Mutex
+	// talks is which cameras can take a person's push-to-talk (ADR 0074).
+	talks map[string]bool
+	// speaking is each camera's one speaker: two things never play on it at once.
+	speaking map[string]*slot
 	settle   time.Duration // how long device_control waits for the state
 	// emptyWait is the pause after an outputs answer without a cursor.
 	emptyWait time.Duration
@@ -122,9 +138,15 @@ func New(o Options) *Bridge {
 		o.Log = slog.Default()
 	}
 	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1),
-		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait, speakers: map[string]bool{}, speaking: map[string]*sync.Mutex{}}
+		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait, speakers: map[string]bool{}, talks: map[string]bool{}, speaking: map[string]*slot{}}
 	if o.PlaySpeaker == nil {
 		o.PlaySpeaker = speak.Play
+	}
+	if o.OpenSpeaker == nil {
+		o.OpenSpeaker = func(ctx context.Context, url string) (LiveSpeaker, error) { return speak.Open(ctx, url) }
+	}
+	if o.Listen == nil {
+		o.Listen = talk.Listen
 	}
 	if o.HomeAssistant != nil || o.Matter != nil || len(o.Sensors) > 0 {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
@@ -155,8 +177,9 @@ func New(o Options) *Bridge {
 		}
 		o.Commands = cmds
 	}
-	// Every box can play a message on a camera's speaker (talk-back, ADR 0069).
-	cmds := map[string]Handler{"speak": b.speak}
+	// Every box can play a message on a camera's speaker (talk-back, ADR 0069) and carry a person's
+	// push-to-talk to it (ADR 0074).
+	cmds := map[string]Handler{"speak": b.speak, "talk": b.talk}
 	for k, h := range o.Commands {
 		cmds[k] = h
 	}
@@ -206,6 +229,9 @@ func (b *Bridge) Cameras() []api.CameraHealth {
 	for _, s := range b.states {
 		if v, ok := b.speakers[s.SourceID]; ok {
 			s.Speaker = &v
+		}
+		if v, ok := b.talks[s.SourceID]; ok {
+			s.Talk = &v
 		}
 		out = append(out, s)
 	}
@@ -394,6 +420,14 @@ func (b *Bridge) stopAll() {
 
 func (b *Bridge) report(ctx context.Context) {
 	h := api.Health{Version: b.o.Version, Cameras: b.Cameras()}
+	b.mu.Lock()
+	talkOK := b.features["health_talk"]
+	b.mu.Unlock()
+	if !talkOK { // an older API refuses a heartbeat with fields it doesn't know
+		for i := range h.Cameras {
+			h.Cameras[i].Talk = nil
+		}
+	}
 	if b.home != nil {
 		h.HomeAssistant, h.Matter = b.home.health()
 		// Only to an API that takes it: an older one refuses a heartbeat with fields it doesn't know.

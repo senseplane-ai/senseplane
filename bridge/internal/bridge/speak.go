@@ -5,13 +5,17 @@ package bridge
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
+	"github.com/senseplane-ai/senseplane/bridge/internal/talk"
 )
 
 // speak does `speak` (talk-back, ADR 0069): fetch the message from the API and play it on the camera's
@@ -44,16 +48,14 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 	if clip.Duration() > 31*time.Second {
 		return nil, errors.New("the message is longer than 30 seconds")
 	}
-	// One message at a time on a camera; one that waited too long for its turn isn't played.
-	b.mu.Lock()
-	lock := b.speaking[sourceID]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		b.speaking[sourceID] = lock
+	// One message at a time on a camera, none while a person talks through it, and one that waited too
+	// long for its turn isn't played.
+	parent := ctx
+	ctx, release, err := b.slot(sourceID).take(ctx, "clip")
+	if err != nil {
+		return nil, err
 	}
-	b.mu.Unlock()
-	lock.Lock()
-	defer lock.Unlock()
+	defer release()
 	ready := func() error { return onTime(ctx, args) }
 	if err := ready(); err != nil {
 		return nil, err
@@ -75,11 +77,167 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 	if errors.Is(err, errTooLate) {
 		return nil, err
 	}
+	if err != nil && ctx.Err() != nil && parent.Err() == nil {
+		return map[string]any{"played_ms": played.Milliseconds()}, errCutOff
+	}
 	if err != nil {
 		return nil, errors.New(relay.Redact(err.Error()))
 	}
 	b.o.Log.Info("played a message on a camera", "source", sourceID, "ms", played.Milliseconds())
 	return map[string]any{"played_ms": played.Milliseconds()}, nil
+}
+
+var (
+	errSpeakerBusy = errors.New("someone is talking through the camera right now")
+	errCutOff      = errors.New("a person started talking through the camera, which cut this message off")
+)
+
+// slot is a camera's one speaker (ADR 0069, 0074): a message waits for the one before it and is refused
+// while a person talks; a person's push-to-talk cuts a message off, and a newer press an older one.
+type slot struct {
+	mu     sync.Mutex
+	kind   string // "", "clip" or "talk"
+	cancel context.CancelFunc
+	free   chan struct{} // closed when released
+}
+
+func (b *Bridge) slot(sourceID string) *slot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.speaking[sourceID]
+	if s == nil {
+		s = &slot{}
+		b.speaking[sourceID] = s
+	}
+	return s
+}
+
+// take waits for the speaker and holds it until release; ctx is cancelled when something cuts in.
+func (s *slot) take(ctx context.Context, kind string) (context.Context, func(), error) {
+	for {
+		s.mu.Lock()
+		if s.kind == "" {
+			cctx, cancel := context.WithCancel(ctx)
+			free := make(chan struct{})
+			s.kind, s.cancel, s.free = kind, cancel, free
+			s.mu.Unlock()
+			var once sync.Once
+			return cctx, func() {
+				once.Do(func() {
+					cancel()
+					s.mu.Lock()
+					if s.free == free {
+						s.kind, s.cancel, s.free = "", nil, nil
+					}
+					s.mu.Unlock()
+					close(free)
+				})
+			}, nil
+		}
+		if kind == "clip" && s.kind == "talk" {
+			s.mu.Unlock()
+			return nil, nil, errSpeakerBusy
+		}
+		if kind == "talk" {
+			s.cancel() // a person always wins
+		}
+		free := s.free
+		s.mu.Unlock()
+		select {
+		case <-free:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+}
+
+// talking says whether a person is talking through the camera.
+func (s *slot) talking() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.kind == "talk"
+}
+
+// PersonMax is the longest one press may last, as on the phone (ADR 0069's ten minutes).
+const PersonMax = 10 * time.Minute
+
+// talk does `talk` (push-to-talk, ADR 0074): it holds the camera's speaker, pulls the person's
+// microphone from the media plane with the token the API issued for this one press, and carries it to
+// the camera until the person lets go, the audio stops, or the press's time is up.
+func (b *Bridge) talk(ctx context.Context, args map[string]any) (map[string]any, error) {
+	sourceID, _ := args["source_id"].(string)
+	whep, _ := args["whep_url"].(string)
+	token, _ := args["token"].(string)
+	if sourceID == "" || whep == "" || token == "" {
+		return nil, errors.New("a talk command needs a camera, a media plane and a token")
+	}
+	b.mu.Lock()
+	w := b.workers[sourceID]
+	b.mu.Unlock()
+	if w == nil {
+		return nil, errors.New("this box doesn't relay that camera")
+	}
+	if b.o.NoTalk != nil && b.o.NoTalk(w.cam.RTSPURL) {
+		return nil, errors.New("this camera can't take push-to-talk yet; it can play agents' messages")
+	}
+	until := time.Now().Add(PersonMax)
+	if s, _ := args["until"].(string); s != "" {
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			skew, _ := ctx.Value(skewKey{}).(time.Duration)
+			until = minTime(until, t.Add(-skew)) // the API's clock, in the box's terms
+		}
+	}
+	if exp, ok := tokenExpiry(token); ok {
+		until = minTime(until, exp)
+	}
+	ctx, release, err := b.slot(sourceID).take(ctx, "talk")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if err := onTime(ctx, args); err != nil {
+		return nil, err
+	}
+	sp, err := b.o.OpenSpeaker(ctx, w.cam.RTSPURL)
+	if err != nil {
+		return nil, errors.New(relay.Redact(err.Error()))
+	}
+	defer sp.Close()
+	res, err := b.o.Listen(ctx, talk.Options{WHEPURL: b.rewrite(whep), Token: token, Until: until, Log: b.o.Log}, sp)
+	if errors.Is(err, talk.ErrNoTalkback) {
+		return map[string]any{"talked_ms": 0, "ended": talk.EndReleased}, nil
+	}
+	if err != nil {
+		return nil, errors.New(relay.Redact(err.Error()))
+	}
+	b.o.Log.Info("carried a person's push-to-talk to a camera", "source", sourceID, "ms", res.Talked.Milliseconds(), "ended", res.Ended)
+	return map[string]any{"talked_ms": res.Talked.Milliseconds(), "ended": res.Ended, "dropped": res.Dropped}, nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+// tokenExpiry reads a JWT's exp, unverified: the media plane checks the token; the box only stops by then.
+func tokenExpiry(token string) (time.Time, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if json.Unmarshal(raw, &claims) != nil || claims.Exp <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
 }
 
 // probeSpeaker checks once whether a camera has two-way audio, and reports it with the camera's state.
@@ -94,6 +252,7 @@ func (b *Bridge) probeSpeaker(ctx context.Context, cam relay.Camera) {
 	b.mu.Lock()
 	prev, had := b.speakers[cam.SourceID]
 	b.speakers[cam.SourceID] = ok
+	b.talks[cam.SourceID] = ok && (b.o.NoTalk == nil || !b.o.NoTalk(cam.RTSPURL))
 	b.mu.Unlock()
 	if !had || prev != ok {
 		b.poke()

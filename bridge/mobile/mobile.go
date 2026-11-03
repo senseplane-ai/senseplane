@@ -287,6 +287,8 @@ func (b *Box) run(ctx context.Context, token string) bool {
 		Matter:  b.matter,
 		// Talk-back (ADR 0069): messages for this phone's camera play on the phone, others over the camera's backchannel.
 		LocalSpeaker: b.playHere, ProbeSpeaker: probeSpeaker,
+		// The phone plays agents' messages itself; live push-to-talk to its own camera is not yet (ADR 0074).
+		NoTalk: func(u string) bool { return u == PhoneCameraURL },
 		// bridge.New adds device_control (ADR 0067): the Matter controller switches what a person asks.
 		Commands: map[string]bridge.Handler{"matter_commission": func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			code, _ := args["code"].(string)

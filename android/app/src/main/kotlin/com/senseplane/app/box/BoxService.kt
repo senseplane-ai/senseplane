@@ -19,12 +19,25 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.senseplane.app.MainActivity
 import com.senseplane.app.Prefs
 import com.senseplane.app.R
+import com.senseplane.app.api.Api
+import com.senseplane.app.api.DeviceCommand
+import com.senseplane.app.api.askText
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -42,6 +55,7 @@ class BoxService : Service() {
     private var network: ConnectivityManager.NetworkCallback? = null
     private var thermal: PowerManager.OnThermalStatusChangedListener? = null
     private var metered = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -66,6 +80,7 @@ class BoxService : Service() {
             sensors = PhoneSensors(this) { sense, kind, value, unit, name -> box.phoneReading(sense, kind, value, unit, name) }.also { it.start() }
             if (hasBluetooth()) ble = BleScanner(this) { mac, name, data -> box.bluetooth(mac, name, data) }.also { it.start() }
         }
+        watchConfirmations(prefs)
         if (prefs.camera && granted(Manifest.permission.CAMERA)) {
             watchNetwork(prefs)
             watchHeat()
@@ -115,6 +130,40 @@ class BoxService : Service() {
         thermal = l
     }
 
+    /**
+     * When someone signed in to manage on this phone, a request waiting for a
+     * person (an agent asks to unlock the front door) shows as a notification,
+     * unless the signed-in screen already shows it.
+     */
+    private fun watchConfirmations(prefs: Prefs) {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(ASKS, "Requests to confirm", NotificationManager.IMPORTANCE_HIGH))
+        scope.launch {
+            while (isActive) {
+                delay(15_000)
+                if (prefs.session.isEmpty() || prefs.server.isEmpty() || confirmationsOnScreen) continue
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !granted(Manifest.permission.POST_NOTIFICATIONS)) continue
+                val waiting = runCatching { Api(prefs.server, prefs.session).confirmations() }.getOrNull() ?: continue
+                waiting.filter { seen.add(it.id) }.forEach { notifyAsk(nm, it) }
+            }
+        }
+    }
+
+    private fun notifyAsk(nm: NotificationManager, c: DeviceCommand) {
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val b = NotificationCompat.Builder(this, ASKS)
+            .setSmallIcon(R.drawable.ic_eye)
+            .setContentTitle("Confirm in Senseplane")
+            .setContentText(askText(c))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(askText(c) + " Open the app and sign in to manage to approve or deny."))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+        // Gone once nobody can approve it any more.
+        c.expiresAt?.let { runCatching { Duration.between(Instant.now(), Instant.parse(it)).toMillis() }.getOrNull() }?.takeIf { it > 0 }?.let { b.setTimeoutAfter(it) }
+        nm.notify(ASK_BASE + (c.id.hashCode() and 0xffff), b.build())
+    }
+
     /** The screen shows the camera here (null: it went away). */
     fun setPreview(surface: android.view.Surface?) {
         camera?.setPreview(surface)
@@ -151,6 +200,7 @@ class BoxService : Service() {
 
     override fun onDestroy() {
         instance = null
+        scope.cancel()
         camera?.close()
         BoxHolder.get(this).setCamera(false, Prefs(this).phoneName)
         network?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
@@ -167,6 +217,15 @@ class BoxService : Service() {
     companion object {
         private const val CHANNEL = "box"
         private const val NOTIFICATION = 1
+        private const val ASKS = "asks"
+        private const val ASK_BASE = 1000
+        private val seen = ConcurrentHashMap.newKeySet<String>()
+
+        /** True while the signed-in screen shows requests itself (no notification then). */
+        @Volatile var confirmationsOnScreen = false
+
+        /** Requests the screen showed: no notification for these later. */
+        fun shownConfirmations(ids: List<String>) { seen.addAll(ids) }
         @Volatile var instance: BoxService? = null
             private set
         private val _paused = MutableStateFlow<String?>(null)

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -92,24 +93,26 @@ fun SignInScreen(onBack: () -> Unit, onSignedIn: () -> Unit) {
             }
         }
     }) {
-        Body("Owners and admins can chat with Senseplane, see what happened and set watches from this phone. The camera and sensors keep working without signing in.")
+        Body("Owners and admins can chat with Senseplane, see what happened, set watches and switch devices from this phone. The camera and sensors keep working without signing in.")
         Field("Email", email, { email = it }, keyboard = KeyboardType.Email)
         Field("Password", password, { password = it }, password = true, error = error)
     }
 }
 
-private val tabs = listOf("Chat", "Activity", "Cameras", "Watches", "More")
+private val tabs = listOf("Chat", "Activity", "Cameras", "Devices", "Watches", "More")
 
-/** The signed-in area: a bottom bar over the tabs. */
+/** The signed-in area: requests waiting for a person on top, then the tabs, and a bottom bar. */
 @Composable
 fun ManageScreen(go: (String) -> Unit, onSignedOut: () -> Unit) {
     var tab by rememberSaveable { mutableStateOf("Chat") }
-    Column(Modifier.fillMaxSize().background(Ink.bg)) {
+    Column(Modifier.fillMaxSize().background(Ink.bg).statusBarsPadding()) {
+        ConfirmationsBar()
         Box(Modifier.weight(1f)) {
             when (tab) {
                 "Chat" -> ChatTab()
                 "Activity" -> ActivityTab(go)
                 "Cameras" -> CamerasTab()
+                "Devices" -> DevicesTab()
                 "Watches" -> WatchesTab(go)
                 else -> MoreTab(go, onSignedOut)
             }

@@ -1091,7 +1091,9 @@ paths:
       description: >-
         Only a person signed in (member and up): never an agent, a workspace key, or whoever
         made the request. Approved, it runs at once and answers as POST /devices/{id}/commands;
-        refused, 409 `confirmation_denied`; too late, 409 `confirmation_expired`.
+        refused, 409 `confirmation_denied`; too late, 409 `confirmation_expired`; already answered
+        (a second tap), 409 `conflict`, and nothing runs again. On approval the requesting agent must
+        still have its Control grant (and the agent or key must not be revoked), or it is refused.
       tags: [devices]
       parameters:
         - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}

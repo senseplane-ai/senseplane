@@ -700,7 +700,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm or refuse a request
-         * @description Only a person signed in (member and up): never an agent, a workspace key, or whoever made the request. Approved, it runs at once and answers as POST /devices/{id}/commands; refused, 409 `confirmation_denied`; too late, 409 `confirmation_expired`.
+         * @description Only a person signed in (member and up): never an agent, a workspace key, or whoever made the request. Approved, it runs at once and answers as POST /devices/{id}/commands; refused, 409 `confirmation_denied`; too late, 409 `confirmation_expired`; already answered (a second tap), 409 `conflict`, and nothing runs again. On approval the requesting agent must still have its Control grant (and the agent or key must not be revoked), or it is refused.
          */
         post: operations["decideConfirmation"];
         delete?: never;

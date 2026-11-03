@@ -40,26 +40,50 @@ type MatterSteps interface {
 	OnStep(step string)
 }
 
-// BLEInbox takes what the device sends over Bluetooth, from the app.
+// BLEInbox takes what the device sends over Bluetooth, from the app. It
+// never blocks the app's Bluetooth callback thread: indications queue here
+// (BTP's window keeps the queue short; a flood ends the connection).
 type BLEInbox struct {
-	ch   chan []byte
-	done chan struct{}
-	once sync.Once
-	mu   sync.Mutex
-	why  string
+	mu    sync.Mutex
+	queue [][]byte
+	ready chan struct{}
+	done  chan struct{}
+	once  sync.Once
+	why   string
 }
 
-func newInbox() *BLEInbox { return &BLEInbox{ch: make(chan []byte, 64), done: make(chan struct{})} }
+const inboxLimit = 1024
 
-// Indicated takes one indication from C2.
+func newInbox() *BLEInbox {
+	return &BLEInbox{ready: make(chan struct{}, 1), done: make(chan struct{})}
+}
+
+// Indicated takes one indication from C2, in order, and returns at once.
 func (i *BLEInbox) Indicated(data []byte) {
 	b := append([]byte(nil), data...) // the app may reuse its buffer
-	select {
-	case i.ch <- b:
-	case <-i.done:
-	case <-time.After(10 * time.Second):
-		i.Disconnected("the box fell behind the device")
+	i.mu.Lock()
+	if len(i.queue) >= inboxLimit {
+		i.mu.Unlock()
+		i.Disconnected("the device sent more than the Bluetooth window allows")
+		return
 	}
+	i.queue = append(i.queue, b)
+	i.mu.Unlock()
+	select {
+	case i.ready <- struct{}{}:
+	default:
+	}
+}
+
+func (i *BLEInbox) next() ([]byte, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if len(i.queue) == 0 {
+		return nil, false
+	}
+	b := i.queue[0]
+	i.queue = i.queue[1:]
+	return b, true
 }
 
 // Disconnected says the connection dropped (why, for the log).
@@ -82,6 +106,9 @@ type bleConn struct {
 
 func (c *bleConn) MTU() int { return c.mtu }
 
+// Write writes through the app. A write the app doesn't finish in time
+// ends the connection, which also ends the app's write (it is waiting on
+// the same connection), so nothing is left behind.
 func (c *bleConn) Write(ctx context.Context, b []byte) error {
 	errc := make(chan error, 1)
 	go func() { errc <- c.dev.Write(append([]byte(nil), b...)) }()
@@ -91,23 +118,26 @@ func (c *bleConn) Write(ctx context.Context, b []byte) error {
 	case <-c.inbox.done:
 		return native.ErrBTPClosed
 	case <-ctx.Done():
+		_ = c.Close()
 		return ctx.Err()
 	}
 }
 
 func (c *bleConn) Recv(ctx context.Context) ([]byte, error) {
-	select {
-	case b := <-c.inbox.ch:
-		return b, nil
-	case <-c.inbox.done:
-		select {
-		case b := <-c.inbox.ch:
+	for {
+		if b, ok := c.inbox.next(); ok {
 			return b, nil
-		default:
 		}
-		return nil, native.ErrBTPClosed
-	case <-ctx.Done():
-		return nil, ctx.Err()
+		select {
+		case <-c.inbox.ready:
+		case <-c.inbox.done:
+			if b, ok := c.inbox.next(); ok {
+				return b, nil
+			}
+			return nil, native.ErrBTPClosed
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }
 

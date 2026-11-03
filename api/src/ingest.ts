@@ -63,9 +63,14 @@ export interface IngestSigner {
    * it may also send its microphone, heard only by the phone that publishes the camera.
    */
   signViewer(
-    t: { accountId: string; sourceId: string; sessionId: string; audio: boolean; idleTimeoutSeconds: number; maxLiveViewers?: number | null; talk?: boolean },
+    t: { accountId: string; sourceId: string; sessionId: string; audio: boolean; idleTimeoutSeconds: number; maxLiveViewers?: number | null; talk?: boolean; talkTo?: "capture" | "speaker" },
     ttlSeconds: number,
   ): Promise<{ token: string; expiresAt: Date }>;
+  /**
+   * The box's listener for one press of push-to-talk (ADR 0074, spec/media/whep.md): `{source_id}:speaker`,
+   * audio in only, single use, for at most `ttlSeconds` (the press's cap).
+   */
+  signListener(t: { sourceId: string }, ttlSeconds: number): Promise<{ token: string; expiresAt: Date }>;
   /** The camera's feed egress: kind egress over a plain transport. */
   signFeed(t: { sourceId: string; recordAudio: boolean }, ttlSeconds?: number): Promise<string>;
   signControl(): Promise<string>;
@@ -183,11 +188,21 @@ export async function createIngestSigner(
           canPublish: Boolean(t.talk), canSubscribe: true, canPublishData: false,
           subscribeKinds: t.audio ? ["video", "audio"] : ["video"],
           // Push-to-talk: the microphone only, and only the camera's phone hears it.
-          ...(t.talk ? { publishKinds: ["audio"], visibleTo: { mode: "allow", identities: [`${t.sourceId}:capture`] } } : {}),
+          ...(t.talk ? { publishKinds: ["audio"], visibleTo: { mode: "allow", identities: [`${t.sourceId}:${t.talkTo ?? "capture"}`] } } : {}),
           idleTimeoutSeconds: t.idleTimeoutSeconds,
           ...(t.maxLiveViewers ? { maxLiveViewers: t.maxLiveViewers } : {}),
         },
         jti: t.sessionId, iat, exp: iat + ttlSeconds,
+      };
+      return { token: await sign(claims), expiresAt: new Date(claims.exp * 1000) };
+    },
+    async signListener(t, ttlSeconds) {
+      if (ttlSeconds > JOIN_TOKEN_MAX_TTL_SECONDS) throw new Error(`join tokens live at most ${JOIN_TOKEN_MAX_TTL_SECONDS}s`);
+      const iat = now();
+      const claims = {
+        v: 1, iss: issuer, aud: "media", room: roomFor(t.sourceId), identity: `${t.sourceId}:speaker`, kind: "agent", transport: "webrtc",
+        grants: { canPublish: false, canSubscribe: true, canPublishData: false, subscribeKinds: ["audio"], maxSubscriptions: 1 },
+        jti: jti(), iat, exp: iat + ttlSeconds,
       };
       return { token: await sign(claims), expiresAt: new Date(claims.exp * 1000) };
     },

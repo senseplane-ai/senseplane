@@ -68,6 +68,7 @@ export class AccountScope {
           retention_days: input.retention_days ?? null,
           // A phone on the capture page plays sound; an IP camera has a speaker when its box finds one (ADR 0069).
           speaker: input.type === "browser",
+          talk: input.type === "browser",
         })
         .returningAll()
         .executeTakeFirstOrThrow(),

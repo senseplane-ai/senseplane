@@ -38,6 +38,8 @@ export interface ControlClient {
   speak?(roomId: string, identity: string, body: { id: string; url: string; durationMs: number }): Promise<boolean>;
   /** Stops a clip that participant is playing (a person's push-to-talk cut it off). */
   stopSpeak?(roomId: string, identity: string, id: string): Promise<void>;
+  /** Push-to-talk (ADR 0074): closes the participant's talkback track and tells it why; false when it wasn't talking. */
+  stopTalkback?(roomId: string, identity: string, body: { reason: string; message?: string }): Promise<boolean>;
 }
 
 export class MediaControlError extends Error {
@@ -96,6 +98,13 @@ export function httpControlClient(baseUrl: string, controlToken: () => Promise<s
     async stopSpeak(roomId, identity, id) {
       const r = await call("POST", `/control/rooms/${enc(roomId)}/participants/${enc(identity)}/speak/stop`, { id });
       if (r.status !== 404) ok(r, "stop speaking");
+    },
+    async stopTalkback(roomId, identity, body) {
+      const r = await call("POST", `/control/rooms/${enc(roomId)}/participants/${enc(identity)}/talkback/stop`, body);
+      // An older media plane (405) or a talker already gone (404): the track ends on its own.
+      if (r.status === 404 || r.status === 405) return false;
+      ok(r, "stop talkback");
+      return true;
     },
   };
 }

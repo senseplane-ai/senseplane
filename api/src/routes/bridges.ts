@@ -51,6 +51,8 @@ export interface BridgeDeps {
   disconnect?(sourceId: string): Promise<void>;
   /** The box played (or couldn't play) a message on a camera (ADR 0069). */
   onSpeakReported?(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined, result?: Record<string, unknown>): Promise<void>;
+  /** The box's report on a `talk` command: a person's push-to-talk to a camera (ADR 0074). */
+  onTalkReported?(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined, result?: Record<string, unknown>): Promise<void>;
 }
 
 const healthBody = {
@@ -81,6 +83,8 @@ const healthBody = {
           detail: { type: "string", maxLength: 500 },
           // Two-way audio the box found when it connected (ADR 0069).
           speaker: { type: "boolean" },
+          // The box can carry a person's push-to-talk to it (ADR 0074).
+          talk: { type: "boolean" },
         },
       },
     },
@@ -186,7 +190,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         cameras: deps.whip ? await Promise.all((await cameras(req)).filter((c) => c.rtsp_url && c.status !== "paused").map((c) => toCamera(req, c))) : [],
         max_resolution: deps.maxResolution ? await deps.maxResolution(accountId) : "720p",
         // What this API takes that an older one doesn't, so a newer box sends it only here.
-        features: ["health_mqtt"],
+        features: ["health_mqtt", "health_talk"],
         // The Home Assistant entities a person chose; the bridge sends nothing else (ADR 0061).
         sensors: (await deps.data.withAccount(accountId, (s) => s.db.selectFrom("bridge_entities").select("entity_id").where("bridge_id", "=", bridgeId)
           .where("source_id", "is not", null).where("listed", "=", true).orderBy("entity_id").execute())).map((e) => e.entity_id),
@@ -244,7 +248,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       },
     );
 
-    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string; speaker?: boolean }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; mqtt?: { connected: boolean; entities?: number }; cameras_found?: number } }>(
+    scope.post<{ Body: { version?: string; cameras: { source_id: string; state: CameraState; detail?: string; speaker?: boolean; talk?: boolean }[]; home_assistant?: { connected: boolean; entities?: number; sending?: number }; matter?: { connected: boolean; nodes?: number }; mqtt?: { connected: boolean; entities?: number }; cameras_found?: number } }>(
       "/v1/bridge/health",
       { schema: { body: healthBody } },
       async (req, reply) => {
@@ -277,6 +281,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
               .set((eb) => ({
                 bridge_state: c.state, bridge_detail: c.detail ? redactUrls(c.detail).slice(0, 500) : null,
                 ...(c.speaker !== undefined ? { speaker: c.speaker } : {}),
+                ...(c.talk !== undefined ? { talk: c.talk } : {}),
                 ...(status ? { status: eb.case().when("status", "=", "paused").then("paused").else(status).end() } : {}),
               }))
               .where("id", "=", c.source_id).where("bridge_id", "=", bridgeId).execute();
@@ -452,6 +457,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         await deps.audit?.write({ accountId, actor: `bridge:${bridgeId}`, action: `bridge.${done.kind}_${req.body.ok ? "done" : "failed"}`, target: req.params.id, status: 200 });
         if (done.kind === "device_control") await finishDeviceCommand(deps.data, accountId, req.params.id, req.body.ok, req.body.result, req.body.error, deps.audit);
         if (done.kind === "speak") await deps.onSpeakReported?.(accountId, req.params.id, req.body.ok, req.body.error, req.body.result);
+        if (done.kind === "talk") await deps.onTalkReported?.(accountId, req.params.id, req.body.ok, req.body.error, req.body.result);
         return reply.code(204).send();
       },
     );

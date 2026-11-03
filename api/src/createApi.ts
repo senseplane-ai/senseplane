@@ -368,6 +368,10 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   // Members, invites and workspace switching (ADR 0044).
   registerTeamRoutes(app, {
     data, audit, sessionDays: auth.sessionDays,
+    // Their live views end with reason `revoked`, so a press in progress stops at once (ADR 0074).
+    onAccessReduced: async (accountId, userId) => {
+      await closeViewers(data, mediaControl, accountId, "revoked", { actor: `user:${userId}` });
+    },
     config: { consoleUrl: auth.consoleUrls[0] ?? "http://localhost:5173", inviteDays: auth.inviteDays ?? 7, invitesPerHour: options.invitesPerHour ?? 30 },
   });
   // Audit: every authenticated /v1 request (ADR 0024).
@@ -472,7 +476,11 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   const mediaControl: MediaControl | undefined = mediaDriver;
   // Talk-back (ADR 0069): agents' and watches' messages, and people's push-to-talk.
   const tts = options.tts === false ? undefined : options.tts ?? ttsConfigFromEnv();
-  const speech = createSpeech({ data, storage, media: mediaControl, audit, signer: playbackSigner, log: app.log, ...(tts ? { tts } : {}), ...options.speakTimings });
+  const speech = createSpeech({
+    data, storage, media: mediaControl, audit, signer: playbackSigner, log: app.log, ...(tts ? { tts } : {}), ...options.speakTimings,
+    // Push-to-talk to IP cameras: the box pulls each press from the media plane's public URL (ADR 0074).
+    ...(mediaDriver?.publicUrl ? { talkback: { whepUrl: `${mediaDriver.publicUrl.replace(/\/$/, "")}/whep/talkback`, signer } } : {}),
+  });
   registerSpeakRoutes(app, { data, speech, audit, signer: playbackSigner, base, ttlSeconds: options.playbackTtlSeconds ?? 900 });
   const maxResolutionFor = async (id: string) => (await quotaFor(id)).maxResolution ?? "720p";
   registerMediaCallbacks(app, {
@@ -553,6 +561,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   registerBridgeRoutes(app, {
     data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
     onSpeakReported: (accountId, id, ok, error, result) => speech.boxReported(accountId, id, ok, error, result),
+    onTalkReported: (accountId, id, ok, error, result) => speech.talkReported(accountId, id, ok, error, result),
     ...(mediaDriver?.publicUrl ? { whip: { publicUrl: mediaDriver.publicUrl, authorizeUrl: whipAuthorizeUrl, signer } } : {}),
   });
   registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,

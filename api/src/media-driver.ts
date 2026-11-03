@@ -42,6 +42,8 @@ export interface MediaControl {
   speak?(sourceId: string, clip: { id: string; url: string; durationMs: number }): Promise<boolean>;
   /** Stops a clip on the phone (a person's push-to-talk). */
   stopSpeak?(sourceId: string, id: string): Promise<void>;
+  /** Ends a live viewer's push-to-talk, telling them why (the box couldn't reach the camera's speaker, ADR 0074). */
+  stopTalkback?(sourceId: string, sessionId: string, reason: string, message?: string): Promise<void>;
 }
 
 export const CAMERA_IDENTITIES = (sourceId: string) => [`${sourceId}:capture`, `${sourceId}:whip`];
@@ -141,6 +143,9 @@ export function createMediaDriver(deps: {
     },
     async stopSpeak(sourceId, id) {
       await deps.control.stopSpeak?.(roomFor(sourceId), `${sourceId}:capture`, id);
+    },
+    async stopTalkback(sourceId, sessionId, reason, message) {
+      await deps.control.stopTalkback?.(roomFor(sourceId), `${sourceId}:viewer:${sessionId}`, { reason, ...(message ? { message: message.slice(0, 300) } : {}) });
     },
     async removeViewer(sourceId, sessionId, reason) {
       await deps.control.removeParticipant(roomFor(sourceId), `${sourceId}:viewer:${sessionId}`, reason).catch((err) => deps.log.warn({ err, sourceId }, "could not end a live viewer"));

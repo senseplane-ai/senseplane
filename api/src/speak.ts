@@ -27,6 +27,7 @@ import type { MediaControl } from "./media-driver.js";
 import type { AuditLog } from "./module.js";
 import type { PlaybackSigner } from "./playback.js";
 import { bridgeKick } from "./bridge-kick.js";
+import type { IngestSigner } from "./ingest.js";
 import type { ObjectStorage } from "./storage.js";
 
 /** The longest message, chime included. */
@@ -270,6 +271,11 @@ export interface SpeakDeps {
   tts?: TtsConfig;
   signer: PlaybackSigner;
   log?: FastifyBaseLogger;
+  /**
+   * Push-to-talk to IP cameras (ADR 0074): where a box pulls a press from (`{media_public_url}/whep/talkback`)
+   * and the signer of its one-press listener token.
+   */
+  talkback?: { whepUrl: string; signer: Pick<IngestSigner, "signListener"> };
   /** Shorter waits in tests. */
   takeMs?: number;
   waitMs?: number;
@@ -498,12 +504,63 @@ export function createSpeech(deps: SpeakDeps) {
         await finish(accountId, m.id, "interrupted", "A person started talking through the camera, which cut this message off.", 200, undefined, name);
       }
       await audit(accountId, started.row, 200, name);
+      // A camera behind a box: the box pulls this one press from the media plane (ADR 0074).
+      if (source && source.type === "rtsp" && source.bridge_id) await sendTalkToBox(accountId, source, started.row, sessionId, at);
       return;
     }
     const open = await data.withAccount(accountId, (s) => s.db.selectFrom("speak_messages").selectAll().where("live_session_id", "=", sessionId).where("status", "=", "playing").executeTakeFirst());
     if (!open) return;
     const ms = Math.max(0, at.getTime() - new Date(open.created_at).getTime());
     await finish(accountId, open.id, "played", null, 200, undefined, name, { duration_ms: ms, finished_at: at });
+  }
+
+  /**
+   * A `talk` command for the camera's box: the media plane's WHEP URL and a listener token good for this
+   * press only, taken within takeMs or never (the console then says the camera didn't answer).
+   */
+  async function sendTalkToBox(accountId: string, source: Source, row: SpeakRow, sessionId: string, at: Date) {
+    const name = source.name;
+    if (!deps.talkback) {
+      await finish(accountId, row.id, "failed", "This server can't carry push-to-talk to IP cameras (no media plane public URL).", 503, undefined, name);
+      await Promise.resolve(deps.media?.stopTalkback?.(source.id, sessionId, "speaker_unavailable", `This server can't carry push-to-talk to ${name}.`)).catch(() => undefined);
+      return;
+    }
+    const until = new Date(at.getTime() + PERSON_MAX_MS);
+    const { token } = await deps.talkback.signer.signListener({ sourceId: source.id }, Math.ceil(Math.max(1000, until.getTime() - Date.now()) / 1000));
+    const bcId = `bcm_${randomBytes(9).toString("base64url")}`;
+    const expires = new Date(Date.now() + takeMs);
+    await data.withAccount(accountId, async (s) => {
+      await s.db.insertInto("bridge_commands").values({
+        id: bcId, account_id: accountId, bridge_id: source.bridge_id!, kind: "talk", created_by: `talk:${row.id}`, expires_at: expires,
+        // Sealed like every command's arguments, and cleared once the box takes it: the token is good for one press.
+        args_sealed: data.box().encrypt(JSON.stringify({
+          message_id: row.id, source_id: source.id, session_id: sessionId, whep_url: deps.talkback!.whepUrl, token,
+          until: until.toISOString(), run_by: new Date(expires.getTime() + RUN_BY_GRACE_MS).toISOString(),
+        })),
+      }).execute();
+      await s.db.updateTable("speak_messages").set({ bridge_command_id: bcId }).where("id", "=", row.id).execute();
+    });
+    bridgeKick.dispatchEvent(new Event(source.bridge_id!));
+  }
+
+  /** The box's report on a `talk` command: a failure ends the person's press with the reason, for them to read. */
+  async function talkReported(accountId: string, bridgeCommandId: string, ok: boolean, error: string | undefined, result?: Record<string, unknown>) {
+    const row = await data.withAccount(accountId, (s) => s.db.selectFrom("speak_messages").selectAll().where("bridge_command_id", "=", bridgeCommandId).executeTakeFirst());
+    if (!row?.live_session_id) return;
+    const source = await data.withAccount(accountId, (s) => s.sources.get(row.source_id));
+    const name = source?.name ?? row.source_id;
+    if (ok) {
+      deps.log?.info({ sourceId: row.source_id, talkedMs: result?.talked_ms, ended: result?.ended }, "a box carried a person's push-to-talk");
+      return;
+    }
+    const why = /too late/i.test(error ?? "") ? `${cap(name)}'s box got the press too late, so it didn't play it.`
+      : `${cap(name)}'s speaker couldn't be reached: ${(error ?? "the box failed").slice(0, 200)}`;
+    if (row.status === "playing") {
+      await finish(accountId, row.id, "failed", why, 502, undefined, name, { duration_ms: Math.max(0, Date.now() - new Date(row.created_at).getTime()) });
+    }
+    await Promise.resolve(deps.media?.stopTalkback?.(row.source_id, row.live_session_id, "speaker_unavailable", why)).catch((err) => {
+      deps.log?.warn({ err, sourceId: row.source_id }, "could not end a press the box couldn't carry");
+    });
   }
 
   /** Says the watch messages waiting in the queue (claimed across processes). Returns how many it handled. */
@@ -532,7 +589,7 @@ export function createSpeech(deps: SpeakDeps) {
     });
   }
 
-  return { say, boxReported, personTalk, runQueued, claim, sayQueued };
+  return { say, boxReported, personTalk, talkReported, runQueued, claim, sayQueued };
 }
 
 export type Speech = ReturnType<typeof createSpeech>;

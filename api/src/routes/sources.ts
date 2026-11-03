@@ -61,6 +61,10 @@ export function grantedView<T extends { id: string; senses: string[] }>(req: Fas
   return { ...s, senses: s.senses.filter((x) => allowed.has(x)) };
 }
 
+/** Push-to-talk in live view reaches this camera's speaker (ADR 0069, 0074). */
+export const canTalkLive = (row: Pick<Source, "type" | "speaker" | "talk" | "bridge_id">) =>
+  !!row.speaker && (row.type === "browser" || (row.type === "rtsp" && !!row.bridge_id && !!row.talk));
+
 export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
   const thresholds = row.sensor_thresholds ?? null;
   return {
@@ -72,7 +76,7 @@ export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
     senses: row.senses,
     status: row.status,
     record_audio: row.record_audio,
-    ...(row.type !== "sensor" ? { speaker: row.speaker ?? false } : {}),
+    ...(row.type !== "sensor" ? { speaker: row.speaker ?? false, talk: canTalkLive(row) } : {}),
     retention_days: row.retention_days,
     retention_mode: row.retention_mode ?? null,
     retention_max_bytes: row.retention_max_bytes == null ? null : Number(row.retention_max_bytes),

@@ -20,6 +20,8 @@ export function fakeMediaPlane(signalUrl = "ws://media.test/") {
   /** Clips the media plane was asked to play (talk-back, ADR 0069), and the ones stopped. */
   const spoken: { room: string; identity: string; id: string; url: string; durationMs: number }[] = [];
   const stopped: { room: string; identity: string; id: string }[] = [];
+  /** Push-to-talk presses the API ended (ADR 0074). */
+  const talkStopped: { room: string; identity: string; reason: string; message?: string }[] = [];
   const client: ControlClient = {
     async createRoom(input) {
       calls.push(`createRoom ${input.roomId}`);
@@ -62,9 +64,13 @@ export function fakeMediaPlane(signalUrl = "ws://media.test/") {
     async stopSpeak(room, identity, id) {
       stopped.push({ room, identity, id });
     },
+    async stopTalkback(room, identity, body) {
+      talkStopped.push({ room, identity, ...body });
+      return true;
+    },
   };
   return {
-    client, rooms, egress, removed, calls, spoken, stopped,
+    client, rooms, egress, removed, calls, spoken, stopped, talkStopped,
     /** The camera publishes video (a capture page by default) in its room. */
     publish(sourceId: string, identity = `${sourceId}:capture`) {
       const room = rooms.get(`sp-${sourceId}`) ?? { input: { roomId: `sp-${sourceId}` }, status: "live" as const, participants: new Map() };

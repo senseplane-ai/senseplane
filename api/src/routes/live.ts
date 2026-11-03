@@ -20,6 +20,7 @@ import type { IngestSigner } from "../ingest.js";
 import type { MediaControl } from "../media-driver.js";
 import type { AuditLog, Quota } from "../module.js";
 import { atLeast } from "../roles.js";
+import { canTalkLive } from "./sources.js";
 
 export interface LiveDeps {
   data: DataAccess;
@@ -73,8 +74,10 @@ export function registerLiveRoutes(app: FastifyInstance, deps: LiveDeps) {
           throw new ApiError(403, "forbidden_role", `Your role in this workspace (${role}) can't talk through cameras; it needs member or above.`, { role, required: "member" });
         }
         if (!source.speaker) throw new ApiError(409, "no_speaker", `${source.name} has no speaker.`);
-        if (source.type !== "browser") {
-          throw new ApiError(409, "no_speaker", `Push-to-talk works with phone cameras on the capture page for now; ${source.name} can play agents' messages (speak) instead.`);
+        if (!canTalkLive(source)) {
+          throw new ApiError(409, "no_speaker", source.type === "rtsp" && source.bridge_id
+            ? `${source.name}'s box can play agents' messages on it, but can't carry push-to-talk: the box needs updating, or the camera's speaker doesn't take G.711.`
+            : `Push-to-talk works with phone cameras and IP cameras behind a box; ${source.name} can play agents' messages (speak) instead.`);
         }
       }
       const quota = await deps.quotaFor(accountId);
@@ -97,7 +100,9 @@ export function registerLiveRoutes(app: FastifyInstance, deps: LiveDeps) {
       const audio = wantsAudio && source.record_audio;
       const sessionId = newSessionId();
       const { token, expiresAt } = await deps.signer.signViewer(
-        { accountId, sourceId: source.id, sessionId, audio, idleTimeoutSeconds: deps.idleTimeoutSeconds, maxLiveViewers: max, talk },
+        { accountId, sourceId: source.id, sessionId, audio, idleTimeoutSeconds: deps.idleTimeoutSeconds, maxLiveViewers: max, talk,
+          // Heard only by the camera: its phone, or the box that plays to its speaker (ADR 0074).
+          ...(talk ? { talkTo: source.type === "browser" ? "capture" as const : "speaker" as const } : {}) },
         deps.tokenTtlSeconds,
       );
       await deps.data.withAccount(accountId, (s) =>

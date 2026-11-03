@@ -61,7 +61,11 @@ export async function acceptInvite(data: DataAccess, audit: AuditLog, invite: { 
   await audit.write({ accountId: invite.accountId, actor: `user:${userId}`, action: "invite.accepted", target: invite.id, status: 200, details: { email: role.email, role: role.role } });
 }
 
-export function registerTeamRoutes(app: FastifyInstance, deps: { data: DataAccess; audit: AuditLog; config: TeamConfig; sessionDays: number }) {
+export function registerTeamRoutes(app: FastifyInstance, deps: {
+  data: DataAccess; audit: AuditLog; config: TeamConfig; sessionDays: number;
+  /** Someone lost what let them talk through cameras (removed, or below member): their live views end now (ADR 0074). */
+  onAccessReduced?(accountId: string, userId: string): Promise<void>;
+}) {
   const { data, audit, config } = deps;
   const inviteAllowed = limiter(config.invitesPerHour, 3600_000);
   const userOnly = (req: FastifyRequest) => {
@@ -147,6 +151,8 @@ export function registerTeamRoutes(app: FastifyInstance, deps: { data: DataAcces
       return was;
     });
     void write(req, "member.role_changed", req.params.id, { from, to: req.body.role });
+    // A live view that may talk was issued for the old role: it ends, and a new one follows the new role.
+    if (atLeast(from, "member") && !atLeast(req.body.role, "member")) await deps.onAccessReduced?.(req.accountId!, req.params.id).catch(() => undefined);
     return toMember((await listMembers(req.accountId!)).find((m) => m.id === req.params.id)!);
   });
 
@@ -162,6 +168,7 @@ export function registerTeamRoutes(app: FastifyInstance, deps: { data: DataAcces
     });
     await data.db().updateTable("users").set({ account_id: null }).where("id", "=", req.params.id).where("account_id", "=", req.accountId!).execute();
     void write(req, self ? "member.left" : "member.removed", req.params.id);
+    await deps.onAccessReduced?.(req.accountId!, req.params.id).catch(() => undefined);
     return reply.code(204).send();
   });
 

@@ -79,6 +79,8 @@ export interface SourcesTable {
   site: ColumnType<string | null, string | null | undefined, string | null>;
   /** The camera can play sound (ADR 0069): a phone, or an IP camera with two-way audio its box found. */
   speaker: ColumnType<boolean, boolean | undefined, boolean>;
+  /** A person's push-to-talk reaches its speaker (ADR 0074): a phone with a speaker, or what the camera's box reports. */
+  talk: ColumnType<boolean, boolean | undefined, boolean>;
 }
 
 /** One thing, in one place, from a start to an end (ADR 0057). */

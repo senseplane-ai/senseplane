@@ -4,7 +4,9 @@ go 1.24.0
 
 require (
 	github.com/AlexxIT/go2rtc v1.9.14
+	github.com/at-wat/mqtt-go v0.19.6
 	github.com/gorilla/websocket v1.5.3
+	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/pion/rtp v1.10.0
 	github.com/pion/webrtc/v4 v4.2.3
 	github.com/prometheus/client_golang v1.23.2
@@ -34,6 +36,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
+	github.com/rs/xid v1.4.0 // indirect
 	github.com/sigurn/crc16 v0.0.0-20240131213347-83fcde1e29d1 // indirect
 	github.com/sigurn/crc8 v0.0.0-20220107193325-2243fe600f9f // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
@@ -42,4 +45,5 @@ require (
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

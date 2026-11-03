@@ -153,7 +153,15 @@ def test_idempotency_keys_only_where_the_api_takes_them() -> None:
     with pytest.raises(ValueError, match="idempotency"):
         client._transport.request("askSource", path={"id": "src_1"}, body={}, idempotency_key="k")
     idempotent = sorted(op for op, o in OPERATIONS.items() if o.idempotent)
-    assert idempotent == ["createClip", "createFollow", "createGrant", "createSource", "createStory", "createWatch", "createWebhook"]
+    assert idempotent == [
+        "createClip",
+        "createFollow",
+        "createGrant",
+        "createSource",
+        "createStory",
+        "createWatch",
+        "createWebhook",
+    ]
 
 
 def test_retries_safe_requests_with_backoff(no_sleep: list[float]) -> None:
@@ -270,18 +278,41 @@ def test_readings_webhook_and_mqtt_publishing() -> None:
     seen: list[str] = []
 
     def handler(r: httpx.Request) -> httpx.Response:
-        seen.append(f"{r.method} {r.url.path}{'?' + r.url.query.decode() if r.url.query else ''} {r.content.decode()}".strip())
+        seen.append(
+            f"{r.method} {r.url.path}{'?' + r.url.query.decode() if r.url.query else ''} {r.content.decode()}".strip()
+        )
         if r.method == "DELETE":
             return respond(None, 204)
         if r.url.path.endswith("/webhook"):
             return respond({"url": "http://x/v1/integration/readings", "token_prefix": "sit_abcd", "signed": False})
         if r.url.path.endswith("/secret"):
-            return respond({"url": "http://x/v1/integration/readings", "token_prefix": "sit_abcd", "signed": True, "secret": "whsec_s"})
+            return respond(
+                {
+                    "url": "http://x/v1/integration/readings",
+                    "token_prefix": "sit_abcd",
+                    "signed": True,
+                    "secret": "whsec_s",
+                }
+            )
         if r.url.path.endswith("/outputs"):
-            return respond({"mqtt_publish": True, "bridge_id": "brg_1", "now": "2026-11-03T10:00:00Z", "cursor": "evt_2", "cameras": [{"id": "src_1", "name": "Front door", "online": True}], "watches": [], "events": []})
-        return respond({"id": "brg_1", "name": "Home", "online": True, "created_at": "2026-11-03T10:00:00Z", "mqtt_publish": True})
+            return respond(
+                {
+                    "mqtt_publish": True,
+                    "bridge_id": "brg_1",
+                    "now": "2026-11-03T10:00:00Z",
+                    "cursor": "evt_2",
+                    "cameras": [{"id": "src_1", "name": "Front door", "online": True}],
+                    "watches": [],
+                    "events": [],
+                }
+            )
+        return respond(
+            {"id": "brg_1", "name": "Home", "online": True, "created_at": "2026-11-03T10:00:00Z", "mqtt_publish": True}
+        )
 
-    sp = Senseplane(api_key="sk_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    sp = Senseplane(
+        api_key="sk_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
     assert sp.sources.webhook("src_s").signed is False
     assert sp.sources.create_webhook_secret("src_s").secret == "whsec_s"
     sp.sources.delete_webhook_secret("src_s")
@@ -303,9 +334,14 @@ def test_pushes_to_the_readings_webhook_signed() -> None:
         seen.append(r)
         return respond({"accepted": 1, "events": []}, 202)
 
-    sp = Senseplane(api_key="sit_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    sp = Senseplane(
+        api_key="sit_test", base_url="http://x/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
     assert sp.integration.push(sense="temperature", value="21.5").accepted == 1
-    assert sp.integration.push({"readings": [{"sense": "contact", "value": "open"}]}, signing_secret="whsec_s").accepted == 1
+    assert (
+        sp.integration.push({"readings": [{"sense": "contact", "value": "open"}]}, signing_secret="whsec_s").accepted
+        == 1
+    )
     assert seen[0].url.path == "/v1/integration/readings" and "senseplane-signature" not in seen[0].headers
     assert seen[0].content == b'{"sense":"temperature","value":"21.5"}'
     parts = dict(p.split("=", 1) for p in seen[1].headers["senseplane-signature"].split(","))

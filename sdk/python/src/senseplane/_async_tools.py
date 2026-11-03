@@ -513,12 +513,27 @@ class AsyncToolkit:
         if a.get("fast"):
             body["mode"] = "fast"
         created = await self.client.stories.create(body)
-        s = await self._until(lambda: self.client.stories.get(created.id), lambda v: v["status"] in ("ready", "failed"), 120)
+        s = await self._until(
+            lambda: self.client.stories.get(created.id), lambda v: v["status"] in ("ready", "failed"), 120
+        )
         out: dict[str, Any] = {"story_id": s["id"], "status": s["status"], **_pick(s, "error")}
-        out["pieces"] = [{"source": p["source_name"], "from": p["from"], "to": p["to"], **({"note": "nothing recorded"} if p.get("recorded_ms") == 0 else {})}
-                         for p in s["pieces"]]
+        out["pieces"] = [
+            {
+                "source": p["source_name"],
+                "from": p["from"],
+                "to": p["to"],
+                **({"note": "nothing recorded"} if p.get("recorded_ms") == 0 else {}),
+            }
+            for p in s["pieces"]
+        ]
         if s.get("playback_url"):
-            out.update({"url": s["playback_url"], "expires_at": s.get("playback_expires_at"), **_pick(s, "duration_ms", "captions_url")})
+            out.update(
+                {
+                    "url": s["playback_url"],
+                    "expires_at": s.get("playback_expires_at"),
+                    **_pick(s, "duration_ms", "captions_url"),
+                }
+            )
             if s.get("parts"):
                 out["downloads"] = [x["download_url"] for x in s["parts"] if x.get("download_url")]
             if s.get("note"):
@@ -536,17 +551,39 @@ class AsyncToolkit:
             reference["box"] = [float(v) for v in a["box"]]
         if a.get("description"):
             reference["description"] = str(a["description"])
-        body: dict[str, Any] = {"reference": reference, "from": str(a.get("from")), "to": str(a.get("to")), "make_story": a.get("make_story") is not False}
+        body: dict[str, Any] = {
+            "reference": reference,
+            "from": str(a.get("from")),
+            "to": str(a.get("to")),
+            "make_story": a.get("make_story") is not False,
+        }
         if ids:
             body["sources"] = ids
         created = await self.client.follows.create(body)
-        f = await self._until(lambda: self.client.follows.get(created.id), lambda v: v["status"] in ("done", "failed", "refused"), 150)
+        f = await self._until(
+            lambda: self.client.follows.get(created.id), lambda v: v["status"] in ("done", "failed", "refused"), 150
+        )
         out: dict[str, Any] = {"follow_id": f["id"], "status": f["status"], **_pick(f, "error")}
         r = f.get("result")
         if r:
-            out["route"] = [{"source": v["source_name"], "from": v["from"], "to": v["to"], "confidence": v["confidence"],
-                             **({"url": v["playback_url"]} if v.get("playback_url") else {})} for v in r.get("route") or []]
-            out.update({"handovers": r.get("handovers") or [], "gaps": r.get("gaps") or [], "frames_examined": f["frames_examined"], "model_calls": f["model_calls"]})
+            out["route"] = [
+                {
+                    "source": v["source_name"],
+                    "from": v["from"],
+                    "to": v["to"],
+                    "confidence": v["confidence"],
+                    **({"url": v["playback_url"]} if v.get("playback_url") else {}),
+                }
+                for v in r.get("route") or []
+            ]
+            out.update(
+                {
+                    "handovers": r.get("handovers") or [],
+                    "gaps": r.get("gaps") or [],
+                    "frames_examined": f["frames_examined"],
+                    "model_calls": f["model_calls"],
+                }
+            )
         if f.get("story_id"):
             out["story_id"] = f["story_id"]
         return _text(out)

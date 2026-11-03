@@ -381,7 +381,10 @@ class AsyncBridges(_Resource):
 
     async def update(self, id: str, body: Body = None, /, **fields: Any) -> m.Bridge:
         """Renames a box (`name`), or turns publishing to its MQTT broker on or off (`mqtt_publish`, ADR 0071)."""
-        return parse(m.Bridge, await self._t.request("updateBridge", path={"id": id}, body=body_of(m.BridgesIdPatchRequest, body, fields)))
+        return parse(
+            m.Bridge,
+            await self._t.request("updateBridge", path={"id": id}, body=body_of(m.BridgesIdPatchRequest, body, fields)),
+        )
 
     async def remove(self, id: str) -> None:
         """Removes a box; its cameras and sensors keep their history."""

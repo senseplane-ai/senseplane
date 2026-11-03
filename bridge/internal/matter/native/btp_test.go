@@ -115,6 +115,10 @@ func TestBTPSegmentsAndReassemblesBothWays(t *testing.T) {
 		if len(p) > 20 {
 			t.Fatalf("a %d-byte packet on a 20-byte segment", len(p))
 		}
+		// A last segment after the first is C|E, as connectedhomeip sends it.
+		if p[0]&btpEnd != 0 && p[0]&btpBegin == 0 && p[0]&btpContinue == 0 {
+			t.Fatalf("a last segment without C: % x", p[:2])
+		}
 	}
 }
 

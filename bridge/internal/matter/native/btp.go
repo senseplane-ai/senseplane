@@ -262,10 +262,7 @@ func (b *BTP) Send(ctx context.Context, msg []byte) error {
 		head := b.headerLocked(&flags, first, len(msg))
 		n := min(len(msg), b.segment-len(head))
 		if n == len(msg) {
-			flags |= btpEnd
-			if !first {
-				flags &^= btpContinue
-			}
+			flags |= btpEnd // a last segment after the first is C|E, as connectedhomeip sends it
 			head[0] = flags
 		}
 		packet := append(head, msg[:n]...)

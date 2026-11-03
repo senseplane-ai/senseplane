@@ -104,6 +104,8 @@ The one exception: a token with `kind: "ingress"` and `transport: "plain"`
 | `recordingChanged` | `recording` | An egress joined or left |
 | `draining` | `reconnectAfterMs` | The node is going away: reconnect with a fresh token after the delay |
 | `roomClosed` | `reason` | The session is over; don't reconnect automatically |
+| `speak` | `id`, `url`, `durationMs` | Talk-back: play the clip at `url` (ADR 0069) |
+| `speakStop` | `id` | Talk-back: stop playing that clip now |
 
 `newProducer` (`producerId`, `identity`, `kind`) is the old name of
 `producerAppeared`. Nodes send `producerAppeared`; clients should accept both.
@@ -148,12 +150,35 @@ transport, connects it, calls `consume` for each producer and
 - `produce` and a `send` transport fail with `forbidden` for a token without
   `canPublish`.
 
+## Talk-back (ADR 0069)
+
+Talking through a camera's speaker, in two ways.
+
+- **Push-to-talk.** A live view token from `POST /v1/sources/{id}/live` with
+  `talk: true` may also publish: `canPublish: true`, `publishKinds:
+  ["audio"]` and `visibleTo` allowing only the camera's phone
+  (`{source_id}:capture`). While the person holds the button the viewer
+  produces one audio track with `appData.source: "talkback"`, and closes it
+  on release. A `talkback` producer must be audio, and a room has one at a
+  time: a second fails with `speaker_busy`. The phone's token has
+  `canSubscribe: true` and `subscribeKinds: ["audio"]`; it consumes every
+  `talkback` producer that appears and plays it, and shows that someone is
+  speaking while it plays. The node never sends the track to anyone else.
+- **Clips.** `POST /control/rooms/{roomId}/participants/{identity}/speak`
+  sends that participant a `speak` event: `url` is an absolute http(s) URL,
+  or a path the client resolves against the API it got its token from. The
+  phone fetches and plays it, and stops on `speakStop`
+  (`.../speak/stop`) or when a `talkback` producer appears: a person's
+  push-to-talk always cuts a clip off. A client that can't start playing
+  within 10 s of the event drops it rather than play it late.
+
 ## Errors
 
 `unauthorized`, `replayed`, `protocol_version`, `forbidden_transport`,
 `forbidden`, `not_subscribable`, `subscription_limit`, `room_closed`,
 `no_such_room`, `no_such_producer`, `no_such_transport`,
-`duplicate_identity`, `node_draining`, `capacity`, `bad_request`, `internal`.
+`duplicate_identity`, `node_draining`, `capacity`, `bad_request`,
+`speaker_busy`, `internal`.
 
 Join failures close the socket with **1008** and the code as the reason; an
 internal failure during join closes with **1011**.

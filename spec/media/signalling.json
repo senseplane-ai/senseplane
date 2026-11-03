@@ -24,6 +24,7 @@
         "node_draining",
         "capacity",
         "bad_request",
+        "speaker_busy",
         "internal"
       ]
     },
@@ -598,6 +599,51 @@
             }
           },
           "description": "Another name for producerAppeared; nodes send producerAppeared, clients accept both"
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "id",
+            "url",
+            "durationMs"
+          ],
+          "description": "Talk-back (ADR 0069): play the clip at url (an http(s) URL or a path on the API the token came from)",
+          "properties": {
+            "event": {
+              "const": "speak"
+            },
+            "id": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "durationMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "id"
+          ],
+          "description": "Talk-back: stop playing that clip",
+          "properties": {
+            "event": {
+              "const": "speakStop"
+            },
+            "id": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
         }
       ]
     },

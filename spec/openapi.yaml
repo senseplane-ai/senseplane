@@ -490,6 +490,77 @@ paths:
                 properties:
                   idle_timeout_seconds: {type: integer}
         default: {$ref: '#/components/responses/Error'}
+  /sources/{id}/speak:
+    post:
+      operationId: speak
+      summary: Say something through a camera's speaker
+      description: >-
+        Text to speech, played on the camera (ADR 0069), after a short chime, in a plainly
+        synthetic voice: there is no voice choice and no voice cloning (unknown fields such as
+        `voice` are refused). An agent needs a `speak` grant on the source; `sensors` never
+        implies it. People need member and up. The camera must have a speaker (409
+        `no_speaker`), a message is at most 30 seconds (400 `message_too_long`), 6 messages a
+        minute per camera (429 `rate_limited`), one speaker at a time: 409 `speaker_busy`
+        while a person is talking through it or another message is playing, and a person's
+        push-to-talk cuts an agent's message off. A camera that isn't connected answers 503
+        `camera_offline`; a box that doesn't take the message within 10 s never plays it later.
+        The clip is kept (sealed like snapshots) so a person can hear exactly what was said, and
+        every message is in the audit log with who, the camera, the duration and the text.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SpeakRequest'}
+      responses:
+        '200':
+          description: Played (or playing) on the camera
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SpeakMessage'}
+        '202':
+          description: Sent to the camera's box and not reported yet; poll GET /speak-messages/{id}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SpeakMessage'}
+        default: {$ref: '#/components/responses/Error'}
+  /speak-messages:
+    get:
+      operationId: listSpeakMessages
+      summary: What was said through cameras, newest first
+      description: Agent messages, watch messages and people's push-to-talk, each with a link to hear the clip (agents and watches). An agent sees only its own.
+      tags: [sources]
+      parameters:
+        - {name: source, in: query, required: false, schema: {type: string}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/SpeakMessage'}}
+        default: {$ref: '#/components/responses/Error'}
+  /speak-messages/{id}:
+    get:
+      operationId: getSpeakMessage
+      summary: One message said through a camera
+      description: An agent sees only its own.
+      tags: [sources]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SpeakMessage'}
+        default: {$ref: '#/components/responses/Error'}
   # --- end live view --------------------------------------------------------
   # --- Ingest: bridge and integrations (ADR 0045) -----------------------------
   /bridge/config:
@@ -534,6 +605,7 @@ paths:
               properties:
                 rtsp_url: {type: string, pattern: '^rtsps?://', maxLength: 2048}
                 name: {type: string, minLength: 1, maxLength: 120}
+                speaker: {type: boolean, description: 'The camera has two-way audio the box can play to (an ONVIF backchannel), or is the phone itself (ADR 0069)'}
       responses:
         '200':
           description: Existing camera
@@ -3188,6 +3260,7 @@ components:
               source_id: {type: string}
               state: {type: string, enum: [connecting, online, reconnecting, offline]}
               detail: {type: string, maxLength: 500, description: Why, for reconnecting or offline}
+              speaker: {type: boolean, description: 'What the box found about two-way audio when it connected (ADR 0069)'}
         home_assistant:
           type: object
           additionalProperties: false
@@ -3219,7 +3292,7 @@ components:
       required: [id, kind, status]
       properties:
         id: {type: string}
-        kind: {type: string, description: 'matter_commission, onvif_add_camera, onvif_search or device_control'}
+        kind: {type: string, description: 'matter_commission, onvif_add_camera, onvif_search, device_control or speak'}
         status: {type: string, enum: [pending, taken, done, failed, expired], description: '`expired`: not taken in time, so never handed out (device commands)'}
         result: {type: ['object', 'null']}
         error: {type: ['string', 'null']}
@@ -3551,6 +3624,7 @@ components:
       additionalProperties: false
       properties:
         audio: {type: boolean, description: "Also receive the source's audio (default false). Needs an audio grant and a source that records audio."}
+        talk: {type: boolean, description: "Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera. People only (member and up) and workspace keys; a phone camera on the capture page. 409 `no_speaker` otherwise."}
     LiveViewSession:
       type: object
       required: [session_id, media_url, token, expires_at, idle_timeout_seconds]
@@ -3561,6 +3635,29 @@ components:
         expires_at: {type: string, format: date-time, description: Join with the token before this time}
         idle_timeout_seconds: {type: integer, description: "The viewer is closed after this long without a keepalive (POST /live/{session_id}/keepalive)"}
         audio: {type: boolean, description: Whether this session includes audio}
+        talk: {type: boolean, description: Whether this session may talk through the camera (push-to-talk)}
+    SpeakRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string, minLength: 1, maxLength: 500, description: 'What to say. Tell people they are hearing an automated system (docs/lawful-use.md).'}
+    SpeakMessage:
+      type: object
+      required: [id, source_id, kind, status, created_at]
+      properties:
+        id: {type: string, description: 'spk_...'}
+        source_id: {type: string}
+        kind: {type: string, enum: [agent, watch, person], description: 'agent: the speak tool or REST; watch: a watch''s speak action; person: push-to-talk in live view'}
+        text: {type: ['string', 'null'], description: What was said (agents and watches); null for push-to-talk}
+        status: {type: string, enum: [queued, sent, playing, played, interrupted, refused, offline, late, failed], description: '`interrupted`: a person''s push-to-talk cut it off; `late`: the box got it too late and didn''t play it'}
+        message: {type: ['string', 'null']}
+        duration_ms: {type: ['integer', 'null'], description: Length of the clip with its chime, or how long the person talked}
+        requested_by: {type: object, properties: {kind: {type: string}, id: {type: string}, name: {type: ['string', 'null']}}}
+        watch_id: {type: ['string', 'null']}
+        clip_url: {type: ['string', 'null'], description: Signed link to the clip as played (WAV), so a person can hear exactly what was said}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: ['string', 'null'], format: date-time}
     # --- end live view ------------------------------------------------------
     AgentCreated:
       allOf:

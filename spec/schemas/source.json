@@ -70,6 +70,10 @@
     "record_audio": {
       "type": "boolean"
     },
+    "speaker": {
+      "type": "boolean",
+      "description": "The camera can play sound (ADR 0069): a phone always, an IP camera when its box found two-way audio (an ONVIF backchannel). Speak is offered only on cameras with a speaker."
+    },
     "zones": {
       "type": "array",
       "items": {

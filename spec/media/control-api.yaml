@@ -153,6 +153,57 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
 
+  /control/rooms/{roomId}/participants/{identity}/speak:
+    parameters:
+      - {name: roomId, in: path, required: true, schema: {type: string}}
+      - {name: identity, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: speakToParticipant
+      description: >-
+        Talk-back (ADR 0069): sends the participant (a camera's capture page) a
+        `speak` event with the clip to play. `url` is an absolute http(s) URL or
+        a path the client resolves against the API it got its token from. 404
+        when the participant isn't in the room. Optional for a media plane: an
+        API that gets 404 or 405 treats the camera as unable to play clips.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, url, durationMs]
+              properties:
+                id: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+                url: {type: string, maxLength: 2048}
+                durationMs: {type: integer, minimum: 1, maximum: 60000}
+      responses:
+        '204': {description: Sent}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {description: No such participant in the room}
+
+  /control/rooms/{roomId}/participants/{identity}/speak/stop:
+    parameters:
+      - {name: roomId, in: path, required: true, schema: {type: string}}
+      - {name: identity, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: stopSpeakingToParticipant
+      description: Sends `speakStop` for a clip (a person's push-to-talk cut it off).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+      responses:
+        '204': {description: Sent}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {description: No such participant in the room}
+
   /control/egress:
     post:
       operationId: startEgress

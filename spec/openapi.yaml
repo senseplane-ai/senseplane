@@ -3177,7 +3177,7 @@ components:
         source_ids: {type: array, minItems: 1, items: {type: string}}
         senses: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Sense'}}
         abilities: {type: array, items: {type: string, enum: [watch, history]}, description: 'Default both (ADR 0048)'}
-        blurred_only: {type: boolean, default: false, description: 'Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068)'}
+        blurred_only: {type: boolean, description: 'Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068). Default false'}
         window:
           type: object
           properties:
@@ -3194,7 +3194,7 @@ components:
         source_ids: {type: array, minItems: 1, items: {type: string}}
         senses: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Sense'}}
         abilities: {type: array, items: {type: string, enum: [watch, history]}}
-        blurred_only: {type: boolean, default: false, description: 'As on GrantCreate (ADR 0068)'}
+        blurred_only: {type: boolean, description: 'As on GrantCreate (ADR 0068). Default false'}
         window:
           type: object
           properties:

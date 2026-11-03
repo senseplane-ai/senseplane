@@ -2199,11 +2199,8 @@ export interface components {
             senses: components["schemas"]["sense"][];
             /** @description Default both (ADR 0048) */
             abilities?: ("watch" | "history")[];
-            /**
-             * @description Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068)
-             * @default false
-             */
-            blurred_only: boolean;
+            /** @description Blurred snapshots, looks and answers only; no recordings, clips or live view (ADR 0068). Default false */
+            blurred_only?: boolean;
             window?: {
                 /** Format: date-time */
                 from?: string;
@@ -2221,6 +2218,8 @@ export interface components {
             source_ids: string[];
             senses: components["schemas"]["sense"][];
             abilities?: ("watch" | "history")[];
+            /** @description As on GrantCreate (ADR 0068). Default false */
+            blurred_only?: boolean;
             window?: {
                 /** Format: date-time */
                 from?: string;

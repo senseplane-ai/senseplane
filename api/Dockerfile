@@ -22,16 +22,19 @@ RUN ./configure --prefix=/opt/ffmpeg --enable-shared --disable-static --disable-
       --enable-protocol=file,pipe \
       --enable-demuxer=mov,concat,webvtt \
       --enable-muxer=mp4,mov,null,image2pipe,webvtt \
-      --enable-encoder=mjpeg,mov_text,webvtt \
-      --enable-decoder=h264,aac,opus,webvtt,mov_text \
+      --enable-encoder=mjpeg,movtext,webvtt \
+      --enable-decoder=h264,aac,opus,webvtt,movtext \
       --enable-parser=h264,aac,opus \
       --enable-bsf=h264_mp4toannexb,extract_extradata,aac_adtstoasc \
       --enable-filter=null,anull,format,scale,fps \
       --enable-swscale --enable-swresample \
  && make -j"$(nproc)" && make install \
- && /opt/ffmpeg/bin/ffmpeg -hide_banner -version | tee /opt/ffmpeg/VERSION \
+ && export LD_LIBRARY_PATH=/opt/ffmpeg/lib \
+ && /opt/ffmpeg/bin/ffmpeg -hide_banner -version > /opt/ffmpeg/VERSION \
+ && /opt/ffmpeg/bin/ffmpeg -hide_banner -encoders > /tmp/encoders \
+ && grep -q ' mjpeg ' /tmp/encoders && grep -q ' mov_text ' /tmp/encoders \
  && ! grep -E -- '--enable-(gpl|nonfree)' /opt/ffmpeg/VERSION \
- && ! /opt/ffmpeg/bin/ffmpeg -hide_banner -encoders | grep -E ' (h264|hevc|libx26|libopenh264)' \
+ && ! grep -E ' (h264|hevc|libx26|libopenh264)' /tmp/encoders \
  && cp COPYING.LGPLv2.1 /opt/ffmpeg/LICENSE
 
 FROM node:24-bookworm-slim AS build

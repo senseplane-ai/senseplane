@@ -190,7 +190,9 @@ def unasync(name: str) -> None:
     )
     out = pkg / f"_sync_{name}.py"
     out.write_text(header + text)
-    subprocess.run([sys.executable, "-m", "ruff", "format", "--quiet", str(out)], check=True)
+    ruff = [sys.executable, "-m", "ruff"]
+    subprocess.run([*ruff, "check", "--quiet", "--fix", "--select", "I", str(out)], check=True)
+    subprocess.run([*ruff, "format", "--quiet", str(out)], check=True)
 
 
 OUT.mkdir(parents=True, exist_ok=True)

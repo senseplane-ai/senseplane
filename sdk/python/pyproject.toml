@@ -52,7 +52,8 @@ extend-exclude = ["src/senseplane/_generated"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "RUF"]
-ignore = ["RUF001", "RUF002", "RUF003"]
+# Lines are wrapped by `ruff format`; what it leaves long is a string.
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 # Written from the async sources, where `yield from` has no async form.

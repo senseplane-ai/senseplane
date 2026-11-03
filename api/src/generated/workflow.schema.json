@@ -32,16 +32,16 @@
       "type": "boolean"
     },
     "sources": {
-      "$ref": "#/$defs/sources"
+      "$ref": "#/$defs/workflowSources"
     },
     "trigger": {
-      "$ref": "#/$defs/trigger"
+      "$ref": "#/$defs/workflowTrigger"
     },
     "steps": {
-      "$ref": "#/$defs/steps"
+      "$ref": "#/$defs/workflowSteps"
     },
     "edges": {
-      "$ref": "#/$defs/edges"
+      "$ref": "#/$defs/workflowEdges"
     },
     "hook_url": {
       "type": "string",
@@ -86,27 +86,31 @@
     }
   },
   "$defs": {
-    "stepId": {
+    "workflowStepId": {
+      "title": "WorkflowStepId",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,31}$",
       "description": "Unique in the workflow; `trigger` is the trigger's own id."
     },
-    "sourceId": {
+    "workflowSourceId": {
+      "title": "WorkflowSourceId",
       "type": "string",
       "minLength": 1,
       "maxLength": 64
     },
-    "sources": {
+    "workflowSources": {
+      "title": "WorkflowSources",
       "type": "array",
       "minItems": 1,
       "maxItems": 20,
       "uniqueItems": true,
       "items": {
-        "$ref": "#/$defs/sourceId"
+        "$ref": "#/$defs/workflowSourceId"
       },
       "description": "Every source the workflow may use. Its runs see nothing else."
     },
-    "position": {
+    "workflowPosition": {
+      "title": "WorkflowPosition",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -123,7 +127,8 @@
       },
       "description": "Where the editor draws it."
     },
-    "definition": {
+    "workflowDefinition": {
+      "title": "WorkflowDefinition",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -134,17 +139,18 @@
       "description": "What a run follows: the trigger, the steps and the edges between them.",
       "properties": {
         "trigger": {
-          "$ref": "#/$defs/trigger"
+          "$ref": "#/$defs/workflowTrigger"
         },
         "steps": {
-          "$ref": "#/$defs/steps"
+          "$ref": "#/$defs/workflowSteps"
         },
         "edges": {
-          "$ref": "#/$defs/edges"
+          "$ref": "#/$defs/workflowEdges"
         }
       }
     },
-    "trigger": {
+    "workflowTrigger": {
+      "title": "WorkflowTrigger",
       "oneOf": [
         {
           "$ref": "#/$defs/eventTrigger"
@@ -159,7 +165,7 @@
     },
     "eventTrigger": {
       "type": "object",
-      "title": "EventTrigger",
+      "title": "WorkflowEventTrigger",
       "additionalProperties": false,
       "required": [
         "type"
@@ -176,9 +182,7 @@
           "maxItems": 20,
           "uniqueItems": true,
           "items": {
-            "type": "string",
-            "pattern": "^(\\*|[a-z][a-z0-9_]*(\\.([a-z0-9_]+|\\*))*)$",
-            "maxLength": 64
+            "$ref": "#/$defs/workflowEventType"
           },
           "description": "Patterns such as watch.triggered, detection.person or detection.*; every type when absent."
         },
@@ -188,7 +192,7 @@
           "maxItems": 20,
           "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/sourceId"
+            "$ref": "#/$defs/workflowSourceId"
           },
           "description": "Some of the workflow's sources; all of them when absent."
         },
@@ -198,13 +202,13 @@
           "description": "Only this watch's events."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         }
       }
     },
     "scheduleTrigger": {
       "type": "object",
-      "title": "ScheduleTrigger",
+      "title": "WorkflowScheduleTrigger",
       "additionalProperties": false,
       "required": [
         "type"
@@ -247,13 +251,13 @@
           "maxLength": 64
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         }
       }
     },
     "webhookTrigger": {
       "type": "object",
-      "title": "WebhookTrigger",
+      "title": "WorkflowWebhookTrigger",
       "additionalProperties": false,
       "required": [
         "type"
@@ -265,19 +269,21 @@
           "const": "webhook"
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         }
       }
     },
-    "steps": {
+    "workflowSteps": {
+      "title": "WorkflowSteps",
       "type": "array",
       "minItems": 1,
       "maxItems": 20,
       "items": {
-        "$ref": "#/$defs/step"
+        "$ref": "#/$defs/workflowStep"
       }
     },
-    "step": {
+    "workflowStep": {
+      "title": "WorkflowStep",
       "oneOf": [
         {
           "$ref": "#/$defs/conditionStep"
@@ -302,7 +308,38 @@
         }
       ]
     },
-    "rule": {
+    "workflowNotifyTarget": {
+      "title": "WorkflowNotifyTarget",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "channel",
+            "webhook"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "A channel (chn_…) or webhook (whk_…) id."
+        }
+      }
+    },
+    "workflowEventType": {
+      "title": "WorkflowEventType",
+      "type": "string",
+      "pattern": "^(\\*|[a-z][a-z0-9_]*(\\.([a-z0-9_]+|\\*))*)$",
+      "maxLength": 64
+    },
+    "workflowRule": {
+      "title": "WorkflowRule",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -330,39 +367,13 @@
           ]
         },
         "value": {
-          "oneOf": [
-            {
-              "type": "string",
-              "maxLength": 200
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "maxItems": 20,
-              "items": {
-                "oneOf": [
-                  {
-                    "type": "string",
-                    "maxLength": 200
-                  },
-                  {
-                    "type": "number"
-                  }
-                ]
-              }
-            }
-          ]
+          "description": "What to compare with: a string (at most 200 characters), a number, a boolean, or for `in` a list of at most 20 strings and numbers."
         }
       }
     },
     "conditionStep": {
       "type": "object",
-      "title": "ConditionStep",
+      "title": "WorkflowConditionStep",
       "description": "Checks rules; its yes and no edges choose what runs next.",
       "additionalProperties": false,
       "required": [
@@ -372,7 +383,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -380,7 +391,7 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
@@ -399,14 +410,14 @@
           "minItems": 1,
           "maxItems": 10,
           "items": {
-            "$ref": "#/$defs/rule"
+            "$ref": "#/$defs/workflowRule"
           }
         }
       }
     },
     "askStep": {
       "type": "object",
-      "title": "AskStep",
+      "title": "WorkflowAskStep",
       "description": "Asks the vision model a yes/no question about the event's snapshot, or the camera's live frame without one. Counts as an AI check. Its yes and no edges choose what runs next.",
       "additionalProperties": false,
       "required": [
@@ -416,7 +427,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -424,7 +435,7 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
@@ -451,7 +462,7 @@
     },
     "notifyStep": {
       "type": "object",
-      "title": "NotifyStep",
+      "title": "WorkflowNotifyStep",
       "description": "Sends text to a linked chat (Telegram) or one of the account's webhooks, signed like every Senseplane webhook (type workflow.notify).",
       "additionalProperties": false,
       "required": [
@@ -462,7 +473,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -470,34 +481,14 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
           "const": "notify"
         },
         "to": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "id"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "channel",
-                "webhook"
-              ]
-            },
-            "id": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64,
-              "description": "A channel (chn_…) or webhook (whk_…) id."
-            }
-          }
+          "$ref": "#/$defs/workflowNotifyTarget"
         },
         "text": {
           "type": "string",
@@ -509,7 +500,7 @@
     },
     "speakStep": {
       "type": "object",
-      "title": "SpeakStep",
+      "title": "WorkflowSpeakStep",
       "description": "Says text through a camera's speaker, through talk-back with its limits (ADR 0069). Never retried.",
       "additionalProperties": false,
       "required": [
@@ -520,7 +511,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -528,14 +519,14 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
           "const": "speak"
         },
         "source": {
-          "$ref": "#/$defs/sourceId"
+          "$ref": "#/$defs/workflowSourceId"
         },
         "text": {
           "type": "string",
@@ -547,7 +538,7 @@
     },
     "clipStep": {
       "type": "object",
-      "title": "ClipStep",
+      "title": "WorkflowClipStep",
       "description": "Saves a clip of the event's moment on its camera, once it is recorded.",
       "additionalProperties": false,
       "required": [
@@ -556,7 +547,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -564,7 +555,7 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
@@ -586,7 +577,7 @@
     },
     "storyStep": {
       "type": "object",
-      "title": "StoryStep",
+      "title": "WorkflowStoryStep",
       "description": "Makes a story of the event's moment (or the run's start) on one or more cameras (ADR 0070).",
       "additionalProperties": false,
       "required": [
@@ -595,7 +586,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -603,7 +594,7 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
@@ -615,7 +606,7 @@
           "maxItems": 8,
           "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/sourceId"
+            "$ref": "#/$defs/workflowSourceId"
           },
           "description": "Default the event's camera."
         },
@@ -642,7 +633,7 @@
     },
     "waitStep": {
       "type": "object",
-      "title": "WaitStep",
+      "title": "WorkflowWaitStep",
       "description": "Pauses the run.",
       "additionalProperties": false,
       "required": [
@@ -652,7 +643,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/stepId"
+          "$ref": "#/$defs/workflowStepId"
         },
         "name": {
           "type": "string",
@@ -660,7 +651,7 @@
           "description": "A label for the step in the editor."
         },
         "position": {
-          "$ref": "#/$defs/position"
+          "$ref": "#/$defs/workflowPosition"
         },
         "kind": {
           "type": "string",
@@ -673,11 +664,13 @@
         }
       }
     },
-    "edges": {
+    "workflowEdges": {
+      "title": "WorkflowEdges",
       "type": "array",
       "maxItems": 40,
       "items": {
         "type": "object",
+        "title": "WorkflowEdge",
         "additionalProperties": false,
         "required": [
           "from",
@@ -690,7 +683,7 @@
             "description": "`trigger` or a step id."
           },
           "to": {
-            "$ref": "#/$defs/stepId"
+            "$ref": "#/$defs/workflowStepId"
           },
           "branch": {
             "type": "string",

@@ -1180,6 +1180,149 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List workflows
+         * @description Every member of the workspace sees them; agents can't (ADR 0072).
+         */
+        get: operations["listWorkflows"];
+        put?: never;
+        /**
+         * Make a workflow (admins and up)
+         * @description A trigger (an event, a schedule or a signed webhook) and steps joined by edges into a DAG: `condition`, `ask`, `notify`, `speak`, `clip`, `story` and `wait`. There is no step that switches a device, and any other kind is refused. The definition is checked against the schema and as a graph (no cycles, every step reachable, yes/no edges only from condition and ask), and everything it names must be in the workspace and, for sources, among the workflow's `sources`. Runs act on those sources only, with an agent's grant and privacy rules: blurred cameras stay blurred, audio only where the camera records it, speech only where a speak step names the camera. At most 100 workflows, 20 steps and 40 edges; a workflow starts at most 10 runs a minute and 120 an hour. A webhook trigger's `hook_secret` is in this answer only.
+         */
+        post: operations["createWorkflow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workflows/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a workflow */
+        get: operations["getWorkflow"];
+        put?: never;
+        post?: never;
+        /** Delete a workflow and its runs (admins and up) */
+        delete: operations["deleteWorkflow"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a workflow, or turn it on or off (admins and up)
+         * @description Checked in full as on creation. Runs under way keep the definition they started with. Changing the trigger to a webhook makes a hook secret, in this answer only.
+         */
+        patch: operations["updateWorkflow"];
+        trace?: never;
+    };
+    "/workflows/{id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a run by hand (admins and up)
+         * @description For a schedule or webhook trigger (a workflow started by events needs an event), also while it is turned off, to try it. `input` is what a webhook would have sent. Within the run rate (429 `rate_limited`).
+         */
+        post: operations["runWorkflow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workflows/{id}/hook-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A new hook secret for a webhook trigger (admins and up)
+         * @description The old secret stops working at once. The new one is in this answer only.
+         */
+        post: operations["rotateWorkflowHookSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workflows/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A workflow's runs, newest first
+         * @description Kept 30 days. GET /workflow-runs/{id} has each step's outcome.
+         */
+        get: operations["listWorkflowRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workflow-runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A run, with each step's status, timing, output and error, and the definition it followed */
+        get: operations["getWorkflowRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workflow-hooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a workflow with a webhook trigger (n8n, Zapier, Home Assistant)
+         * @description No API key: the request must carry `Senseplane-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">` made with the workflow's hook secret, exactly as Senseplane signs its own webhooks (the SDKs' helpers sign and verify both ways). A time more than 5 minutes off, a mismatch or a signature already used answer 401 and start nothing. The body (at most 64 KiB) is a JSON object, the run's `input`. A turned-off workflow answers 409; over the run rate, 429.
+         */
+        post: operations["triggerWorkflowHook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/watches": {
         parameters: {
             query?: never;
@@ -2270,6 +2413,95 @@ export interface components {
         Grant: components["schemas"]["grant"];
         Webhook: components["schemas"]["webhook"];
         Channel: components["schemas"]["channel"];
+        Workflow: components["schemas"]["workflow"];
+        WorkflowCreated: components["schemas"]["workflow"] & {
+            /** @description Webhook trigger only, and only when it was just made: the signing secret (whsec_…) */
+            hook_secret?: string;
+        };
+        WorkflowCreate: {
+            name: string;
+            /** @description Default true */
+            enabled?: boolean;
+            sources: components["schemas"]["workflowSources"];
+            trigger: components["schemas"]["workflowTrigger"];
+            steps: components["schemas"]["workflowSteps"];
+            edges?: components["schemas"]["workflowEdges"];
+        };
+        WorkflowUpdate: {
+            name?: string;
+            enabled?: boolean;
+            sources?: components["schemas"]["workflowSources"];
+            trigger?: components["schemas"]["workflowTrigger"];
+            steps?: components["schemas"]["workflowSteps"];
+            edges?: components["schemas"]["workflowEdges"];
+        };
+        /**
+         * @description `waiting`: a wait step, a clip waiting for its recording, or a step to be tried again
+         * @enum {string}
+         */
+        WorkflowRunStatus: "queued" | "running" | "waiting" | "succeeded" | "failed";
+        /**
+         * @description `skipped`: no edge into it was taken (or the run ended before it)
+         * @enum {string}
+         */
+        WorkflowStepStatus: "running" | "waiting" | "succeeded" | "failed" | "skipped";
+        WorkflowRun: {
+            /** @description wfr_... */
+            id: string;
+            workflow_id: string;
+            workflow_name: string;
+            status: components["schemas"]["WorkflowRunStatus"];
+            trigger: components["schemas"]["WorkflowRunTrigger"];
+            event_id?: string | null;
+            /** @description Why it failed */
+            error?: string | null;
+            failed_step?: string | null;
+            /**
+             * Format: date-time
+             * @description waiting only
+             */
+            resumes_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** @description The steps it reached, in the definition's order (GET /workflow-runs/{id}) */
+            steps?: components["schemas"]["WorkflowRunStep"][];
+            definition?: components["schemas"]["workflowDefinition"];
+        };
+        /** @description What started a run: an event (event_id, event_type), a schedule (scheduled_for), a webhook (input) or a person (manual: by, input) */
+        WorkflowRunTrigger: {
+            /** @enum {string} */
+            type: "event" | "schedule" | "webhook" | "manual";
+            event_id?: string;
+            event_type?: string;
+            /** Format: date-time */
+            scheduled_for?: string;
+            input?: {
+                [key: string]: unknown;
+            };
+            by?: string;
+        };
+        WorkflowRunStep: {
+            id: string;
+            kind: string;
+            status: components["schemas"]["WorkflowStepStatus"];
+            /** @description Speech is never tried twice; other steps at most 3 times */
+            attempts: number;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: date-time */
+            resumes_at?: string;
+            error?: string | null;
+            /** @description What it found or did: an ask's yes, answer and confidence, a branch, a clip or story id, a message id */
+            output?: {
+                [key: string]: unknown;
+            } | null;
+        };
         WorkspaceKey: {
             id: string;
             name: string;
@@ -2935,10 +3167,10 @@ export interface components {
             id: string;
             source_id: string;
             /**
-             * @description agent: the speak tool or REST; watch: a watch's speak action; person: push-to-talk in live view
+             * @description agent: the speak tool or REST; watch: a watch's speak action; person: push-to-talk in live view; workflow: a workflow's speak step
              * @enum {string}
              */
-            kind: "agent" | "watch" | "person";
+            kind: "agent" | "watch" | "person" | "workflow";
             /** @description What was said (agents and watches); null for push-to-talk */
             text?: string | null;
             /**
@@ -3476,6 +3708,475 @@ export interface components {
             bytes: number;
             /** Format: date-time */
             playback_expires_at?: string;
+        };
+        /** WorkflowSourceId */
+        workflowSourceId: string;
+        /** WorkflowEventType */
+        workflowEventType: string;
+        /**
+         * WorkflowPosition
+         * @description Where the editor draws it.
+         */
+        workflowPosition: {
+            x: number;
+            y: number;
+        };
+        /**
+         * WorkflowEventTrigger
+         * @description Runs for each event stored on its sources whose type matches.
+         */
+        eventTrigger: {
+            /** @constant */
+            type: "event";
+            /** @description Patterns such as watch.triggered, detection.person or detection.*; every type when absent. */
+            event_types?: components["schemas"]["workflowEventType"][];
+            /** @description Some of the workflow's sources; all of them when absent. */
+            sources?: components["schemas"]["workflowSourceId"][];
+            /** @description Only this watch's events. */
+            watch_id?: string;
+            position?: components["schemas"]["workflowPosition"];
+        };
+        /**
+         * WorkflowScheduleTrigger
+         * @description Runs every `every_min` minutes, or daily `at` a local time (exactly one of them); on `days`, in `time_zone` (default the workspace's).
+         */
+        scheduleTrigger: {
+            /** @constant */
+            type: "schedule";
+            every_min?: number;
+            at?: string;
+            /** @description Days it runs on; every day when absent. */
+            days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+            time_zone?: string;
+            position?: components["schemas"]["workflowPosition"];
+        };
+        /**
+         * WorkflowWebhookTrigger
+         * @description Runs when POST /v1/workflow-hooks/{id} is called, signed with the workflow's hook secret; the JSON body is the run's input.
+         */
+        webhookTrigger: {
+            /** @constant */
+            type: "webhook";
+            position?: components["schemas"]["workflowPosition"];
+        };
+        /** WorkflowTrigger */
+        workflowTrigger: components["schemas"]["eventTrigger"] | components["schemas"]["scheduleTrigger"] | components["schemas"]["webhookTrigger"];
+        /**
+         * WorkflowStepId
+         * @description Unique in the workflow; `trigger` is the trigger's own id.
+         */
+        workflowStepId: string;
+        /** WorkflowRule */
+        workflowRule: {
+            /** @description What to look at: the event, the webhook input, the local time (hour 0–23, weekday mon–sun) or an ask step's answer. */
+            field: string;
+            /** @enum {string} */
+            op: "eq" | "ne" | "in" | "contains" | "gt" | "gte" | "lt" | "lte" | "exists";
+            /** @description What to compare with: a string (at most 200 characters), a number, a boolean, or for `in` a list of at most 20 strings and numbers. */
+            value?: unknown;
+        };
+        /**
+         * WorkflowConditionStep
+         * @description Checks rules; its yes and no edges choose what runs next.
+         */
+        conditionStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "condition";
+            /**
+             * @description all (default) or any of the rules.
+             * @enum {string}
+             */
+            match?: "all" | "any";
+            rules: components["schemas"]["workflowRule"][];
+        };
+        /**
+         * WorkflowAskStep
+         * @description Asks the vision model a yes/no question about the event's snapshot, or the camera's live frame without one. Counts as an AI check. Its yes and no edges choose what runs next.
+         */
+        askStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "ask";
+            question: string;
+            /** @description The camera to look at; default the event's camera. */
+            source?: string;
+            /** @description A yes below this counts as no (default 0.5). */
+            min_confidence?: number;
+        };
+        /** WorkflowNotifyTarget */
+        workflowNotifyTarget: {
+            /** @enum {string} */
+            type: "channel" | "webhook";
+            /** @description A channel (chn_…) or webhook (whk_…) id. */
+            id: string;
+        };
+        /**
+         * WorkflowNotifyStep
+         * @description Sends text to a linked chat (Telegram) or one of the account's webhooks, signed like every Senseplane webhook (type workflow.notify).
+         */
+        notifyStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "notify";
+            to: components["schemas"]["workflowNotifyTarget"];
+            /** @description Text with {{event.summary}}, {{event.source_name}}, {{input.<key>}}, {{steps.<id>.answer}} and the like filled in. */
+            text: string;
+        };
+        /**
+         * WorkflowSpeakStep
+         * @description Says text through a camera's speaker, through talk-back with its limits (ADR 0069). Never retried.
+         */
+        speakStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "speak";
+            source: components["schemas"]["workflowSourceId"];
+            /** @description What to say; {{…}} filled in as for notify. */
+            text: string;
+        };
+        /**
+         * WorkflowClipStep
+         * @description Saves a clip of the event's moment on its camera, once it is recorded.
+         */
+        clipStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "clip";
+            /** @description Default 5. */
+            before_s?: number;
+            /** @description Default 10. */
+            after_s?: number;
+        };
+        /**
+         * WorkflowStoryStep
+         * @description Makes a story of the event's moment (or the run's start) on one or more cameras (ADR 0070).
+         */
+        storyStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "story";
+            /** @description Default the event's camera. */
+            sources?: components["schemas"]["workflowSourceId"][];
+            /** @description Default 10. */
+            before_s?: number;
+            /** @description Default 20. */
+            after_s?: number;
+            /** @enum {string} */
+            mode?: "labelled" | "fast";
+        };
+        /**
+         * WorkflowWaitStep
+         * @description Pauses the run.
+         */
+        waitStep: {
+            id: components["schemas"]["workflowStepId"];
+            /** @description A label for the step in the editor. */
+            name?: string;
+            position?: components["schemas"]["workflowPosition"];
+            /** @constant */
+            kind: "wait";
+            seconds: number;
+        };
+        /** WorkflowStep */
+        workflowStep: components["schemas"]["conditionStep"] | components["schemas"]["askStep"] | components["schemas"]["notifyStep"] | components["schemas"]["speakStep"] | components["schemas"]["clipStep"] | components["schemas"]["storyStep"] | components["schemas"]["waitStep"];
+        /** WorkflowSteps */
+        workflowSteps: components["schemas"]["workflowStep"][];
+        /** WorkflowEdges */
+        workflowEdges: {
+            /** @description `trigger` or a step id. */
+            from: string;
+            to: components["schemas"]["workflowStepId"];
+            /**
+             * @description From a condition or ask step only: taken when it answered this.
+             * @enum {string}
+             */
+            branch?: "yes" | "no";
+        }[];
+        /**
+         * WorkflowSources
+         * @description Every source the workflow may use. Its runs see nothing else.
+         */
+        workflowSources: components["schemas"]["workflowSourceId"][];
+        /**
+         * Workflow
+         * @description A trigger and a graph of steps, run in the background (ADR 0072). Steps tell people and systems, ask the vision model, speak through a camera, save clips and stories, and wait. There is no step that switches a device: the kinds are a closed list, and the API and the engine refuse any other.
+         */
+        workflow: {
+            id: string;
+            name: string;
+            enabled: boolean;
+            sources: components["schemas"]["workflowSources"];
+            trigger: components["schemas"]["workflowTrigger"];
+            steps: components["schemas"]["workflowSteps"];
+            edges: components["schemas"]["workflowEdges"];
+            /**
+             * Format: uri
+             * @description webhook trigger: where to POST, signed with the workflow's hook secret.
+             */
+            hook_url?: string;
+            /** @description webhook trigger: whether a hook secret exists (it is shown once, when made). */
+            hook_secret_set?: boolean;
+            /** @description Triggers dropped because the workflow or the account was over its run rate. */
+            runs_dropped: number;
+            /** Format: date-time */
+            last_run_at?: string | null;
+            /**
+             * Format: date-time
+             * @description schedule trigger: when it next runs (enabled only).
+             */
+            next_run_at?: string | null;
+            /** @description Who made it: user:<id> or a workspace key. */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            $defs: {
+                /**
+                 * WorkflowStepId
+                 * @description Unique in the workflow; `trigger` is the trigger's own id.
+                 */
+                workflowStepId: string;
+                /** WorkflowSourceId */
+                workflowSourceId: string;
+                /**
+                 * WorkflowSources
+                 * @description Every source the workflow may use. Its runs see nothing else.
+                 */
+                workflowSources: components["schemas"]["workflowSourceId"][];
+                /**
+                 * WorkflowPosition
+                 * @description Where the editor draws it.
+                 */
+                workflowPosition: {
+                    x: number;
+                    y: number;
+                };
+                /**
+                 * WorkflowDefinition
+                 * @description What a run follows: the trigger, the steps and the edges between them.
+                 */
+                workflowDefinition: {
+                    trigger: components["schemas"]["workflowTrigger"];
+                    steps: components["schemas"]["workflowSteps"];
+                    edges: components["schemas"]["workflowEdges"];
+                };
+                /** WorkflowTrigger */
+                workflowTrigger: components["schemas"]["eventTrigger"] | components["schemas"]["scheduleTrigger"] | components["schemas"]["webhookTrigger"];
+                /**
+                 * WorkflowEventTrigger
+                 * @description Runs for each event stored on its sources whose type matches.
+                 */
+                eventTrigger: {
+                    /** @constant */
+                    type: "event";
+                    /** @description Patterns such as watch.triggered, detection.person or detection.*; every type when absent. */
+                    event_types?: components["schemas"]["workflowEventType"][];
+                    /** @description Some of the workflow's sources; all of them when absent. */
+                    sources?: components["schemas"]["workflowSourceId"][];
+                    /** @description Only this watch's events. */
+                    watch_id?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                };
+                /**
+                 * WorkflowScheduleTrigger
+                 * @description Runs every `every_min` minutes, or daily `at` a local time (exactly one of them); on `days`, in `time_zone` (default the workspace's).
+                 */
+                scheduleTrigger: {
+                    /** @constant */
+                    type: "schedule";
+                    every_min?: number;
+                    at?: string;
+                    /** @description Days it runs on; every day when absent. */
+                    days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[];
+                    time_zone?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                };
+                /**
+                 * WorkflowWebhookTrigger
+                 * @description Runs when POST /v1/workflow-hooks/{id} is called, signed with the workflow's hook secret; the JSON body is the run's input.
+                 */
+                webhookTrigger: {
+                    /** @constant */
+                    type: "webhook";
+                    position?: components["schemas"]["workflowPosition"];
+                };
+                /** WorkflowSteps */
+                workflowSteps: components["schemas"]["workflowStep"][];
+                /** WorkflowStep */
+                workflowStep: components["schemas"]["conditionStep"] | components["schemas"]["askStep"] | components["schemas"]["notifyStep"] | components["schemas"]["speakStep"] | components["schemas"]["clipStep"] | components["schemas"]["storyStep"] | components["schemas"]["waitStep"];
+                /** WorkflowNotifyTarget */
+                workflowNotifyTarget: {
+                    /** @enum {string} */
+                    type: "channel" | "webhook";
+                    /** @description A channel (chn_…) or webhook (whk_…) id. */
+                    id: string;
+                };
+                /** WorkflowEventType */
+                workflowEventType: string;
+                /** WorkflowRule */
+                workflowRule: {
+                    /** @description What to look at: the event, the webhook input, the local time (hour 0–23, weekday mon–sun) or an ask step's answer. */
+                    field: string;
+                    /** @enum {string} */
+                    op: "eq" | "ne" | "in" | "contains" | "gt" | "gte" | "lt" | "lte" | "exists";
+                    /** @description What to compare with: a string (at most 200 characters), a number, a boolean, or for `in` a list of at most 20 strings and numbers. */
+                    value?: unknown;
+                };
+                /**
+                 * WorkflowConditionStep
+                 * @description Checks rules; its yes and no edges choose what runs next.
+                 */
+                conditionStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "condition";
+                    /**
+                     * @description all (default) or any of the rules.
+                     * @enum {string}
+                     */
+                    match?: "all" | "any";
+                    rules: components["schemas"]["workflowRule"][];
+                };
+                /**
+                 * WorkflowAskStep
+                 * @description Asks the vision model a yes/no question about the event's snapshot, or the camera's live frame without one. Counts as an AI check. Its yes and no edges choose what runs next.
+                 */
+                askStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "ask";
+                    question: string;
+                    /** @description The camera to look at; default the event's camera. */
+                    source?: string;
+                    /** @description A yes below this counts as no (default 0.5). */
+                    min_confidence?: number;
+                };
+                /**
+                 * WorkflowNotifyStep
+                 * @description Sends text to a linked chat (Telegram) or one of the account's webhooks, signed like every Senseplane webhook (type workflow.notify).
+                 */
+                notifyStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "notify";
+                    to: components["schemas"]["workflowNotifyTarget"];
+                    /** @description Text with {{event.summary}}, {{event.source_name}}, {{input.<key>}}, {{steps.<id>.answer}} and the like filled in. */
+                    text: string;
+                };
+                /**
+                 * WorkflowSpeakStep
+                 * @description Says text through a camera's speaker, through talk-back with its limits (ADR 0069). Never retried.
+                 */
+                speakStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "speak";
+                    source: components["schemas"]["workflowSourceId"];
+                    /** @description What to say; {{…}} filled in as for notify. */
+                    text: string;
+                };
+                /**
+                 * WorkflowClipStep
+                 * @description Saves a clip of the event's moment on its camera, once it is recorded.
+                 */
+                clipStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "clip";
+                    /** @description Default 5. */
+                    before_s?: number;
+                    /** @description Default 10. */
+                    after_s?: number;
+                };
+                /**
+                 * WorkflowStoryStep
+                 * @description Makes a story of the event's moment (or the run's start) on one or more cameras (ADR 0070).
+                 */
+                storyStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "story";
+                    /** @description Default the event's camera. */
+                    sources?: components["schemas"]["workflowSourceId"][];
+                    /** @description Default 10. */
+                    before_s?: number;
+                    /** @description Default 20. */
+                    after_s?: number;
+                    /** @enum {string} */
+                    mode?: "labelled" | "fast";
+                };
+                /**
+                 * WorkflowWaitStep
+                 * @description Pauses the run.
+                 */
+                waitStep: {
+                    id: components["schemas"]["workflowStepId"];
+                    /** @description A label for the step in the editor. */
+                    name?: string;
+                    position?: components["schemas"]["workflowPosition"];
+                    /** @constant */
+                    kind: "wait";
+                    seconds: number;
+                };
+                /** WorkflowEdges */
+                workflowEdges: {
+                    /** @description `trigger` or a step id. */
+                    from: string;
+                    to: components["schemas"]["workflowStepId"];
+                    /**
+                     * @description From a condition or ask step only: taken when it answered this.
+                     * @enum {string}
+                     */
+                    branch?: "yes" | "no";
+                }[];
+            };
+        };
+        /**
+         * WorkflowDefinition
+         * @description What a run follows: the trigger, the steps and the edges between them.
+         */
+        workflowDefinition: {
+            trigger: components["schemas"]["workflowTrigger"];
+            steps: components["schemas"]["workflowSteps"];
+            edges: components["schemas"]["workflowEdges"];
         };
         /** Trigger */
         trigger: {
@@ -6428,6 +7129,275 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkflows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["workflow"][];
+                        next_cursor: string | null;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createWorkflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCreated"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["workflow"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteWorkflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateWorkflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowUpdate"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCreated"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    runWorkflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    input?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rotateWorkflowHookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCreated"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkflowRuns: {
+        parameters: {
+            query?: {
+                /** @description Page size (1–200 */
+                limit?: number;
+                status?: components["schemas"]["WorkflowRunStatus"];
+            };
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["WorkflowRun"][];
+                        next_cursor: string | null;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkflowRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    triggerWorkflowHook: {
+        parameters: {
+            query?: never;
+            header: {
+                "Senseplane-Signature": string;
+            };
+            path: {
+                /** @description The workflow's ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run_id: string;
+                        status: components["schemas"]["WorkflowRunStatus"];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };

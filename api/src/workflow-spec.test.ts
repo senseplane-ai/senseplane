@@ -41,7 +41,7 @@ describe("no step can switch a device", () => {
   });
   it("leaves control out of the spec's schema: every step is one of the known kinds, and nothing else validates", () => {
     const schema = JSON.parse(readFileSync(new URL("../../spec/schemas/workflow.json", import.meta.url), "utf8"));
-    const kinds = schema.$defs.step.oneOf.map((r: { $ref: string }) => schema.$defs[r.$ref.split("/").pop()!].properties.kind.const);
+    const kinds = schema.$defs.workflowStep.oneOf.map((r: { $ref: string }) => schema.$defs[r.$ref.split("/").pop()!].properties.kind.const);
     expect(kinds).toEqual([...STEP_KINDS]);
     for (const def of Object.values(schema.$defs) as { additionalProperties?: boolean; properties?: Record<string, unknown> }[]) {
       if (def.properties?.kind) expect(def.additionalProperties).toBe(false);
@@ -125,6 +125,12 @@ describe("checking a definition", () => {
     const notAsk = base();
     notAsk.steps[0] = { id: "check", kind: "condition", rules: [{ field: "steps.tell.answer", op: "exists" }] };
     expect(problems(notAsk).join()).toMatch(/isn't an ask step/);
+    const objectValue = base();
+    objectValue.steps[0] = { id: "check", kind: "condition", rules: [{ field: "event.summary", op: "eq", value: { $gt: "" } }] };
+    expect(problems(objectValue).join()).toMatch(/compares with a string/);
+    const listValue = base();
+    listValue.steps[0] = { id: "check", kind: "condition", rules: [{ field: "event.type", op: "in", value: ["detection.person", "detection.car"] }] };
+    expect(problems(listValue)).toEqual([]);
     expect(problems({ ...base(), steps: [] }).join()).toMatch(/steps must NOT have fewer than 1 items/);
     const many = base();
     for (let i = 0; i < 20; i++) many.steps.push({ id: `w${i}`, kind: "wait", seconds: 1 });

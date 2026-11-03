@@ -25,6 +25,13 @@ tags:
   - name: follows
     description: Following an object or a pet across cameras, never a person (ADR 0070).
   - name: watches
+  - name: workflows
+    description: >-
+      "When this happens, do that" (ADR 0072): a trigger (an event, a schedule or a signed
+      webhook) and steps that tell people and systems, ask the vision model, speak through a
+      camera, save clips and stories, and wait. Admins and up make them; runs act on the
+      workflow's own sources with an agent's grant and privacy rules. No step ever switches
+      a device.
   - name: events
   - name: memory
   - name: activity
@@ -1863,6 +1870,212 @@ paths:
         '204':
           description: No content
         default: {$ref: '#/components/responses/Error'}
+  /workflows:
+    get:
+      operationId: listWorkflows
+      summary: List workflows
+      description: Every member of the workspace sees them; agents can't (ADR 0072).
+      tags: [workflows]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Workflow'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createWorkflow
+      summary: Make a workflow (admins and up)
+      description: >-
+        A trigger (an event, a schedule or a signed webhook) and steps joined by edges
+        into a DAG: `condition`, `ask`, `notify`, `speak`, `clip`, `story` and `wait`.
+        There is no step that switches a device, and any other kind is refused. The
+        definition is checked against the schema and as a graph (no cycles, every step
+        reachable, yes/no edges only from condition and ask), and everything it names
+        must be in the workspace and, for sources, among the workflow's `sources`. Runs
+        act on those sources only, with an agent's grant and privacy rules: blurred
+        cameras stay blurred, audio only where the camera records it, speech only where
+        a speak step names the camera. At most 100 workflows, 20 steps and 40 edges; a
+        workflow starts at most 10 runs a minute and 120 an hour. A webhook trigger's
+        `hook_secret` is in this answer only.
+      tags: [workflows]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkflowCreate'}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowCreated'}
+        default: {$ref: '#/components/responses/Error'}
+  /workflows/{id}:
+    get:
+      operationId: getWorkflow
+      summary: Get a workflow
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Workflow'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      operationId: updateWorkflow
+      summary: Change a workflow, or turn it on or off (admins and up)
+      description: >-
+        Checked in full as on creation. Runs under way keep the definition they started
+        with. Changing the trigger to a webhook makes a hook secret, in this answer only.
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkflowUpdate'}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowCreated'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteWorkflow
+      summary: Delete a workflow and its runs (admins and up)
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '204':
+          description: No content
+        default: {$ref: '#/components/responses/Error'}
+  /workflows/{id}/run:
+    post:
+      operationId: runWorkflow
+      summary: Start a run by hand (admins and up)
+      description: >-
+        For a schedule or webhook trigger (a workflow started by events needs an event),
+        also while it is turned off, to try it. `input` is what a webhook would have sent.
+        Within the run rate (429 `rate_limited`).
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                input: {type: object, additionalProperties: true}
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowRun'}
+        default: {$ref: '#/components/responses/Error'}
+  /workflows/{id}/hook-secret:
+    post:
+      operationId: rotateWorkflowHookSecret
+      summary: A new hook secret for a webhook trigger (admins and up)
+      description: The old secret stops working at once. The new one is in this answer only.
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowCreated'}
+        default: {$ref: '#/components/responses/Error'}
+  /workflows/{id}/runs:
+    get:
+      operationId: listWorkflowRuns
+      summary: A workflow's runs, newest first
+      description: Kept 30 days. GET /workflow-runs/{id} has each step's outcome.
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+        - {name: limit, in: query, required: false, description: Page size (1–200, default 50), schema: {type: integer}}
+        - {name: status, in: query, required: false, schema: {$ref: '#/components/schemas/WorkflowRunStatus'}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/WorkflowRun'}
+                  next_cursor: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /workflow-runs/{id}:
+    get:
+      operationId: getWorkflowRun
+      summary: A run, with each step's status, timing, output and error, and the definition it followed
+      tags: [workflows]
+      parameters:
+        - {name: id, in: path, required: true, description: Resource ID, schema: {type: string}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowRun'}
+        default: {$ref: '#/components/responses/Error'}
+  /workflow-hooks/{id}:
+    post:
+      operationId: triggerWorkflowHook
+      summary: Start a workflow with a webhook trigger (n8n, Zapier, Home Assistant)
+      description: >-
+        No API key: the request must carry `Senseplane-Signature: t=<unix seconds>,v1=<hex
+        HMAC-SHA256 of "<t>.<body>">` made with the workflow's hook secret, exactly as
+        Senseplane signs its own webhooks (the SDKs' helpers sign and verify both ways). A
+        time more than 5 minutes off, a mismatch or a signature already used answer 401 and
+        start nothing. The body (at most 64 KiB) is a JSON object, the run's `input`.
+        A turned-off workflow answers 409; over the run rate, 429.
+      tags: [workflows]
+      security: []
+      parameters:
+        - {name: id, in: path, required: true, description: The workflow's ID, schema: {type: string}}
+        - {name: Senseplane-Signature, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: true}
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, status]
+                properties:
+                  run_id: {type: string}
+                  status: {$ref: '#/components/schemas/WorkflowRunStatus'}
+        default: {$ref: '#/components/responses/Error'}
   /watches:
     post:
       operationId: createWatch
@@ -3410,6 +3623,90 @@ components:
     Grant: {$ref: './schemas/grant.json'}
     Webhook: {$ref: './schemas/webhook.json'}
     Channel: {$ref: './schemas/channel.json'}
+    Workflow: {$ref: './schemas/workflow.json'}
+    WorkflowCreated:
+      allOf:
+        - {$ref: '#/components/schemas/Workflow'}
+        - type: object
+          properties:
+            hook_secret: {type: string, description: 'Webhook trigger only, and only when it was just made: the signing secret (whsec_…)'}
+    WorkflowCreate:
+      type: object
+      additionalProperties: false
+      required: [name, sources, trigger, steps]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        enabled: {type: boolean, description: Default true}
+        sources: {$ref: './schemas/workflow.json#/$defs/workflowSources'}
+        trigger: {$ref: './schemas/workflow.json#/$defs/workflowTrigger'}
+        steps: {$ref: './schemas/workflow.json#/$defs/workflowSteps'}
+        edges: {$ref: './schemas/workflow.json#/$defs/workflowEdges'}
+    WorkflowUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        enabled: {type: boolean}
+        sources: {$ref: './schemas/workflow.json#/$defs/workflowSources'}
+        trigger: {$ref: './schemas/workflow.json#/$defs/workflowTrigger'}
+        steps: {$ref: './schemas/workflow.json#/$defs/workflowSteps'}
+        edges: {$ref: './schemas/workflow.json#/$defs/workflowEdges'}
+    WorkflowRunStatus:
+      type: string
+      enum: [queued, running, waiting, succeeded, failed]
+      description: '`waiting`: a wait step, a clip waiting for its recording, or a step to be tried again'
+    WorkflowStepStatus:
+      type: string
+      enum: [running, waiting, succeeded, failed, skipped]
+      description: '`skipped`: no edge into it was taken (or the run ended before it)'
+    WorkflowRun:
+      type: object
+      required: [id, workflow_id, workflow_name, status, trigger, created_at]
+      properties:
+        id: {type: string, description: 'wfr_...'}
+        workflow_id: {type: string}
+        workflow_name: {type: string}
+        status: {$ref: '#/components/schemas/WorkflowRunStatus'}
+        trigger: {$ref: '#/components/schemas/WorkflowRunTrigger'}
+        event_id: {type: ['string', 'null']}
+        error: {type: ['string', 'null'], description: Why it failed, said plainly}
+        failed_step: {type: ['string', 'null']}
+        resumes_at: {type: string, format: date-time, description: 'waiting only'}
+        created_at: {type: string, format: date-time}
+        started_at: {type: ['string', 'null'], format: date-time}
+        finished_at: {type: ['string', 'null'], format: date-time}
+        steps:
+          type: array
+          description: The steps it reached, in the definition's order (GET /workflow-runs/{id})
+          items: {$ref: '#/components/schemas/WorkflowRunStep'}
+        definition: {$ref: './schemas/workflow.json#/$defs/workflowDefinition'}
+    WorkflowRunTrigger:
+      type: object
+      required: [type]
+      description: 'What started a run: an event (event_id, event_type), a schedule (scheduled_for), a webhook (input) or a person (manual: by, input)'
+      properties:
+        type: {type: string, enum: [event, schedule, webhook, manual]}
+        event_id: {type: string}
+        event_type: {type: string}
+        scheduled_for: {type: string, format: date-time}
+        input: {type: object, additionalProperties: true}
+        by: {type: string}
+    WorkflowRunStep:
+      type: object
+      required: [id, kind, status, attempts]
+      properties:
+        id: {type: string}
+        kind: {type: string}
+        status: {$ref: '#/components/schemas/WorkflowStepStatus'}
+        attempts: {type: integer, description: 'Speech is never tried twice; other steps at most 3 times'}
+        started_at: {type: ['string', 'null'], format: date-time}
+        finished_at: {type: ['string', 'null'], format: date-time}
+        resumes_at: {type: string, format: date-time}
+        error: {type: ['string', 'null']}
+        output:
+          type: ['object', 'null']
+          additionalProperties: true
+          description: 'What it found or did: an ask''s yes, answer and confidence, a branch, a clip or story id, a message id'
     WorkspaceKey:
       type: object
       required: [id, name, key_prefix, created_at, last_used_at]
@@ -4047,7 +4344,7 @@ components:
       properties:
         id: {type: string, description: 'spk_...'}
         source_id: {type: string}
-        kind: {type: string, enum: [agent, watch, person], description: 'agent: the speak tool or REST; watch: a watch''s speak action; person: push-to-talk in live view'}
+        kind: {type: string, enum: [agent, watch, person, workflow], description: 'agent: the speak tool or REST; watch: a watch''s speak action; person: push-to-talk in live view; workflow: a workflow''s speak step'}
         text: {type: ['string', 'null'], description: What was said (agents and watches); null for push-to-talk}
         status: {type: string, enum: [queued, sent, playing, played, interrupted, refused, offline, late, failed], description: '`interrupted`: a person''s push-to-talk cut it off; `late`: the box got it too late and didn''t play it'}
         message: {type: ['string', 'null']}

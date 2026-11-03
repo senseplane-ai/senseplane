@@ -1059,6 +1059,133 @@ class Channel(BaseModel):
     created_at: AwareDatetime
 
 
+class WorkflowSourceId(RootModel[str]):
+    root: Annotated[str, Field(max_length=64, min_length=1, title='WorkflowSourceId')]
+
+
+class WorkflowStepId(RootModel[str]):
+    root: Annotated[
+        str, Field(pattern='^[a-z][a-z0-9_]{0,31}$', title='WorkflowStepId')
+    ]
+    """
+    Unique in the workflow; `trigger` is the trigger's own id.
+    """
+
+
+class WorkflowEventType(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            max_length=64,
+            pattern='^(\\*|[a-z][a-z0-9_]*(\\.([a-z0-9_]+|\\*))*)$',
+            title='WorkflowEventType',
+        ),
+    ]
+
+
+class WorkflowPosition(BaseModel):
+    """
+    Where the editor draws it.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    x: float
+    y: float
+
+
+class WorkflowNotifyTarget(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    type: Literal['channel', 'webhook']
+    id: Annotated[str, Field(max_length=64, min_length=1)]
+    """
+    A channel (chn_…) or webhook (whk_…) id.
+    """
+
+
+class WorkflowRule(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    field: Annotated[
+        str,
+        Field(
+            pattern='^(event\\.(type|source_id|labels|confidence|summary|verified|reading|sense)|input\\.[A-Za-z0-9_]{1,64}|time\\.(hour|weekday)|steps\\.[a-z][a-z0-9_]{0,31}\\.(yes|answer|confidence))$'
+        ),
+    ]
+    """
+    What to look at: the event, the webhook input, the local time (hour 0–23, weekday mon–sun) or an ask step's answer.
+    """
+    op: Literal['eq', 'ne', 'in', 'contains', 'gt', 'gte', 'lt', 'lte', 'exists']
+    value: Any | None = None
+    """
+    What to compare with: a string (at most 200 characters), a number, a boolean, or for `in` a list of at most 20 strings and numbers.
+    """
+
+
+class WorkflowRunStatus(
+    RootModel[Literal['queued', 'running', 'waiting', 'succeeded', 'failed']]
+):
+    root: Literal['queued', 'running', 'waiting', 'succeeded', 'failed']
+    """
+    `waiting`: a wait step, a clip waiting for its recording, or a step to be tried again
+    """
+
+
+class WorkflowStepStatus(
+    RootModel[Literal['running', 'waiting', 'succeeded', 'failed', 'skipped']]
+):
+    root: Literal['running', 'waiting', 'succeeded', 'failed', 'skipped']
+    """
+    `skipped`: no edge into it was taken (or the run ended before it)
+    """
+
+
+class WorkflowRunTrigger(BaseModel):
+    """
+    What started a run: an event (event_id, event_type), a schedule (scheduled_for), a webhook (input) or a person (manual: by, input)
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    type: Literal['event', 'schedule', 'webhook', 'manual']
+    event_id: str | None = None
+    event_type: str | None = None
+    scheduled_for: AwareDatetime | None = None
+    input: dict[str, Any] | None = None
+    by: str | None = None
+
+
+class WorkflowRunStep(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    kind: str
+    status: WorkflowStepStatus
+    attempts: int
+    """
+    Speech is never tried twice; other steps at most 3 times
+    """
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    resumes_at: AwareDatetime | None = None
+    error: str | None = None
+    output: dict[str, Any] | None = None
+    """
+    What it found or did: an ask's yes, answer and confidence, a branch, a clip or story id, a message id
+    """
+
+
 class WorkspaceKey(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -2463,9 +2590,9 @@ class SpeakMessage(BaseModel):
     spk_...
     """
     source_id: str
-    kind: Literal['agent', 'watch', 'person']
+    kind: Literal['agent', 'watch', 'person', 'workflow']
     """
-    agent: the speak tool or REST; watch: a watch's speak action; person: push-to-talk in live view
+    agent: the speak tool or REST; watch: a watch's speak action; person: push-to-talk in live view; workflow: a workflow's speak step
     """
     text: str | None = None
     """
@@ -3543,6 +3670,30 @@ class StoriesIdLinkPostResponse(BaseModel):
     expires_at: AwareDatetime
 
 
+class WorkflowsIdRunPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    input: dict[str, Any] | None = None
+
+
+class WorkflowHooksIdPostRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+
+
+class WorkflowHooksIdPostResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    run_id: str
+    status: WorkflowRunStatus
+
+
 class InboxSeenPostResponse(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -3839,6 +3990,279 @@ class FollowResult(BaseModel):
     cameras: list[FollowCamera] | None = None
     limits: FollowLimits | None = None
     story_note: str | None = None
+
+
+class WorkflowEdge(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    from_: Annotated[str, Field(alias='from', pattern='^[a-z][a-z0-9_]{0,31}$')]
+    """
+    `trigger` or a step id.
+    """
+    to: WorkflowStepId
+    branch: Literal['yes', 'no'] | None = None
+    """
+    From a condition or ask step only: taken when it answered this.
+    """
+
+
+class WorkflowEdges(RootModel[list[WorkflowEdge]]):
+    root: Annotated[list[WorkflowEdge], Field(max_length=40, title='WorkflowEdges')]
+
+
+class WorkflowSources(RootModel[list[WorkflowSourceId]]):
+    """
+    Every source the workflow may use. Its runs see nothing else.
+    """
+
+    root: Annotated[
+        list[WorkflowSourceId],
+        Field(max_length=20, min_length=1, title='WorkflowSources'),
+    ]
+    """
+    Every source the workflow may use. Its runs see nothing else.
+    """
+
+
+class EventTrigger(BaseModel):
+    """
+    Runs for each event stored on its sources whose type matches.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    type: Literal['event']
+    event_types: Annotated[
+        list[WorkflowEventType] | None, Field(max_length=20, min_length=1)
+    ] = None
+    """
+    Patterns such as watch.triggered, detection.person or detection.*; every type when absent.
+    """
+    sources: Annotated[
+        list[WorkflowSourceId] | None, Field(max_length=20, min_length=1)
+    ] = None
+    """
+    Some of the workflow's sources; all of them when absent.
+    """
+    watch_id: Annotated[str | None, Field(max_length=64)] = None
+    """
+    Only this watch's events.
+    """
+    position: WorkflowPosition | None = None
+
+
+class ScheduleTrigger(BaseModel):
+    """
+    Runs every `every_min` minutes, or daily `at` a local time (exactly one of them); on `days`, in `time_zone` (default the workspace's).
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    type: Literal['schedule']
+    every_min: Annotated[int | None, Field(ge=5, le=1440)] = None
+    at: Annotated[str | None, Field(pattern='^([01][0-9]|2[0-3]):[0-5][0-9]$')] = None
+    days: Annotated[
+        list[Literal['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']] | None,
+        Field(max_length=7),
+    ] = None
+    """
+    Days it runs on; every day when absent.
+    """
+    time_zone: Annotated[str | None, Field(max_length=64)] = None
+    position: WorkflowPosition | None = None
+
+
+class WebhookTrigger(BaseModel):
+    """
+    Runs when POST /v1/workflow-hooks/{id} is called, signed with the workflow's hook secret; the JSON body is the run's input.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    type: Literal['webhook']
+    position: WorkflowPosition | None = None
+
+
+class AskStep(BaseModel):
+    """
+    Asks the vision model a yes/no question about the event's snapshot, or the camera's live frame without one. Counts as an AI check. Its yes and no edges choose what runs next.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['ask']
+    question: Annotated[str, Field(max_length=500, min_length=3)]
+    source: Annotated[str | None, Field(max_length=64, min_length=1)] = None
+    """
+    The camera to look at; default the event's camera.
+    """
+    min_confidence: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    """
+    A yes below this counts as no (default 0.5).
+    """
+
+
+class ClipStep(BaseModel):
+    """
+    Saves a clip of the event's moment on its camera, once it is recorded.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['clip']
+    before_s: Annotated[int | None, Field(ge=0, le=60)] = None
+    """
+    Default 5.
+    """
+    after_s: Annotated[int | None, Field(ge=0, le=300)] = None
+    """
+    Default 10.
+    """
+
+
+class ConditionStep(BaseModel):
+    """
+    Checks rules; its yes and no edges choose what runs next.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['condition']
+    match: Literal['all', 'any'] | None = None
+    """
+    all (default) or any of the rules.
+    """
+    rules: Annotated[list[WorkflowRule], Field(max_length=10, min_length=1)]
+
+
+class NotifyStep(BaseModel):
+    """
+    Sends text to a linked chat (Telegram) or one of the account's webhooks, signed like every Senseplane webhook (type workflow.notify).
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['notify']
+    to: WorkflowNotifyTarget
+    text: Annotated[str, Field(max_length=1000, min_length=1)]
+    """
+    Text with {{event.summary}}, {{event.source_name}}, {{input.<key>}}, {{steps.<id>.answer}} and the like filled in.
+    """
+
+
+class SpeakStep(BaseModel):
+    """
+    Says text through a camera's speaker, through talk-back with its limits (ADR 0069). Never retried.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['speak']
+    source: WorkflowSourceId
+    text: Annotated[str, Field(max_length=500, min_length=1)]
+    """
+    What to say; {{…}} filled in as for notify.
+    """
+
+
+class StoryStep(BaseModel):
+    """
+    Makes a story of the event's moment (or the run's start) on one or more cameras (ADR 0070).
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['story']
+    sources: Annotated[
+        list[WorkflowSourceId] | None, Field(max_length=8, min_length=1)
+    ] = None
+    """
+    Default the event's camera.
+    """
+    before_s: Annotated[int | None, Field(ge=0, le=120)] = None
+    """
+    Default 10.
+    """
+    after_s: Annotated[int | None, Field(ge=0, le=300)] = None
+    """
+    Default 20.
+    """
+    mode: Literal['labelled', 'fast'] | None = None
+
+
+class WaitStep(BaseModel):
+    """
+    Pauses the run.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: WorkflowStepId
+    name: Annotated[str | None, Field(max_length=80)] = None
+    """
+    A label for the step in the editor.
+    """
+    position: WorkflowPosition | None = None
+    kind: Literal['wait']
+    seconds: Annotated[int, Field(ge=1, le=86400)]
 
 
 class SourceNow(BaseModel):
@@ -4318,6 +4742,35 @@ class Follow(BaseModel):
     finished_at: AwareDatetime | None = None
 
 
+class WorkflowTrigger(RootModel[EventTrigger | ScheduleTrigger | WebhookTrigger]):
+    root: Annotated[
+        EventTrigger | ScheduleTrigger | WebhookTrigger, Field(title='WorkflowTrigger')
+    ]
+
+
+class WorkflowStep(
+    RootModel[
+        ConditionStep
+        | AskStep
+        | NotifyStep
+        | SpeakStep
+        | ClipStep
+        | StoryStep
+        | WaitStep
+    ]
+):
+    root: Annotated[
+        ConditionStep
+        | AskStep
+        | NotifyStep
+        | SpeakStep
+        | ClipStep
+        | StoryStep
+        | WaitStep,
+        Field(title='WorkflowStep'),
+    ]
+
+
 class Conversation(BaseModel):
     """
     A chat about what the sources saw and heard. An account key sees the account's conversations; an agent key sees only its own.
@@ -4347,6 +4800,55 @@ class FollowsGetResponse(BaseModel):
     )
     data: list[Follow]
     next_cursor: str | None
+
+
+class WorkflowSteps(RootModel[list[WorkflowStep]]):
+    root: Annotated[
+        list[WorkflowStep], Field(max_length=20, min_length=1, title='WorkflowSteps')
+    ]
+
+
+class WorkflowCreate(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    name: Annotated[str, Field(max_length=100, min_length=1)]
+    enabled: bool | None = None
+    """
+    Default true
+    """
+    sources: WorkflowSources
+    trigger: WorkflowTrigger
+    steps: WorkflowSteps
+    edges: WorkflowEdges | None = None
+
+
+class WorkflowUpdate(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    name: Annotated[str | None, Field(max_length=100, min_length=1)] = None
+    enabled: bool | None = None
+    sources: WorkflowSources | None = None
+    trigger: WorkflowTrigger | None = None
+    steps: WorkflowSteps | None = None
+    edges: WorkflowEdges | None = None
+
+
+class WorkflowDefinition(BaseModel):
+    """
+    What a run follows: the trigger, the steps and the edges between them.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    trigger: WorkflowTrigger
+    steps: WorkflowSteps
+    edges: WorkflowEdges
 
 
 class Datum(BaseModel):
@@ -4415,6 +4917,109 @@ class ConversationsGetResponse(BaseModel):
         populate_by_name=True,
     )
     data: list[Conversation]
+    next_cursor: str | None
+
+
+class Workflow(BaseModel):
+    """
+    A trigger and a graph of steps, run in the background (ADR 0072). Steps tell people and systems, ask the vision model, speak through a camera, save clips and stories, and wait. There is no step that switches a device: the kinds are a closed list, and the API and the engine refuse any other.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(pattern='^wfl_[0-9A-HJKMNP-TV-Z]{26}$')]
+    name: Annotated[str, Field(max_length=100, min_length=1)]
+    enabled: bool
+    sources: WorkflowSources
+    trigger: WorkflowTrigger
+    steps: WorkflowSteps
+    edges: WorkflowEdges
+    hook_url: str | None = None
+    """
+    webhook trigger: where to POST, signed with the workflow's hook secret.
+    """
+    hook_secret_set: bool | None = None
+    """
+    webhook trigger: whether a hook secret exists (it is shown once, when made).
+    """
+    runs_dropped: Annotated[int, Field(ge=0)]
+    """
+    Triggers dropped because the workflow or the account was over its run rate.
+    """
+    last_run_at: AwareDatetime | None = None
+    next_run_at: AwareDatetime | None = None
+    """
+    schedule trigger: when it next runs (enabled only).
+    """
+    created_by: str
+    """
+    Who made it: user:<id> or a workspace key.
+    """
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class WorkflowRun(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+    """
+    wfr_...
+    """
+    workflow_id: str
+    workflow_name: str
+    status: WorkflowRunStatus
+    trigger: WorkflowRunTrigger
+    event_id: str | None = None
+    error: str | None = None
+    """
+    Why it failed
+    """
+    failed_step: str | None = None
+    resumes_at: AwareDatetime | None = None
+    """
+    waiting only
+    """
+    created_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    steps: list[WorkflowRunStep] | None = None
+    """
+    The steps it reached, in the definition's order (GET /workflow-runs/{id})
+    """
+    definition: WorkflowDefinition | None = None
+
+
+class WorkflowsIdRunsGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[WorkflowRun]
+    next_cursor: str | None
+
+
+class WorkflowCreated(Workflow):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    hook_secret: str | None = None
+    """
+    Webhook trigger only, and only when it was just made: the signing secret (whsec_…)
+    """
+
+
+class WorkflowsGetResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    data: list[Workflow]
     next_cursor: str | None
 
 

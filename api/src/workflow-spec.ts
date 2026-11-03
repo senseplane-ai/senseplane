@@ -59,8 +59,8 @@ export type WorkflowRunTrigger =
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 (addFormatsModule as unknown as (a: Ajv2020) => void)(ajv);
 ajv.addSchema(workflowSchema);
-const validateDefinition = ajv.getSchema(`${(workflowSchema as { $id: string }).$id}#/$defs/definition`)!;
-const validateStep = ajv.getSchema(`${(workflowSchema as { $id: string }).$id}#/$defs/step`)!;
+const validateDefinition = ajv.getSchema(`${(workflowSchema as { $id: string }).$id}#/$defs/workflowDefinition`)!;
+const validateStep = ajv.getSchema(`${(workflowSchema as { $id: string }).$id}#/$defs/workflowStep`)!;
 
 export class DefinitionError extends Error {
   constructor(message: string, readonly problems: string[] = [message]) {
@@ -82,6 +82,11 @@ function stepProblem(step: unknown, i: number): string | undefined {
   const errs = own.length ? own : validateStep.errors ?? [];
   return `${where}: ${errs.slice(0, 3).map((e) => `${e.instancePath.replace(/^\//, "").replace(/\//g, ".") || s.kind} ${e.message}`).join("; ")}`;
 }
+
+const scalarOk = (v: unknown) => (typeof v === "string" && v.length <= 200) || (typeof v === "number" && Number.isFinite(v));
+/** What a rule may compare with: a short string, a number, a boolean; for `in`, a list of strings and numbers. */
+const ruleValueOk = (v: unknown, list: boolean) =>
+  scalarOk(v) || typeof v === "boolean" || (list && Array.isArray(v) && v.length <= 20 && v.every(scalarOk));
 
 /**
  * Checks a definition: the schema, then the graph. Returns it as given; throws DefinitionError listing the
@@ -123,6 +128,9 @@ export function checkDefinition(def: unknown, sources: readonly string[]): Workf
         const m = /^steps\.([a-z][a-z0-9_]*)\./.exec(r.field);
         if (m && kinds.get(m[1]!) !== "ask") problems.push(`${s.id}: ${r.field} names ${m[1]}, which isn't an ask step`);
         if (r.op !== "exists" && r.value === undefined) problems.push(`${s.id}: the rule on ${r.field} needs a value`);
+        if (r.value !== undefined && !ruleValueOk(r.value, r.op === "in")) {
+          problems.push(`${s.id}: the rule on ${r.field} compares with a string (at most 200 characters), a number or a boolean${r.op === "in" ? ", or a list of at most 20 strings and numbers" : ""}`);
+        }
         if (r.field.startsWith("event.") && t.type !== "event") problems.push(`${s.id}: ${r.field} needs an event trigger`);
         if (r.field.startsWith("input.") && t.type !== "webhook") problems.push(`${s.id}: ${r.field} needs a webhook trigger`);
       }

@@ -15,10 +15,11 @@
 // Push-to-talk (ADR 0069): with `talk`, the session may also send the
 // microphone to the camera's phone, heard by nobody else. `talk.start()`
 // (button held) sends one audio track with appData.source "talkback";
-// `talk.stop()` closes it. The microphone is asked for on the first press.
+// `talk.stop()` closes it and the microphone (talk.ts).
 import { Device } from "mediasoup-client";
-import type { Consumer, Producer as SendProducer, RtpCapabilities, RtpParameters, Transport, TransportOptions } from "mediasoup-client/types";
+import type { Consumer, RtpCapabilities, RtpParameters, Transport, TransportOptions } from "mediasoup-client/types";
 import { PROTOCOL_VERSION, SignallingClient, SignallingError } from "../capture/signalling";
+import { type Talk, createTalk } from "./talk";
 
 export interface OpenLiveOptions {
   /** API base, with or without the trailing /v1 (e.g. https://api.example.com/v1). */
@@ -33,11 +34,7 @@ export interface OpenLiveOptions {
 }
 
 /** Push-to-talk: hold to send the microphone to the camera's speaker. */
-export interface Talk {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  readonly active: boolean;
-}
+export type { Talk };
 
 export interface LiveView {
   close(): void;
@@ -84,8 +81,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
   const consumers = new Map<string, Consumer>(); // by producer id
   let transport: Transport | undefined;
   let send: Transport | undefined;
-  let mic: MediaStream | undefined;
-  let speaking: SendProducer | undefined;
+  let talkStop: (() => void) | undefined;
   let device: Device | undefined;
   let closed = false;
   const cleanups: (() => void)[] = [];
@@ -97,10 +93,8 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     for (const c of cleanups.splice(0)) c();
     for (const c of consumers.values()) c.close();
     consumers.clear();
-    speaking?.close();
-    speaking = undefined;
+    talkStop?.();
     send?.close();
-    for (const t of mic?.getTracks() ?? []) t.stop();
     transport?.close();
     for (const t of stream.getTracks()) stream.removeTrack(t);
     if (opts.video.srcObject === stream) opts.video.srcObject = null;
@@ -199,31 +193,29 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     send = t;
     return t;
   };
-  const talk: Talk | undefined = session.talk ? {
+  const machine = session.talk ? createTalk({
+    // Speech, not a camera's room sound: the browser's call processing helps here.
+    microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
+    produce: async (track) => (await sendTransport()).produce({ track, stopTracks: false, appData: { source: "talkback" } }),
+    closed: (id) => sig.request("closeProducer", { producerId: id }).then(() => undefined),
+    ended: () => closed,
+  }) : undefined;
+  talkStop = machine ? () => void machine.stop() : undefined;
+  const talk: Talk | undefined = machine ? {
     get active() {
-      return !!speaking;
+      return machine.active;
     },
     async start() {
-      if (closed || speaking) return;
       try {
-        // Speech, not a camera's room sound: the browser's call processing helps here.
-        mic ??= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-        const track = mic.getAudioTracks()[0];
-        if (!track) throw new LiveError("no_microphone", "No microphone was found.");
-        const t = await sendTransport();
-        speaking = await t.produce({ track, stopTracks: false, appData: { source: "talkback" } });
+        await machine.start();
       } catch (err) {
+        const code = (err as { code?: string }).code;
         if (err instanceof SignallingError) throw new LiveError(err.code, err.code === "speaker_busy" ? "Someone else is talking through this camera." : err.message);
+        if (code === "no_microphone") throw new LiveError(code, (err as Error).message);
         throw err;
       }
     },
-    async stop() {
-      const p = speaking;
-      speaking = undefined;
-      if (!p) return;
-      p.close();
-      await sig.request("closeProducer", { producerId: p.id }).catch(() => undefined);
-    },
+    stop: () => machine.stop(),
   } : undefined;
 
   return {

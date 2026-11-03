@@ -412,6 +412,20 @@ def verify_webhook(raw_body: bytes, header: str, secret: str, tolerance: int = 3
 # Flask: event = verify_webhook(request.get_data(), request.headers["Senseplane-Signature"], SECRET)
 ```
 
+## Workflows
+
+A workflow (`/v1/workflows`, ADR 0072) is a trigger (an event, a schedule
+or a signed webhook) and steps joined into a graph without loops:
+`condition`, `ask`, `notify`, `speak`, `clip`, `story` and `wait`. No step
+switches a device, and any other kind is refused with `400
+validation_failed`, the problems listed in `details.problems`. Admins and up
+make them; runs act on the workflow's own sources with an agent's grant and
+privacy rules. A notify step to a webhook sends `workflow.notify`, signed
+like every delivery above, with `Senseplane-Delivery` the same on every
+retry. A webhook trigger, `POST /v1/workflow-hooks/{id}`, takes no API key:
+it must be signed the same way with the workflow's hook secret. See
+[Workflows](../workflows.md).
+
 ## Workspace keys and agent keys
 
 There are two kinds of API key:

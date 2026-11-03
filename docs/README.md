@@ -33,6 +33,9 @@ already have; your agent sees, hears and remembers what happens.
 - **[Sensors webhook](sensors-webhook.md):** readings from IFTTT, n8n,
   Zapier, ESPHome, Shelly scripts, Home Assistant and curl, optionally
   signed.
+- **[Workflows](workflows.md):** "when this happens, do that": a trigger and
+  steps that tell, ask, speak, clip and wait, started by n8n, Zapier or Home
+  Assistant with a signed webhook. Never switching a device.
 
 ## Run it yourself
 

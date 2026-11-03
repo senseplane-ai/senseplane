@@ -3959,7 +3959,7 @@ components:
         cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}, description: 'Empty when this deployment has no WHIP ingest'}
         sensors: {type: array, items: {type: string}, description: 'The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only'}
         max_resolution: {type: string, enum: ['720p', '1080p'], description: "The plan's largest stream: a camera added from the list gets the profile that fits it"}
-        features: {type: array, items: {type: string}, description: 'What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health)'}
+        features: {type: array, items: {type: string}, description: 'What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health), `health_talk` (a camera''s `talk`)'}
     BridgeHealth:
       type: object
       additionalProperties: false
@@ -3978,6 +3978,7 @@ components:
               state: {type: string, enum: [connecting, online, reconnecting, offline]}
               detail: {type: string, maxLength: 500, description: Why, for reconnecting or offline}
               speaker: {type: boolean, description: 'What the box found about two-way audio when it connected (ADR 0069)'}
+              talk: {type: boolean, description: "The box can carry a person's push-to-talk to the camera's speaker (ADR 0074). Sent only when the config's `features` lists `health_talk`."}
         home_assistant:
           type: object
           additionalProperties: false
@@ -4009,7 +4010,7 @@ components:
       required: [id, kind, status]
       properties:
         id: {type: string}
-        kind: {type: string, description: 'matter_commission, onvif_add_camera, onvif_search, device_control or speak'}
+        kind: {type: string, description: 'matter_commission, onvif_add_camera, onvif_search, device_control, speak or talk (push-to-talk to a camera, ADR 0074)'}
         status: {type: string, enum: [pending, taken, done, failed, expired], description: '`expired`: not taken in time, so never handed out (device commands)'}
         result: {type: ['object', 'null']}
         error: {type: ['string', 'null']}
@@ -4341,7 +4342,7 @@ components:
       additionalProperties: false
       properties:
         audio: {type: boolean, description: "Also receive the source's audio (default false). Needs an audio grant and a source that records audio."}
-        talk: {type: boolean, description: "Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera. People only (member and up) and workspace keys; a phone camera on the capture page. 409 `no_speaker` otherwise."}
+        talk: {type: boolean, description: "Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera: its phone, or its box (ADR 0074). People only (member and up) and workspace keys; a camera whose `talk` is true. 409 `no_speaker` otherwise."}
     LiveViewSession:
       type: object
       required: [session_id, media_url, token, expires_at, idle_timeout_seconds]

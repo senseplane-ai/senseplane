@@ -176,6 +176,12 @@ class Source(BaseModel):
             description='The camera can play sound (ADR 0069): a phone always, an IP camera when its box found two-way audio (an ONVIF backchannel). Speak is offered only on cameras with a speaker.'
         ),
     ] = None
+    talk: Annotated[
+        bool | None,
+        Field(
+            description="A person's push-to-talk in live view reaches this camera's speaker (ADR 0069, 0074): a phone with a speaker, or an IP camera whose box can carry live audio to its G.711 backchannel. Hold to talk is offered only where this is true."
+        ),
+    ] = None
     zones: list[Zone]
     privacy_masks: list[PrivacyMask]
     ingest: Annotated[

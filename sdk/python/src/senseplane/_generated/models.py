@@ -177,6 +177,10 @@ class Source(BaseModel):
     """
     The camera can play sound (ADR 0069): a phone always, an IP camera when its box found two-way audio (an ONVIF backchannel). Speak is offered only on cameras with a speaker.
     """
+    talk: bool | None = None
+    """
+    A person's push-to-talk in live view reaches this camera's speaker (ADR 0069, 0074): a phone with a speaker, or an IP camera whose box can carry live audio to its G.711 backchannel. Hold to talk is offered only where this is true.
+    """
     zones: list[Zone]
     privacy_masks: list[PrivacyMask]
     ingest: Ingest | None = None
@@ -1878,7 +1882,7 @@ class BridgeConfig(BaseModel):
     """
     features: list[str] | None = None
     """
-    What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health)
+    What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health), `health_talk` (a camera's `talk`)
     """
 
 
@@ -1896,6 +1900,10 @@ class Camera(BaseModel):
     speaker: bool | None = None
     """
     What the box found about two-way audio when it connected (ADR 0069)
+    """
+    talk: bool | None = None
+    """
+    The box can carry a person's push-to-talk to the camera's speaker (ADR 0074). Sent only when the config's `features` lists `health_talk`.
     """
 
 
@@ -1978,7 +1986,7 @@ class BridgeCommand(BaseModel):
     id: str
     kind: str
     """
-    matter_commission, onvif_add_camera, onvif_search, device_control or speak
+    matter_commission, onvif_add_camera, onvif_search, device_control, speak or talk (push-to-talk to a camera, ADR 0074)
     """
     status: Literal['pending', 'taken', 'done', 'failed', 'expired']
     """
@@ -2522,7 +2530,7 @@ class LiveViewRequest(BaseModel):
     """
     talk: bool | None = None
     """
-    Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera. People only (member and up) and workspace keys; a phone camera on the capture page. 409 `no_speaker` otherwise.
+    Push-to-talk (ADR 0069): the token may also send the viewer's microphone to the camera's speaker, heard only by the camera: its phone, or its box (ADR 0074). People only (member and up) and workspace keys; a camera whose `talk` is true. 409 `no_speaker` otherwise.
     """
 
 

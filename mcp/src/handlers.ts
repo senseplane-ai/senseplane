@@ -1,7 +1,7 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The 10 tools, each a thin call into the public API through the TypeScript
+// The 12 tools, each a thin call into the public API through the TypeScript
 // SDK. Results are short JSON text for the model plus, for `look`, the image
 // itself so the agent can see it.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -66,7 +66,40 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
     return null;
   }));
 
+  type DeviceRow = { id: string; name: string; room: string | null; type: string; tier: string; actions: string[]; state: unknown; online: boolean; can_control: boolean; controllable: boolean };
+  /** A device by id or (case-insensitive) name, with or without its room. */
+  const device = async (ref: unknown): Promise<DeviceRow> => {
+    const r = String(ref ?? "").trim().toLowerCase();
+    const list = (await client.devices.list()) as DeviceRow[];
+    const hit = list.find((d) => d.id.toLowerCase() === r) ?? list.find((d) => d.name.toLowerCase() === r) ?? list.find((d) => `${d.room ?? ""} ${d.name}`.trim().toLowerCase() === r);
+    if (!hit) throw new SenseplaneError(404, "not_found", `no device "${String(ref)}"; call list_devices for the ids`);
+    return hit;
+  };
+  const request = (c: { id: string; device_name: string; action: string; status: string; message: string; state: unknown; expires_at: string | null }) =>
+    ({ request: c.id, device: c.device_name, action: c.action, status: c.status, message: c.message, state: c.state, ...(c.expires_at && c.status === "awaiting_confirmation" ? { confirm_by: c.expires_at } : {}) });
+
   const handlers: Record<string, (a: Args) => Promise<CallToolResult>> = {
+    async list_devices(a) {
+      const room = a.room ? String(a.room).toLowerCase() : undefined;
+      const list = ((await client.devices.list()) as DeviceRow[]).filter((d) => !room || d.room?.toLowerCase() === room);
+      return text({ devices: list.map((d) => ({ id: d.id, name: d.name, room: d.room, type: d.type, tier: d.tier, actions: d.actions, state: d.state, online: d.online, can_control: d.can_control })) });
+    },
+
+    async control_device(a) {
+      if (a.request) return text(request(await client.devices.request(String(a.request))));
+      if (!a.device || !a.action) return fail("validation_failed", "give a device and an action, or a request id to check");
+      const d = await device(a.device);
+      try {
+        const c = await client.devices.command(d.id, { action: String(a.action) as never, ...(a.value !== undefined ? { value: a.value as number | string } : {}) });
+        return text({ ...request(c), ...(c.status === "awaiting_confirmation" ? { note: "A person must confirm this in Senseplane (console, app or Telegram) within 2 minutes; it hasn't happened yet." } : {}) });
+      } catch (err) {
+        // Offline boxes, failures and refusals carry the recorded request.
+        const cmd = err instanceof SenseplaneError ? (err.details?.command as Parameters<typeof request>[0] | undefined) : undefined;
+        if (cmd) return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code: (err as SenseplaneError).code, message: (err as Error).message }, ...request(cmd) }, null, 2) }] };
+        throw err;
+      }
+    },
+
     async list_senses() {
       const list = await sources();
       return text({ sources: list.map((s) => ({ id: s.id, name: s.name, location: s.location, type: s.type, senses: s.senses, status: s.status })) });

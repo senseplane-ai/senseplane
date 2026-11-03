@@ -70,6 +70,21 @@ const fakeApi: typeof fetch = async (input, init) => {
     return json({ matches: [{ source_id: "src_cam", source_name: "Front door", at: "2026-10-16T00:20:00Z", summary: "A person takes a pill.", verified: true }],
       checks_used: 3, candidates: 4, unchecked: 1, compiled: {}, stored: b.watch_id ? 1 : 0 });
   }
+  // Devices (ADR 0067): the hall light switches at once, the front door waits for a person, the porch box is offline.
+  const cmd = (over: Record<string, unknown>) => ({ id: "dcm_1", device_id: "dev_hall", device_name: "Hall light", entity_id: "light.hall", action: "turn_on", value: null,
+    status: "done", message: "Hall light is on.", state: { on: true }, requested_by: { kind: "agent", id: "agt_1", name: "Claude" }, via: "agent",
+    expires_at: null, decided_by: null, created_at: "2026-10-16T01:00:00Z", finished_at: "2026-10-16T01:00:01Z", ...over });
+  if (p === "/devices") return json({ data: [
+    { id: "dev_hall", name: "Hall light", room: "Hall", type: "light", tier: "switch", actions: ["turn_on", "turn_off"], state: { on: false }, online: true, can_control: true, controllable: true },
+    { id: "dev_lock", name: "Front door", room: "Hall", type: "lock", tier: "secure", actions: ["lock", "unlock"], state: { locked: true }, online: true, can_control: true, controllable: true },
+    { id: "dev_porch", name: "Porch light", room: "Porch", type: "light", tier: "switch", actions: ["turn_on", "turn_off"], state: null, online: false, can_control: true, controllable: true },
+  ], next_cursor: null });
+  if (p === "/devices/dev_hall/commands") return json(cmd({}));
+  if (p === "/devices/dev_lock/commands") return json(cmd({ id: "dcm_2", device_id: "dev_lock", device_name: "Front door", action: "unlock", status: "awaiting_confirmation", state: null, finished_at: null,
+    message: "Waiting for a person to confirm: unlock Front door.", expires_at: "2026-10-16T01:02:00Z" }), 202);
+  if (p === "/devices/dev_porch/commands") return json({ error: { code: "device_offline", message: "Porch light's box didn't take the command", request_id: "r",
+    details: { command: cmd({ id: "dcm_3", device_name: "Porch light", status: "offline", state: null, message: "Porch light's box didn't take the command" }) } } }, 503);
+  if (p === "/device-commands/dcm_2") return json(cmd({ id: "dcm_2", device_name: "Front door", action: "unlock", status: "expired", state: null, message: "Nobody confirmed in time, so this wasn't done." }));
   return json({ error: { code: "not_found", message: p, request_id: "r" } }, 404);
 };
 
@@ -84,6 +99,8 @@ const ARGS: Record<string, Record<string, unknown>> = {
   check_history: { instruction: "a person taking pills", sources: ["Front door"] },
   replay: { source: "src_cam", from: "2026-10-16T00:29:00Z", to: "2026-10-16T00:31:00Z", save: true },
   stop_watching: { watch_id: "wat_1" },
+  list_devices: { room: "hall" },
+  control_device: { device: "hall light", action: "turn_on" },
 };
 
 describe("mcp tools", () => {
@@ -95,9 +112,9 @@ describe("mcp tools", () => {
     await client.connect(b);
   });
 
-  it("lists exactly the 10 tools from the spec", async () => {
+  it("lists exactly the 12 tools from the spec", async () => {
     const listed = (await client.listTools()).tools.map((t) => t.name);
-    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching"]);
+    expect(listed).toEqual(["list_senses", "look", "listen", "read_environment", "watch_for", "what_happened", "measure", "check_history", "replay", "stop_watching", "list_devices", "control_device"]);
     expect(listed).toEqual(tools.map((t) => t.name));
   });
 
@@ -128,6 +145,23 @@ describe("mcp tools", () => {
     expect(body("check_history")).toMatchObject({ checks_used: 3, unchecked: 1, stored: 0, matches: [{ summary: "A person takes a pill." }] });
     expect(body("replay")).toMatchObject({ url: "http://api/playback/t/index.m3u8", clip_id: "clp_1" });
     expect(body("stop_watching")).toEqual({ stopped: "wat_1" });
+    expect(body("list_devices").devices.map((d: { name: string }) => d.name)).toEqual(["Hall light", "Front door"]);
+    expect(body("control_device")).toMatchObject({ request: "dcm_1", status: "done", message: "Hall light is on.", state: { on: true } });
+  });
+
+  it("says a lock waits for a person, an offline box isn't done, and checks an earlier request", async () => {
+    const call = async (args: Record<string, unknown>) => {
+      const r = (await client.callTool({ name: "control_device", arguments: args })) as { isError?: boolean; content: { text: string }[] };
+      return { isError: r.isError, body: JSON.parse(r.content[0]!.text) };
+    };
+    const lock = await call({ device: "Front door", action: "unlock" });
+    expect(lock.body).toMatchObject({ request: "dcm_2", status: "awaiting_confirmation", confirm_by: "2026-10-16T01:02:00Z" });
+    expect(lock.body.note).toMatch(/person must confirm/);
+    const porch = await call({ device: "dev_porch", action: "turn_on" });
+    expect(porch.isError).toBe(true);
+    expect(porch.body).toMatchObject({ error: { code: "device_offline" }, status: "offline" });
+    expect((await call({ request: "dcm_2" })).body).toMatchObject({ status: "expired" });
+    expect((await call({ device: "garage", action: "open" })).isError).toBe(true);
   });
 
   it("answers a question with the image and the answer", async () => {
@@ -208,7 +242,7 @@ describe("remote mcp with oauth", () => {
 
     const client = new Client({ name: "remote", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${refreshed.access_token}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(10);
+    expect((await client.listTools()).tools).toHaveLength(12);
     const r = (await client.callTool({ name: "list_senses", arguments: {} })) as { content: { text: string }[] };
     expect(JSON.parse(r.content[0]!.text).sources[0].id).toBe("src_cam");
     await client.close();
@@ -262,7 +296,7 @@ describe("remote mcp with oauth", () => {
   it("also accepts a Senseplane API key directly", async () => {
     const client = new Client({ name: "key", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${KEY}` } } }));
-    expect((await client.listTools()).tools).toHaveLength(10);
+    expect((await client.listTools()).tools).toHaveLength(12);
     await client.close();
   });
 });

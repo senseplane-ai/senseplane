@@ -66,5 +66,5 @@ files = ["src", "tests", "examples", "scripts"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langchain_core.*", "yaml"]
+module = ["langchain_core.*", "yaml", "anthropic"]
 ignore_missing_imports = true

@@ -513,7 +513,15 @@ export class RoomManager {
     const c = this.consumer(p, consumerId);
     await c.resume();
     if (c.kind === "video") await c.requestKeyFrame().catch(() => undefined);
+    this.heard(p.room, c.producerId);
     return { consumerId, resumed: true };
+  }
+
+  /** Someone now hears a push-to-talk track (the phone resumed it, a box's speaker took it): its sender is told. */
+  heard(room: Room, producerId: string) {
+    const t = room.talkback;
+    if (!t || t.producerId !== producerId || t.owner.closed) return;
+    t.owner.peer.send({ event: "talkbackListening", producerId });
   }
 
   async pauseConsumer(p: Participant, consumerId: unknown) {
@@ -544,6 +552,23 @@ export class RoomManager {
     const p = this.rooms.get(roomId)?.participants.get(identity);
     if (!p || p.closed) return false;
     p.peer.send(frame);
+    return true;
+  }
+
+  /**
+   * Ends a participant's push-to-talk from the node's side (its listener went away, or the caller asks):
+   * the track is closed and its sender told why, with `message` for a person to read. False when that
+   * participant isn't talking.
+   */
+  stopTalkback(roomId: string, identity: string, reason: string, message?: string): boolean {
+    const room = this.rooms.get(roomId);
+    const t = room?.talkback;
+    if (!t || t.owner.identity !== identity || !t.producerId) return false;
+    const e = t.owner.producers.get(t.producerId);
+    if (!e || e.producer.closed) return false;
+    const producerId = t.producerId;
+    e.producer.close();
+    if (!t.owner.closed) t.owner.peer.send({ event: "talkbackEnded", producerId, reason, ...(message ? { message } : {}) });
     return true;
   }
 

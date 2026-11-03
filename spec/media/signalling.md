@@ -106,6 +106,8 @@ The one exception: a token with `kind: "ingress"` and `transport: "plain"`
 | `roomClosed` | `reason` | The session is over; don't reconnect automatically |
 | `speak` | `id`, `url`, `durationMs` | Talk-back: play the clip at `url` (ADR 0069) |
 | `speakStop` | `id` | Talk-back: stop playing that clip now |
+| `talkbackListening` | `producerId` | Push-to-talk: the camera's speaker now hears this participant's `talkback` track (ADR 0074) |
+| `talkbackEnded` | `producerId`, `reason`, `message?` | Push-to-talk: the node closed this participant's `talkback` track (`listener_left`, `expired`, or the caller's reason) |
 
 `newProducer` (`producerId`, `identity`, `kind`) is the old name of
 `producerAppeared`. Nodes send `producerAppeared`; clients should accept both.
@@ -171,6 +173,14 @@ Talking through a camera's speaker, in two ways.
   (`.../speak/stop`) or when a `talkback` producer appears: a person's
   push-to-talk always cuts a clip off. A client that can't start playing
   within 10 s of the event drops it rather than play it late.
+- **A camera behind a box** (ADR 0074). The talker's `visibleTo` names the
+  box's listener, `{source_id}:speaker`, instead of the phone. The box pulls
+  the track over [WHEP](whep.md) with a join token for that identity. Whoever
+  hears a `talkback` track (the phone resuming its consumer, or a box's
+  listener once DTLS is up), its sender gets `talkbackListening`; when the
+  node closes the track (the listener went away, its token expired, or
+  `POST /control/rooms/{roomId}/participants/{identity}/talkback/stop`), the
+  sender gets `talkbackEnded` and should stop its microphone.
 
 ## Errors
 

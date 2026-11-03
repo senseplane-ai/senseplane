@@ -632,6 +632,47 @@
           "type": "object",
           "required": [
             "event",
+            "producerId"
+          ],
+          "description": "Push-to-talk (ADR 0074): the camera's speaker now hears this participant's talkback track",
+          "properties": {
+            "event": {
+              "const": "talkbackListening"
+            },
+            "producerId": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
+            "producerId",
+            "reason"
+          ],
+          "description": "Push-to-talk (ADR 0074): the node closed this participant's talkback track; message, when present, is for a person to read",
+          "properties": {
+            "event": {
+              "const": "talkbackEnded"
+            },
+            "producerId": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 300
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "event",
             "id"
           ],
           "description": "Talk-back: stop playing that clip",

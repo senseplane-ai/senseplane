@@ -204,6 +204,34 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {description: No such participant in the room}
 
+  /control/rooms/{roomId}/participants/{identity}/talkback/stop:
+    parameters:
+      - {name: roomId, in: path, required: true, schema: {type: string}}
+      - {name: identity, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: stopParticipantTalkback
+      description: >-
+        Push-to-talk (ADR 0074): closes the participant's `talkback` track and
+        sends it `talkbackEnded` with the reason and, when given, a message
+        for the person (the box couldn't reach the camera's speaker). 404 when
+        that participant isn't talking. Optional for a media plane: an API
+        that gets 404 or 405 lets the track end on its own.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+                message: {type: string, maxLength: 300}
+      responses:
+        '204': {description: Closed and told}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {description: That participant isn't talking}
+
   /control/egress:
     post:
       operationId: startEgress

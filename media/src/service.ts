@@ -20,6 +20,7 @@ import { RoomManager, type WorkerNode } from "./rooms.js";
 import { attachSignalling } from "./signalling.js";
 import { registerMediaMetrics } from "./telemetry.js";
 import { ReplayGuard, keyObjects } from "./tokens.js";
+import { registerWhep } from "./whep.js";
 import { registerWhip } from "./whip.js";
 
 export interface MediaServiceOptions {
@@ -92,6 +93,8 @@ export async function createMediaService(options: MediaServiceOptions = {}): Pro
     const join = { rooms, ring, replay: replayGuard, log: app.log };
     signalling = attachSignalling(app.server, { ...join, joinDeadlineMs: config.joinDeadlineMs });
     registerWhip(app, { ...join, cfg: config.whip, ...(options.fetch ? { fetch: options.fetch } : {}) });
+    // A box pulls push-to-talk for a camera's speaker (ADR 0074).
+    registerWhep(app, join);
     const dispatcher: EgressDispatcher | undefined = egress
       ? localDispatcher(egress, () => config.egress.signalUrl)
       : config.egress.url && config.egress.secret ? remoteDispatcher(config.egress.url, config.egress.secret, () => config.egress.signalUrl) : undefined;

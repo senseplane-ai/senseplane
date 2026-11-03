@@ -17,6 +17,7 @@ versioned routes, and the signalling protocol stays at `protocolVersion: 1`.
 | `signalling.md`, `signalling.json` | The WebSocket signalling protocol, the join token's claims and grants |
 | `callbacks.json` | Everything the media plane POSTs to the API: room events, feed events, presign and credential requests, the frames batch |
 | `whip.md`, `whip.yaml` | WHIP ingest (RFC 9725): the bearer, the authorize callback |
+| `whep.md` | Push-to-talk to a camera behind a box: the box pulls the talkback track (ADR 0074) |
 | `tokens.md`, `vectors/tokens.json` | The three token kinds and golden accept/refuse vectors |
 
 ## Principles

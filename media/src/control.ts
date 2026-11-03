@@ -166,6 +166,15 @@ export function registerControl(app: FastifyInstance, deps: ControlDeps) {
       return reply.code(204).send();
     });
 
+    // Ends a participant's push-to-talk (ADR 0074): the box couldn't reach the camera's speaker, the caller's limit.
+    scope.post<{ Params: { roomId: string; identity: string }; Body: Record<string, unknown> }>("/control/rooms/:roomId/participants/:identity/talkback/stop", async (req, reply) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof b.reason !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(b.reason)) throw new Bad(400, "bad_request", "reason must be a short lower_snake_case word");
+      if (b.message !== undefined && (typeof b.message !== "string" || b.message.length > 300)) throw new Bad(400, "bad_request", "message must be at most 300 characters");
+      if (!deps.rooms.stopTalkback(req.params.roomId, req.params.identity, b.reason, b.message as string | undefined)) return reply.code(404).send({ error: "not talking" });
+      return reply.code(204).send();
+    });
+
     // --- egress: the caller asks for an outcome; which box runs it is ours ---
     const egress = () => {
       if (!deps.egress) throw new Bad(501, "this media plane has no egress configured");

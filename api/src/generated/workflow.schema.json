@@ -1,0 +1,707 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senseplane.com/schemas/workflow.json",
+  "title": "Workflow",
+  "description": "A trigger and a graph of steps, run in the background (ADR 0072). Steps tell people and systems, ask the vision model, speak through a camera, save clips and stories, and wait. There is no step that switches a device: the kinds are a closed list, and the API and the engine refuse any other.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "enabled",
+    "sources",
+    "trigger",
+    "steps",
+    "edges",
+    "runs_dropped",
+    "created_by",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^wfl_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "sources": {
+      "$ref": "#/$defs/sources"
+    },
+    "trigger": {
+      "$ref": "#/$defs/trigger"
+    },
+    "steps": {
+      "$ref": "#/$defs/steps"
+    },
+    "edges": {
+      "$ref": "#/$defs/edges"
+    },
+    "hook_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "webhook trigger: where to POST, signed with the workflow's hook secret."
+    },
+    "hook_secret_set": {
+      "type": "boolean",
+      "description": "webhook trigger: whether a hook secret exists (it is shown once, when made)."
+    },
+    "runs_dropped": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Triggers dropped because the workflow or the account was over its run rate."
+    },
+    "last_run_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "next_run_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "description": "schedule trigger: when it next runs (enabled only)."
+    },
+    "created_by": {
+      "type": "string",
+      "description": "Who made it: user:<id> or a workspace key."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "stepId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+      "description": "Unique in the workflow; `trigger` is the trigger's own id."
+    },
+    "sourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/sourceId"
+      },
+      "description": "Every source the workflow may use. Its runs see nothing else."
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "description": "Where the editor draws it."
+    },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trigger",
+        "steps",
+        "edges"
+      ],
+      "description": "What a run follows: the trigger, the steps and the edges between them.",
+      "properties": {
+        "trigger": {
+          "$ref": "#/$defs/trigger"
+        },
+        "steps": {
+          "$ref": "#/$defs/steps"
+        },
+        "edges": {
+          "$ref": "#/$defs/edges"
+        }
+      }
+    },
+    "trigger": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/eventTrigger"
+        },
+        {
+          "$ref": "#/$defs/scheduleTrigger"
+        },
+        {
+          "$ref": "#/$defs/webhookTrigger"
+        }
+      ]
+    },
+    "eventTrigger": {
+      "type": "object",
+      "title": "EventTrigger",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "Runs for each event stored on its sources whose type matches.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "event"
+        },
+        "event_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|[a-z][a-z0-9_]*(\\.([a-z0-9_]+|\\*))*)$",
+            "maxLength": 64
+          },
+          "description": "Patterns such as watch.triggered, detection.person or detection.*; every type when absent."
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/sourceId"
+          },
+          "description": "Some of the workflow's sources; all of them when absent."
+        },
+        "watch_id": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Only this watch's events."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        }
+      }
+    },
+    "scheduleTrigger": {
+      "type": "object",
+      "title": "ScheduleTrigger",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "Runs every `every_min` minutes, or daily `at` a local time (exactly one of them); on `days`, in `time_zone` (default the workspace's).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "schedule"
+        },
+        "every_min": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1440
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "days": {
+          "type": "array",
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "mon",
+              "tue",
+              "wed",
+              "thu",
+              "fri",
+              "sat",
+              "sun"
+            ]
+          },
+          "description": "Days it runs on; every day when absent."
+        },
+        "time_zone": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        }
+      }
+    },
+    "webhookTrigger": {
+      "type": "object",
+      "title": "WebhookTrigger",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "Runs when POST /v1/workflow-hooks/{id} is called, signed with the workflow's hook secret; the JSON body is the run's input.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "webhook"
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "step": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/conditionStep"
+        },
+        {
+          "$ref": "#/$defs/askStep"
+        },
+        {
+          "$ref": "#/$defs/notifyStep"
+        },
+        {
+          "$ref": "#/$defs/speakStep"
+        },
+        {
+          "$ref": "#/$defs/clipStep"
+        },
+        {
+          "$ref": "#/$defs/storyStep"
+        },
+        {
+          "$ref": "#/$defs/waitStep"
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op"
+      ],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^(event\\.(type|source_id|labels|confidence|summary|verified|reading|sense)|input\\.[A-Za-z0-9_]{1,64}|time\\.(hour|weekday)|steps\\.[a-z][a-z0-9_]{0,31}\\.(yes|answer|confidence))$",
+          "description": "What to look at: the event, the webhook input, the local time (hour 0–23, weekday mon–sun) or an ask step's answer."
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "eq",
+            "ne",
+            "in",
+            "contains",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "exists"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "conditionStep": {
+      "type": "object",
+      "title": "ConditionStep",
+      "description": "Checks rules; its yes and no edges choose what runs next.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "rules"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "condition"
+        },
+        "match": {
+          "type": "string",
+          "enum": [
+            "all",
+            "any"
+          ],
+          "description": "all (default) or any of the rules."
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        }
+      }
+    },
+    "askStep": {
+      "type": "object",
+      "title": "AskStep",
+      "description": "Asks the vision model a yes/no question about the event's snapshot, or the camera's live frame without one. Counts as an AI check. Its yes and no edges choose what runs next.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "question"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "ask"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 500
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The camera to look at; default the event's camera."
+        },
+        "min_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "A yes below this counts as no (default 0.5)."
+        }
+      }
+    },
+    "notifyStep": {
+      "type": "object",
+      "title": "NotifyStep",
+      "description": "Sends text to a linked chat (Telegram) or one of the account's webhooks, signed like every Senseplane webhook (type workflow.notify).",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "to",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "notify"
+        },
+        "to": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "channel",
+                "webhook"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "A channel (chn_…) or webhook (whk_…) id."
+            }
+          }
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Text with {{event.summary}}, {{event.source_name}}, {{input.<key>}}, {{steps.<id>.answer}} and the like filled in."
+        }
+      }
+    },
+    "speakStep": {
+      "type": "object",
+      "title": "SpeakStep",
+      "description": "Says text through a camera's speaker, through talk-back with its limits (ADR 0069). Never retried.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "source",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "speak"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "What to say; {{…}} filled in as for notify."
+        }
+      }
+    },
+    "clipStep": {
+      "type": "object",
+      "title": "ClipStep",
+      "description": "Saves a clip of the event's moment on its camera, once it is recorded.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "clip"
+        },
+        "before_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60,
+          "description": "Default 5."
+        },
+        "after_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Default 10."
+        }
+      }
+    },
+    "storyStep": {
+      "type": "object",
+      "title": "StoryStep",
+      "description": "Makes a story of the event's moment (or the run's start) on one or more cameras (ADR 0070).",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "story"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/sourceId"
+          },
+          "description": "Default the event's camera."
+        },
+        "before_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 120,
+          "description": "Default 10."
+        },
+        "after_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Default 20."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "labelled",
+            "fast"
+          ]
+        }
+      }
+    },
+    "waitStep": {
+      "type": "object",
+      "title": "WaitStep",
+      "description": "Pauses the run.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "seconds"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "A label for the step in the editor."
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "kind": {
+          "type": "string",
+          "const": "wait"
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "description": "`trigger` or a step id."
+          },
+          "to": {
+            "$ref": "#/$defs/stepId"
+          },
+          "branch": {
+            "type": "string",
+            "enum": [
+              "yes",
+              "no"
+            ],
+            "description": "From a condition or ask step only: taken when it answered this."
+          }
+        }
+      }
+    }
+  }
+}

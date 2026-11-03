@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ColumnType, Generated } from "kysely";
+import type { WorkflowDefinition, WorkflowRunTrigger, WorkflowTrigger } from "../workflow-spec.js";
 
 // Mirrors the migrations, kept by hand (`pnpm db:types` generates a
 // kysely-codegen version to compare against).
@@ -198,7 +199,7 @@ export interface SpeakMessagesTable {
   id: string;
   account_id: string;
   source_id: string;
-  kind: "agent" | "watch" | "person";
+  kind: "agent" | "watch" | "person" | "workflow";
   actor: string;
   actor_kind: string;
   actor_name: string | null;
@@ -565,6 +566,73 @@ export interface FollowsTable {
   finished_at: Nullable<Date>;
 }
 
+export type WorkflowRunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed";
+export type WorkflowStepStatus = "running" | "waiting" | "succeeded" | "failed" | "skipped";
+type Json<T> = ColumnType<T, string, string>;
+
+/** Workflows (ADR 0072): a trigger and a graph of steps; the definition is checked on every write. */
+export interface WorkflowsTable {
+  id: string;
+  account_id: string;
+  name: string;
+  enabled: ColumnType<boolean, boolean | undefined, boolean>;
+  definition: Json<WorkflowDefinition>;
+  trigger_type: WorkflowTrigger["type"];
+  source_ids: string[];
+  hook_secret: string | null;
+  next_fire_at: Nullable<Date>;
+  fire_claimed_until: Nullable<Date>;
+  last_fired_at: Nullable<Date>;
+  runs_dropped: ColumnType<number, number | undefined, number>;
+  last_run_at: Nullable<Date>;
+  created_by: string;
+  updated_by: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface WorkflowRunsTable {
+  id: string;
+  account_id: string;
+  workflow_id: string;
+  definition: Json<WorkflowDefinition>;
+  source_ids: string[];
+  workflow_name: string;
+  trigger: Json<WorkflowRunTrigger>;
+  event_id: string | null;
+  status: ColumnType<WorkflowRunStatus, WorkflowRunStatus | undefined, WorkflowRunStatus>;
+  error: string | null;
+  failed_step: string | null;
+  due_at: Nullable<Date>;
+  claimed_until: Nullable<Date>;
+  claim_token: string | null;
+  claims: ColumnType<number, number | undefined, number>;
+  created_at: Timestamp;
+  started_at: Nullable<Date>;
+  finished_at: Nullable<Date>;
+}
+
+export interface WorkflowRunStepsTable {
+  run_id: string;
+  step_id: string;
+  account_id: string;
+  kind: string;
+  status: WorkflowStepStatus;
+  attempts: ColumnType<number, number | undefined, number>;
+  resume_at: Nullable<Date>;
+  output: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  error: string | null;
+  started_at: Nullable<Date>;
+  finished_at: Nullable<Date>;
+}
+
+export interface WorkflowHookSignaturesTable {
+  account_id: string;
+  workflow_id: string;
+  mac: string;
+  signed_at: number;
+}
+
 export interface AccountKeysTable {
   account_id: string;
   version: number;
@@ -812,6 +880,10 @@ export interface Database {
   story_pieces: StoryPiecesTable;
   story_segments: StorySegmentsTable;
   follows: FollowsTable;
+  workflows: WorkflowsTable;
+  workflow_runs: WorkflowRunsTable;
+  workflow_run_steps: WorkflowRunStepsTable;
+  workflow_hook_signatures: WorkflowHookSignaturesTable;
   accounts: AccountsTable;
   sources: SourcesTable;
   api_keys: ApiKeysTable;

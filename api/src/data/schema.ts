@@ -613,7 +613,8 @@ export interface ReadingSignaturesTable {
   account_id: string;
   token_id: string;
   mac: string;
-  seen_at: Timestamp;
+  /** The signature's `t`, Unix seconds. */
+  signed_at: ColumnType<number, number, number>;
 }
 
 export interface IdempotencyKeysTable {

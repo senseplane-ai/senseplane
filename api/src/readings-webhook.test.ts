@@ -41,6 +41,7 @@ describe("readings webhook: loose readings", () => {
 describe("readings webhook over the API", () => {
   let api: SenseplaneApi;
   let drop: () => Promise<void>;
+  let ownerDb: string;
   let owner: string;
   let acc: string;
   let src: { id: string; ingest: { integration_token: string } };
@@ -56,6 +57,12 @@ describe("readings webhook over the API", () => {
   beforeAll(async () => {
     const t = await createTestDatabase();
     drop = t.drop;
+    // The owner role, to break an insert on purpose.
+    const u = new URL(t.appUrl);
+    const admin = new URL(process.env.TEST_ADMIN_DATABASE_URL ?? "postgres://senseplane:senseplane@localhost:55432/senseplane");
+    u.username = admin.username;
+    u.password = admin.password;
+    ownerDb = u.toString();
     const plane = fakeMediaPlane();
     api = await createApi({ database: t.appUrl, logger: false, workers: false, captureUrl: "https://c/capture.html", media: { control: plane.client, publicUrl: "https://media.test" }, apiPublicUrl: "https://api.example" });
     acc = (await api.data.accounts.create("A")).id;
@@ -135,6 +142,22 @@ describe("readings webhook over the API", () => {
       { env: { ...process.env, SENSEPLANE_TOKEN: token } });
     expect(JSON.parse(out.stdout)).toEqual({ accepted: 1, events: [] });
     expect(await reading("illuminance")).toMatchObject({ value: 320, unit: "lux" });
+  });
+
+  it("refuses a reading in both the body and the query, non-UTF-8 bodies, and times out of range", async () => {
+    let r = await push({ body: JSON.stringify({ sense: "battery", value: 50 }), type: "application/json", query: "sense=doorbell" });
+    expect(r.statusCode).toBe(400);
+    expect(r.json().error.message).toMatch(/not both/);
+    r = await push({ body: "{}", type: "application/json", query: "sense=doorbell" });
+    expect(r.statusCode).toBe(202); // an empty body is no body
+    r = await api.public.inject({ method: "POST", url: URL_, payload: Buffer.from([0x7b, 0x22, 0xff, 0xfe, 0x22, 0x7d]), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" } });
+    expect(r.statusCode).toBe(400);
+    expect(r.json().error.message).toMatch(/UTF-8/);
+    for (const measured_at of [99999999999, "1999-01-01T00:00:00Z", new Date(Date.now() + 400 * 86400_000).toISOString(), 1e20]) {
+      r = await push({ body: JSON.stringify({ sense: "battery", value: 50, measured_at }), type: "application/json" });
+      expect(r.statusCode, String(measured_at)).toBe(400);
+      expect(r.json().error.message).toMatch(/measured_at/);
+    }
   });
 
   it("refuses control and sensors as senses, camera senses, and other tokens", async () => {
@@ -220,6 +243,29 @@ describe("readings webhook over the API", () => {
       token = rotated.json().token;
       expect((await push({ body: JSON.stringify({ sense: "temperature", value: 2 }), type: "application/json" })).statusCode).toBe(401);
       expect((await signed(JSON.stringify({ sense: "temperature", value: 3 }))).statusCode).toBe(202);
+    });
+
+    it("a push that fails to be stored doesn't use its signature up; old signatures are pruned by their time", async () => {
+      const pg = (await import("pg")).default;
+      const c = new pg.Client({ connectionString: ownerDb });
+      await c.connect();
+      await c.query(`CREATE FUNCTION boom() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.sense = 'pressure' THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $$`);
+      await c.query("CREATE TRIGGER boom BEFORE INSERT ON sensor_readings FOR EACH ROW EXECUTE FUNCTION boom()");
+      const body = JSON.stringify({ sense: "pressure", value: 1013 });
+      const t = Math.floor(Date.now() / 1000);
+      const headers = { "senseplane-signature": `t=${t},v1=${signatureFor(secret, t, body)}` };
+      expect((await push({ body, type: "application/json", headers })).statusCode).toBe(500);
+      await c.query("DROP TRIGGER boom ON sensor_readings");
+      await c.query("DROP FUNCTION boom()");
+      expect((await push({ body, type: "application/json", headers })).statusCode).toBe(202);
+      expect((await push({ body, type: "application/json", headers })).statusCode).toBe(401);
+      // A signature 20 minutes old is pruned on the next signed push; one 4 minutes old is kept.
+      const tokenId = (await c.query("SELECT id FROM ingest_tokens WHERE revoked_at IS NULL AND signing_secret IS NOT NULL")).rows[0].id;
+      await c.query("INSERT INTO reading_signatures (account_id, token_id, mac, signed_at) VALUES ($1, $2, 'old', $3), ($1, $2, 'recent', $4)", [acc, tokenId, t - 1200, t - 240]);
+      expect((await signed(JSON.stringify({ sense: "pressure", value: 1012 }))).statusCode).toBe(202);
+      const left = (await c.query("SELECT mac FROM reading_signatures WHERE mac IN ('old', 'recent')")).rows.map((r: { mac: string }) => r.mac);
+      expect(left).toEqual(["recent"]);
+      await c.end();
     });
 
     it("turning signing off takes plain pushes again", async () => {

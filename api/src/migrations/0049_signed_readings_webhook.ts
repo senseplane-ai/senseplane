@@ -4,7 +4,8 @@
 // The readings webhook (ADR 0071): a sensor's integration token can carry a
 // signing secret (sealed like webhook secrets). With one, every push must be
 // signed the way Senseplane signs its own webhooks, and a signature is taken
-// once: the ones seen in the last minutes are kept to refuse a replay.
+// once: the ones seen in the last minutes are kept, with their time `t`, to
+// refuse a replay; they are pruned by `t`, on the API's clock.
 import { type Kysely, sql } from "kysely";
 
 const CURRENT_ACCOUNT = sql`nullif(current_setting('app.account_id', true), '')::uuid`;
@@ -17,10 +18,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("account_id", "uuid", (c) => c.notNull().references("accounts.id").onDelete("cascade"))
     .addColumn("token_id", "text", (c) => c.notNull().references("ingest_tokens.id").onDelete("cascade"))
     .addColumn("mac", "text", (c) => c.notNull())
-    .addColumn("seen_at", "timestamptz", (c) => c.notNull().defaultTo(sql`now()`))
+    .addColumn("signed_at", "bigint", (c) => c.notNull())
     .addPrimaryKeyConstraint("reading_signatures_pkey", ["token_id", "mac"])
     .execute();
-  await db.schema.createIndex("reading_signatures_seen").on("reading_signatures").columns(["account_id", "seen_at"]).execute();
+  await db.schema.createIndex("reading_signatures_signed").on("reading_signatures").columns(["account_id", "signed_at"]).execute();
   await sql`ALTER TABLE reading_signatures ENABLE ROW LEVEL SECURITY`.execute(db);
   await sql`ALTER TABLE reading_signatures FORCE ROW LEVEL SECURITY`.execute(db);
   await sql`CREATE POLICY account_isolation ON reading_signatures

@@ -66,6 +66,7 @@ export const readingInputSchema = {
 };
 
 const bad = (msg: string) => new ApiError(400, "validation_failed", msg);
+const MAX_SKEW_MS = 366 * 24 * 3600_000;
 
 /** Checks one pushed reading against the catalog; throws validation_failed. */
 export function cleanReading(r: ReadingInput, now = new Date()): CleanReading {
@@ -77,6 +78,8 @@ export function cleanReading(r: ReadingInput, now = new Date()): CleanReading {
   const when = r.measured_at ?? r.at;
   const at = when ? new Date(when) : now;
   if (Number.isNaN(at.getTime())) throw bad("measured_at must be an RFC 3339 time");
+  // A year either way at most: a wrong clock or a typo isn't filed (or given a partition) decades away.
+  if (Math.abs(at.getTime() - now.getTime()) > MAX_SKEW_MS) throw bad("measured_at must be within a year of now");
   const device = { device_id: r.device?.id ?? null, device_name: r.device?.name ?? null };
   if (kind === "number") {
     if (typeof r.value !== "number" || !Number.isFinite(r.value)) throw bad(`${r.sense} needs a number value`);

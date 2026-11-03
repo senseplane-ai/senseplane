@@ -13,6 +13,7 @@
 // And the console's side: GET /v1/sources/{id}/webhook, POST/DELETE
 // /v1/sources/{id}/webhook/secret.
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { isUtf8 } from "node:buffer";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { DataAccess } from "../data/access.js";
 import { ApiError } from "../errors.js";
@@ -21,6 +22,8 @@ import { ingestReadings } from "./source-config.js";
 
 /** How far a signature's timestamp may be from now, either way. */
 export const SIGNATURE_TOLERANCE_S = 300;
+/** Signatures are kept this long past their time, well past the tolerance, to refuse replays. */
+const SIGNATURE_KEEP_S = 900;
 const MAX_READINGS = 1000;
 
 const bad = (msg: string) => new ApiError(400, "validation_failed", msg);
@@ -34,9 +37,10 @@ const FALSE = new Set(["false", "off", "no", "0"]);
 function when(v: unknown): string | undefined {
   if (v === undefined || v === null || v === "") return undefined;
   if (typeof v === "number" || (typeof v === "string" && /^\d{9,11}(\.\d+)?$/.test(v.trim()))) {
-    const ms = Number(v) * 1000;
-    if (!Number.isFinite(ms)) throw bad("measured_at must be an RFC 3339 time or Unix seconds");
-    return new Date(ms).toISOString();
+    const d = new Date(Number(v) * 1000);
+    // Out of Date's range (or not a number) is a bad request, not a crash.
+    if (Number.isNaN(d.getTime())) throw bad("measured_at must be an RFC 3339 time or Unix seconds");
+    return d.toISOString();
   }
   if (typeof v !== "string") throw bad("measured_at must be an RFC 3339 time or Unix seconds");
   return v;
@@ -113,6 +117,8 @@ export function looseReading(x: Record<string, unknown>): ReadingInput {
 export function webhookReadings(body: unknown, query: Record<string, unknown>): ReadingInput[] {
   const b = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
   if (Array.isArray(body)) throw bad("send {\"readings\": [...]} or one reading");
+  // One place only: a body and a query string both saying something is refused (and only the body would be signed).
+  if (b && Object.keys(b).length && Object.keys(query).length) throw bad("send the reading in the body or in the query string, not both");
   if (b && "readings" in b) {
     if (!Array.isArray(b.readings) || !b.readings.length) throw bad("readings must be a list of at least one");
     if (b.readings.length > MAX_READINGS) throw bad(`at most ${MAX_READINGS} readings at once`);
@@ -164,7 +170,10 @@ export function registerReadingsWebhook(app: FastifyInstance, deps: ReadingsWebh
   app.register(async (scope) => {
     // The body as sent, for the signature; JSON, forms and plain text (IFTTT's three).
     scope.removeAllContentTypeParsers();
-    const parse = (type: "json" | "form" | "text") => (req: FastifyRequest, body: string, done: (err: Error | null, out?: unknown) => void) => {
+    const parse = (type: "json" | "form" | "text") => (req: FastifyRequest, raw: Buffer, done: (err: Error | null, out?: unknown) => void) => {
+      // Text in UTF-8 only: anything else couldn't be signed and read back the same.
+      if (!isUtf8(raw)) return done(bad("the body must be UTF-8 text"));
+      const body = raw.toString("utf8");
       req.rawBody = body;
       const s = body.trim();
       if (!s) return done(null, {});
@@ -177,37 +186,41 @@ export function registerReadingsWebhook(app: FastifyInstance, deps: ReadingsWebh
       }
       return done(null, Object.fromEntries(new URLSearchParams(s)));
     };
-    scope.addContentTypeParser("application/json", { parseAs: "string", bodyLimit: 1024 * 1024 }, parse("json"));
-    scope.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string", bodyLimit: 1024 * 1024 }, parse("form"));
-    scope.addContentTypeParser("text/plain", { parseAs: "string", bodyLimit: 1024 * 1024 }, parse("text"));
+    scope.addContentTypeParser("application/json", { parseAs: "buffer", bodyLimit: 1024 * 1024 }, parse("json"));
+    scope.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "buffer", bodyLimit: 1024 * 1024 }, parse("form"));
+    scope.addContentTypeParser("text/plain", { parseAs: "buffer", bodyLimit: 1024 * 1024 }, parse("text"));
 
     scope.post<{ Querystring: Record<string, unknown> }>("/v1/integration/readings", async (req, reply) => {
       const sourceId = req.access?.integrationSource;
       const token = req.access?.integrationToken;
       if (!sourceId || !token) throw new ApiError(403, "forbidden", "this endpoint takes a sensor's integration token (sit_…)");
       const accountId = req.accountId!;
+      const clock = now();
+      let signature: { mac: string; t: number } | undefined;
       if (token.signingSecret) {
         const header = req.headers["senseplane-signature"];
         const sig = parseSignature(Array.isArray(header) ? header[0] ?? "" : header ?? "");
         if (!sig) throw unsigned("this token signs its pushes: send Senseplane-Signature: t=<unix seconds>,v1=<HMAC-SHA256>");
-        const at = Math.floor(now() / 1000);
+        const at = Math.floor(clock / 1000);
         if (Math.abs(at - sig.t) > SIGNATURE_TOLERANCE_S) throw unsigned(`the signature's time is more than ${SIGNATURE_TOLERANCE_S / 60} minutes from now`);
         // What is signed is the body; for a push without one, the query string (the part after "?").
-        const signed = req.rawBody?.trim() ? req.rawBody : (req.url.split("?")[1] ?? "");
+        const q = req.url.indexOf("?");
+        const signed = req.rawBody?.trim() ? req.rawBody : q >= 0 ? req.url.slice(q + 1) : "";
         const want = Buffer.from(signatureFor(box().decrypt(token.signingSecret), sig.t, signed), "hex");
         const match = sig.v1.find((v) => timingSafeEqual(Buffer.from(v, "hex"), want));
         if (!match) throw unsigned("the signature doesn't match the body");
-        // Each signature once: a captured request can't be sent again.
-        const fresh = await deps.data.withAccount(accountId, async (s) => {
-          await s.db.deleteFrom("reading_signatures").where("seen_at", "<", new Date(now() - 2 * SIGNATURE_TOLERANCE_S * 1000)).execute();
-          return s.db.insertInto("reading_signatures").values({ account_id: accountId, token_id: token.id, mac: match })
-            .onConflict((oc) => oc.columns(["token_id", "mac"]).doNothing()).returning("mac").executeTakeFirst();
-        });
-        if (!fresh) throw unsigned("this signature was already used; sign each push");
+        signature = { mac: match, t: sig.t };
       }
-      const at = new Date(now());
+      const at = new Date(clock);
       const readings = webhookReadings(req.body, req.query).map((r) => cleanReading(r, at)).sort((a, b) => a.at.getTime() - b.at.getTime());
       const events = await deps.data.withAccount(accountId, async (s) => {
+        if (signature) {
+          // Each signature once, taken in the same transaction as the readings: a push that fails doesn't use it up.
+          await s.db.deleteFrom("reading_signatures").where("signed_at", "<", Math.floor(clock / 1000) - SIGNATURE_KEEP_S).execute();
+          const fresh = await s.db.insertInto("reading_signatures").values({ account_id: accountId, token_id: token.id, mac: signature.mac, signed_at: signature.t })
+            .onConflict((oc) => oc.columns(["token_id", "mac"]).doNothing()).returning("mac").executeTakeFirst();
+          if (!fresh) throw unsigned("this signature was already used; sign each push");
+        }
         const src = await s.sources.get(sourceId);
         if (!src) throw new ApiError(404, "not_found", "source not found");
         return ingestReadings(s, accountId, src, readings);

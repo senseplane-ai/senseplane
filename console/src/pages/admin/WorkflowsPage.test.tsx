@@ -77,8 +77,9 @@ describe("WorkflowsPage", () => {
     const { props } = setup(routes());
     render(<WorkflowsPage {...props} />);
     const editor = await screen.findByRole("region", { name: "Workflow Door after dark" });
+    // The canvas loads on its own (a lazy chunk), then draws the trigger and every step.
+    await waitFor(() => expect(within(within(editor).getByRole("figure", { name: "Workflow canvas" })).getByTestId("node-parcel")).toBeInTheDocument(), { timeout: 10_000 });
     const canvas = within(editor).getByRole("figure", { name: "Workflow canvas" });
-    await waitFor(() => expect(within(canvas).getByTestId("node-parcel")).toBeInTheDocument());
     expect(within(canvas).getByTestId("node-trigger").textContent).toContain("When detection.person on Front door");
     expect(within(canvas).getByTestId("node-say").textContent).toContain("Please leave it by the gate.");
     const steps = within(editor).getByRole("list", { name: "Steps" });
@@ -163,7 +164,7 @@ describe("WorkflowsPage", () => {
     expect(items[1]).toMatch(/say.*Skipped/);
     expect(items[2]).toMatch(/tell.*Failed.*3 attempts.*the webhook answered 500/);
     expect(within(detail).getByRole("alert")).toHaveTextContent("tell: the webhook answered 500");
-    await waitFor(() => expect(within(within(detail).getByRole("figure", { name: "Run canvas" })).getByTestId("node-tell").className).toContain("wf-status-failed"));
+    await waitFor(() => expect(within(within(detail).getByRole("figure", { name: "Run canvas" })).getByTestId("node-tell").className).toContain("wf-status-failed"), { timeout: 10_000 });
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
     await waitFor(() => expect(api.called("POST", "/workflows/wfl_01/run")).toHaveLength(1));
   });

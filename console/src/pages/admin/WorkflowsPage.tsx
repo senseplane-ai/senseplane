@@ -7,15 +7,21 @@
 // owners make and change them; everyone in the workspace sees them and their
 // runs, each step with its status, timing and error. Every step can also be
 // edited and joined from the panel beside the canvas, by keyboard.
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { Channel, Source, Webhook, Workflow, WorkflowRun } from "senseplane";
 import { ApiError, errorText } from "./api";
 import { type PageProps, Confirm, CopyButton, ErrorNote, Header, MultiChips, Switch, Tabs, Unavailable, can, ctxOf, fmtTime, roleNote, useInterval, useLoad, useRole, useSources } from "./kit";
-import { WorkflowCanvas } from "./workflows/WorkflowCanvas";
+import type { CanvasProps } from "./workflows/WorkflowCanvas";
 import {
   BRANCHING, type Definition, type Edge, type Kind, LIMITS, PALETTE, type Step, type Trigger, blankDefinition, connect, defaultTrigger, kindLabel,
   newStep, removeStep, statusWord, stepSummary, triggerSummary, unreachable,
 } from "./workflows/model";
+
+// The canvas (React Flow) loads with the page that needs it, not with the console.
+const LazyCanvas = lazy(() => import("./workflows/WorkflowCanvas").then((m) => ({ default: m.WorkflowCanvas })));
+const Canvas = (props: CanvasProps) => (
+  <Suspense fallback={<div className="wf-canvas" role="figure" aria-label={props.label} aria-busy="true" />}><LazyCanvas {...props} /></Suspense>
+);
 
 const POLL_MS = 3000;
 const busy = (r: { status: string }) => r.status === "queued" || r.status === "running" || r.status === "waiting";
@@ -176,7 +182,7 @@ function Editor({ p, draft, workflow, editable, onSaved, onDeleted, all, hooks, 
               <button key={k.kind} type="button" className="adm-btn adm-btn-sm" title={k.hint} disabled={!editable} onClick={() => add(k.kind)}>Add {k.label.toLowerCase()}</button>
             ))}
           </div>
-          <WorkflowCanvas def={def} label="Workflow canvas" selected={selected} onSelect={setSelected} name={name_} targetName={targetName}
+          <Canvas def={def} label="Workflow canvas" selected={selected} onSelect={setSelected} name={name_} targetName={targetName}
             {...(editable ? { onChange: setDef, onRefuse: setNote } : {})} />
           <ol className="adm-card wf-run-steps" aria-label="Steps">
             <li><button type="button" className="adm-link" onClick={() => setSelected("trigger")}>Trigger</button><span className="adm-small adm-muted">start</span><span className="adm-small">{triggerSummary(def.trigger, name_)}</span></li>
@@ -513,7 +519,7 @@ function RunDetail({ run, statuses, name }: { run: WorkflowRun; statuses: Record
         {run.finished_at && <span className="adm-small adm-muted">{took(run.started_at, run.finished_at)}</span>}
       </div>
       {run.error && <p className="adm-error" role="alert">{run.failed_step ? `${run.failed_step}: ` : ""}{run.error}</p>}
-      {run.definition && <div className="wf-canvas-small"><WorkflowCanvas def={run.definition as Definition} statuses={statuses} name={name} label="Run canvas" /></div>}
+      {run.definition && <div className="wf-canvas-small"><Canvas def={run.definition as Definition} statuses={statuses} name={name} label="Run canvas" /></div>}
       <ol className="wf-run-steps" aria-label="Run steps">
         {(run.steps ?? []).map((s) => (
           <li key={s.id}>

@@ -136,7 +136,47 @@ describe("WorkflowsPage", () => {
     expect(within(alert).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["say: Front door has no speaker", "steps not connected to the trigger: tell"]);
     fireEvent.change(within(editor).getByLabelText("Starts"), { target: { value: "webhook" } });
     fireEvent.click(within(editor).getByRole("button", { name: "Save changes" }));
-    expect(await within(editor).findByText("whsec_once")).toBeInTheDocument();
+    expect(within(await screen.findByRole("status", { name: "Hook secret" })).getByText("whsec_once")).toBeInTheDocument();
+  });
+
+  it("keeps a new webhook workflow's secret on screen after it is made", async () => {
+    const made = wf({ id: "wfl_02", name: "From n8n", trigger: { type: "webhook" }, steps: [{ id: "wait", kind: "wait", seconds: 60 }], edges: [{ from: "trigger", to: "wait" }],
+      hook_url: "https://api.test/v1/workflow-hooks/wfl_02", hook_secret_set: true });
+    const { props } = setup(routes({ "POST /workflows": reply(201, { ...made, hook_secret: "whsec_new_once" }) }));
+    render(<WorkflowsPage {...props} />);
+    await screen.findByRole("region", { name: "Workflow Door after dark" });
+    fireEvent.click(screen.getByRole("button", { name: "New workflow" }));
+    const editor = await screen.findByRole("region", { name: "New workflow" });
+    fireEvent.change(within(editor).getByLabelText("Name"), { target: { value: "From n8n" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Front door" }));
+    fireEvent.change(within(editor).getByLabelText("Starts"), { target: { value: "webhook" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Add wait" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Make workflow" }));
+    // The page now shows the new workflow, and the secret with it, once.
+    await screen.findByRole("region", { name: "Workflow From n8n" });
+    const shown = screen.getByRole("status", { name: "Hook secret" });
+    expect(within(shown).getByText("whsec_new_once")).toBeInTheDocument();
+    fireEvent.click(within(shown).getByRole("button", { name: "I've saved it" }));
+    expect(screen.queryByText("whsec_new_once")).toBeNull();
+  });
+
+  it("shows save-time warnings, and lets a speak step say a webhook's input only when ticked", async () => {
+    const hookFlow = { trigger: { type: "webhook" }, steps: [{ id: "say", kind: "speak", source: SRC.front, text: "{{input.text}}" }], edges: [{ from: "trigger", to: "say" }] };
+    const { props, api } = setup(routes({
+      "GET /workflows": page([wf({ ...hookFlow, warnings: ["Front door speaks and its sound events start this workflow: the camera may hear its own speech."] })]),
+      "PATCH /workflows/:id": (r: { body: Record<string, unknown> }) => wf({ ...hookFlow, ...r.body }),
+    }));
+    render(<WorkflowsPage {...props} />);
+    const editor = await screen.findByRole("region", { name: "Workflow Door after dark" });
+    expect(within(editor).getByRole("note", { name: "Warnings" })).toHaveTextContent("may hear its own speech");
+    fireEvent.click(within(within(editor).getByRole("list", { name: "Steps" })).getByRole("button", { name: "say" }));
+    const panel = within(editor).getByRole("complementary", { name: "Step settings" });
+    const box = within(panel).getByLabelText(/Say what the webhook sent/);
+    expect(box).not.toBeChecked();
+    fireEvent.click(box);
+    fireEvent.click(within(editor).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(api.called("PATCH", "/workflows/wfl_01")).toHaveLength(1));
+    expect(api.called("PATCH", "/workflows/wfl_01")[0]!.body.steps[0]).toMatchObject({ id: "say", kind: "speak", allow_input: true });
   });
 
   it("lets viewers look but not change anything", async () => {
@@ -167,6 +207,23 @@ describe("WorkflowsPage", () => {
     await waitFor(() => expect(within(within(detail).getByRole("figure", { name: "Run canvas" })).getByTestId("node-tell").className).toContain("wf-status-failed"), { timeout: 10_000 });
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
     await waitFor(() => expect(api.called("POST", "/workflows/wfl_01/run")).toHaveLength(1));
+  });
+
+  it("cancels a run that is still going", async () => {
+    const waiting = { ...run, status: "waiting", error: null, failed_step: null, finished_at: null, steps: [{ id: "parcel", kind: "ask", status: "waiting", attempts: 1, error: null, output: null }] };
+    const { props, api } = setup(routes({
+      "GET /workflows/:id/runs": page([waiting]),
+      "GET /workflow-runs/:id": waiting,
+      "POST /workflow-runs/:id/cancel": { ...waiting, status: "cancelled", error: "cancelled by user:usr_1", steps: [{ ...waiting.steps[0], status: "skipped" }] },
+    }));
+    render(<WorkflowsPage {...props} />);
+    await screen.findByRole("region", { name: "Workflow Door after dark" });
+    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    const detail = await screen.findByRole("region", { name: "Run" });
+    fireEvent.click(await within(detail).findByRole("button", { name: "Cancel run" }));
+    await waitFor(() => expect(api.called("POST", "/workflow-runs/wfr_01/cancel")).toHaveLength(1));
+    expect(await within(detail).findByText("Cancelled")).toBeInTheDocument();
+    expect(within(detail).queryByRole("button", { name: "Cancel run" })).toBeNull();
   });
 
   it("says plainly when the server has no workflows", async () => {

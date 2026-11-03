@@ -42,6 +42,9 @@ export function WorkflowsPage(p: PageProps) {
   }, [p.apiUrl, p.apiKey]);
   const chats = useLoad(() => p.client.channels.list() as Promise<Channel[]>, [p.apiUrl, p.apiKey]);
   const [sel, setSel] = useState<string | "new" | null>(null);
+  // A hook secret is shown once; kept here so it survives the new workflow's editor giving way to its page.
+  const [secret, setSecret] = useState<{ id: string; value: string } | null>(null);
+  const onSecret = (id: string, value: string) => setSecret({ id, value });
   const current = sel && sel !== "new" ? list.data?.find((w) => w.id === sel) : undefined;
   useEffect(() => {
     if (sel === null && list.data?.length) setSel(list.data[0]!.id);
@@ -74,9 +77,10 @@ export function WorkflowsPage(p: PageProps) {
         <div style={{ flex: "4 1 600px", minWidth: 0 }}>
           {sel === "new" ? (
             <Editor key="new" p={p} draft={{ name: "", enabled: true, sources: [], def: blankDefinition() }} editable={editable} all={sources.list} hooks={hooks.data ?? []} chats={chats.data ?? []}
-              onSaved={(w) => { list.setData((d) => [w, ...(d ?? [])]); setSel(w.id); }} />
+              onSecret={onSecret} onSaved={(w) => { list.setData((d) => [w, ...(d ?? [])]); setSel(w.id); }} />
           ) : current ? (
             <Detail key={current.id} p={p} w={current} editable={editable} all={sources.list} hooks={hooks.data ?? []} chats={chats.data ?? []}
+              secret={secret?.id === current.id ? secret.value : null} onSecret={onSecret} onSecretSeen={() => setSecret(null)}
               onSaved={(w) => list.setData((d) => d?.map((x) => (x.id === w.id ? w : x)))}
               onDeleted={() => { list.setData((d) => d?.filter((x) => x.id !== current.id)); setSel(null); }} />
           ) : <section className="adm-card adm-card-pad"><p className="adm-empty">Pick a workflow, or make a new one.</p></section>}
@@ -88,13 +92,23 @@ export function WorkflowsPage(p: PageProps) {
 
 interface Lists { all: Source[]; hooks: Webhook[]; chats: Channel[] }
 
-function Detail({ p, w, editable, onSaved, onDeleted, ...lists }: { p: PageProps; w: Workflow; editable: boolean; onSaved: (w: Workflow) => void; onDeleted: () => void } & Lists) {
+function Detail({ p, w, editable, onSaved, onDeleted, secret, onSecret, onSecretSeen, ...lists }: {
+  p: PageProps; w: Workflow; editable: boolean; onSaved: (w: Workflow) => void; onDeleted: () => void;
+  secret: string | null; onSecret: (id: string, value: string) => void; onSecretSeen: () => void;
+} & Lists) {
   const [tab, setTab] = useState<"editor" | "runs">("editor");
   return (
     <div className="adm-stack">
+      {secret && (
+        <div className="adm-secret" role="status" aria-label="Hook secret">
+          <p className="adm-small">The hook secret, shown once. Sign each request with it (<code className="adm-mono">Senseplane-Signature</code>, as Senseplane signs its webhooks).</p>
+          <div className="adm-code"><code>{secret}</code><CopyButton text={secret} /></div>
+          <div className="adm-row"><button type="button" className="adm-btn adm-btn-sm" onClick={onSecretSeen}>I've saved it</button></div>
+        </div>
+      )}
       <Tabs label="Editor or runs" value={tab} onChange={setTab} tabs={[{ id: "editor", label: "Editor" }, { id: "runs", label: "Runs" }]} />
       {tab === "editor"
-        ? <Editor p={p} draft={draftOf(w)} workflow={w} editable={editable} onSaved={onSaved} onDeleted={onDeleted} {...lists} />
+        ? <Editor p={p} draft={draftOf(w)} workflow={w} editable={editable} onSaved={onSaved} onDeleted={onDeleted} onSecret={onSecret} {...lists} />
         : <Runs p={p} w={w} editable={editable} all={lists.all} />}
     </div>
   );
@@ -106,8 +120,9 @@ const problemsOf = (e: unknown): string[] => {
   return listed?.length ? listed : [errorText(e)];
 };
 
-function Editor({ p, draft, workflow, editable, onSaved, onDeleted, all, hooks, chats }: {
+function Editor({ p, draft, workflow, editable, onSaved, onDeleted, onSecret, all, hooks, chats }: {
   p: PageProps; draft: Draft; workflow?: Workflow; editable: boolean; onSaved: (w: Workflow) => void; onDeleted?: () => void;
+  onSecret: (id: string, value: string) => void;
 } & Lists) {
   const [name, setName] = useState(draft.name);
   const [enabled, setEnabled] = useState(draft.enabled);
@@ -117,7 +132,6 @@ function Editor({ p, draft, workflow, editable, onSaved, onDeleted, all, hooks, 
   const [problems, setProblems] = useState<string[]>([]);
   const [note, setNote] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [secret, setSecret] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const names = useMemo(() => new Map(all.map((s) => [s.id, s.name])), [all]);
   const name_ = (id: string) => names.get(id) ?? id;
@@ -145,7 +159,7 @@ function Editor({ p, draft, workflow, editable, onSaved, onDeleted, all, hooks, 
     try {
       const body = { name: name.trim(), enabled, sources: srcs, ...def };
       const out = workflow ? await p.client.workflows.update(workflow.id, body) : await p.client.workflows.create(body);
-      if (out.hook_secret) setSecret(out.hook_secret);
+      if (out.hook_secret) onSecret(out.id, out.hook_secret);
       setNote("Saved.");
       onSaved(out);
     } catch (e) {
@@ -171,7 +185,7 @@ function Editor({ p, draft, workflow, editable, onSaved, onDeleted, all, hooks, 
         </fieldset>
         <TriggerFields trigger={def.trigger} editable={editable} cameras={chosen} onChange={(t) => setDef((d) => ({ ...d, trigger: t }))} />
         {workflow?.hook_url && def.trigger.type === "webhook" && (
-          <HookInfo p={p} w={workflow} editable={editable} onSecret={setSecret} />
+          <HookInfo p={p} w={workflow} editable={editable} onSecret={(v) => onSecret(workflow.id, v)} />
         )}
       </div>
 
@@ -212,12 +226,11 @@ function Editor({ p, draft, workflow, editable, onSaved, onDeleted, all, hooks, 
           <ul className="wf-problems">{problems.map((x) => <li key={x}>{x}</li>)}</ul>
         </div>
       )}
-      {secret && (
-        <div className="adm-secret" role="status">
-          <p className="adm-small">The hook secret, shown once. Sign each request with it (<code className="adm-mono">Senseplane-Signature</code>, as Senseplane signs its webhooks).</p>
-          <div className="adm-code"><code>{secret}</code><CopyButton text={secret} /></div>
+      {workflow?.warnings?.length ? (
+        <div className="adm-card adm-card-pad" role="note" aria-label="Warnings">
+          <ul className="wf-problems" style={{ color: "var(--warn)" }}>{workflow.warnings.map((x) => <li key={x}>{x}</li>)}</ul>
         </div>
-      )}
+      ) : null}
       <div className="adm-row">
         <button type="button" className="adm-btn adm-btn-primary" disabled={!editable || saving || !name.trim() || !srcs.length || !def.steps.length} onClick={() => void save()}>
           {saving ? "Saving…" : workflow ? "Save changes" : "Make workflow"}
@@ -396,6 +409,12 @@ function StepFields({ step, def, editable, cameras, hooks, chats, name, onChange
           <label className="adm-label"><span>Say</span>
             <textarea className="adm-textarea" disabled={d} value={step.text} maxLength={500} onChange={(e) => onChange({ ...step, text: e.target.value })} />
           </label>
+          {def.trigger.type === "webhook" && (
+            <label className="adm-check">
+              <input type="checkbox" disabled={d} checked={!!step.allow_input} onChange={(e) => onChange({ ...step, allow_input: e.target.checked || undefined })} />
+              <span>Say what the webhook sent ({"{{input.…}}"}) aloud</span>
+            </label>
+          )}
           <p className="adm-small adm-muted">Played after a chime, in the server's synthetic voice; at most 30 seconds. Say it is an automated message. Never repeated if it might have played.</p>
         </>
       )}
@@ -502,7 +521,9 @@ function Runs({ p, w, editable, all }: { p: PageProps; w: Workflow; editable: bo
           {!runs.loading && !runs.data?.length && <p className="adm-empty">{runs.error ? errorText(runs.error) : "No runs yet."}</p>}
         </section>
         <section aria-label="Run" className="adm-card adm-ev-detail" style={{ flex: "2 1 420px" }}>
-          {run ? <RunDetail run={run} statuses={statuses} name={(id) => names.get(id) ?? id} /> : <p className="adm-empty">Pick a run to see each step.</p>}
+          {run ? <RunDetail run={run} statuses={statuses} name={(id) => names.get(id) ?? id}
+            {...(editable && busy(run) ? { onCancel: () => void p.client.workflows.cancelRun(run.id).then((r) => { detail.setData(() => r); runs.setData((d) => d?.map((x) => (x.id === r.id ? r : x))); }, setErr) } : {})} />
+            : <p className="adm-empty">Pick a run to see each step.</p>}
         </section>
       </div>
     </div>
@@ -511,12 +532,13 @@ function Runs({ p, w, editable, all }: { p: PageProps; w: Workflow; editable: bo
 
 const took = (a?: string | null, b?: string | null) => (a && b ? `${Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 100) / 10)} s` : "");
 
-function RunDetail({ run, statuses, name }: { run: WorkflowRun; statuses: Record<string, string>; name: (id: string) => string }) {
+function RunDetail({ run, statuses, name, onCancel }: { run: WorkflowRun; statuses: Record<string, string>; name: (id: string) => string; onCancel?: () => void }) {
   return (
     <div className="adm-stack" style={{ padding: 14 }}>
       <div className="adm-row" style={{ justifyContent: "space-between" }}>
         <span><strong>{statusWord[run.status] ?? run.status}</strong> <span className="adm-small adm-muted">· started by {run.trigger.type}{run.trigger.type === "manual" && run.trigger.by ? ` (${run.trigger.by})` : ""} at {fmtTime(run.created_at)}</span></span>
         {run.finished_at && <span className="adm-small adm-muted">{took(run.started_at, run.finished_at)}</span>}
+        {onCancel && <button type="button" className="adm-btn adm-btn-sm adm-btn-danger" onClick={onCancel}>Cancel run</button>}
       </div>
       {run.error && <p className="adm-error" role="alert">{run.failed_step ? `${run.failed_step}: ` : ""}{run.error}</p>}
       {run.definition && <div className="wf-canvas-small"><Canvas def={run.definition as Definition} statuses={statuses} name={name} label="Run canvas" /></div>}

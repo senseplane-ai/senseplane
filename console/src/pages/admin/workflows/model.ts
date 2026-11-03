@@ -155,5 +155,5 @@ export function layout(def: Definition): Record<string, Position> {
 
 /** What a run's step statuses look like as words. */
 export const statusWord: Record<string, string> = {
-  queued: "Queued", running: "Running", waiting: "Waiting", succeeded: "Done", failed: "Failed", skipped: "Skipped",
+  queued: "Queued", running: "Running", waiting: "Waiting", succeeded: "Done", failed: "Failed", skipped: "Skipped", cancelled: "Cancelled",
 };

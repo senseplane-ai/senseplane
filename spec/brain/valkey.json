@@ -881,6 +881,7 @@
                   "delta",
                   "moment",
                   "suggested_watch",
+                  "story",
                   "done",
                   "error",
                   "tool"
@@ -947,11 +948,15 @@
               },
               "name": {
                 "type": "string",
-                "description": "tool: search_history, list_events, event_snapshot, query_activity, check_history or read_sensors"
+                "description": "tool: search_history, list_events, event_snapshot, query_activity, check_history, read_sensors or make_story"
               },
               "args": {
                 "type": "object",
                 "description": "tool"
+              },
+              "story_id": {
+                "type": "string",
+                "description": "story: a story the answer made (make_story, ADR 0070); the API checks it is the caller's"
               }
             }
           },
@@ -971,7 +976,8 @@
                     "event_snapshot",
                     "query_activity",
                     "check_history",
-                    "read_sensors"
+                    "read_sensors",
+                    "make_story"
                   ]
                 },
                 "args": {
@@ -1016,6 +1022,17 @@
                     "sense": {
                       "type": "string",
                       "description": "read_sensors: only this sense (contact, temperature, ...)"
+                    },
+                    "moments": {
+                      "type": "array",
+                      "description": "make_story: [{event}] or [{source, from, to}], within the conversation's sources (ADR 0070)",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "make_story"
                     }
                   }
                 }

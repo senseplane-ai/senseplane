@@ -46,6 +46,7 @@ class Tools(Protocol):
     def query_activity(self, args: dict) -> dict: ...
     def check_history(self, args: dict) -> dict: ...
     def read_sensors(self, args: dict) -> dict: ...
+    def make_story(self, args: dict) -> dict: ...
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -107,6 +108,11 @@ TOOL_SPECS = [
         "Slower, checks at most 10 moments, and only covers moments a person, vehicle, animal, object or sound was detected.",
         {"instruction": {"type": "string", "description": "What to look for, as a watch would be written: 'a person taking pills at the kitchen table'"},
          "sources": _SOURCES, "from": _TIME, "to": _TIME}, ["instruction"]),
+    _fn("make_story", "Make one video (a story) of moments you found, across cameras in time order, each labelled with its camera and time "
+        "(\"show me how the cat got out\"). Find the moments first (search_history, list_events, query_activity timeline), then pass their refs. "
+        "At most 20 moments.",
+        {"refs": {"type": "array", "items": {"type": "string"}, "description": "Refs of events or activities, e.g. [\"m1\", \"m3\"]"},
+         "title": {"type": "string", "description": "A short title, e.g. 'How the cat got out'"}}, ["refs"]),
     _fn("list_sources", "List the sources you may use: name, id, location, status and senses.", {}),
     _fn("propose_watch", "Suggest a watch when the user wants to know about something in the future (e.g. 'tell me if…', 'is the door left open at night?'). The user decides whether to turn it on.",
         {"instruction": {"type": "string", "description": "One plain-language sentence, e.g. 'Tell me if a package is left at the front door'"}, "sources": _SOURCES},
@@ -309,6 +315,27 @@ class Session:
                 return {"error": out["error"]}
             ref = self.add_ref(Ref("look", src["id"], out["at"], out.get("answer") or "Live look", snapshot_jpeg_b64=out.get("jpeg_b64")))
             return {"ref": ref, "source": src["name"], "time": self.local(out["at"]), "saw": out.get("answer", "")}
+        if name == "make_story":
+            # Recorded moments only (events and activity spans); a live look has no recording to put in a story.
+            moments, seen = [], set()
+            for key in args.get("refs") or []:
+                r = self.refs.get(str(key).strip())
+                if r is None or key in seen:
+                    continue
+                seen.add(key)
+                if r.kind == "event" and r.event_id:
+                    moments.append({"event": r.event_id})
+                elif r.kind == "range" and r.until:
+                    moments.append({"source": r.source_id, "from": r.at, "to": r.until})
+            if not moments:
+                return {"error": "pass the refs of events or activities from search_history, list_events or query_activity"}
+            self.status("Making a story of those moments…")
+            out = self.tools.make_story({"moments": moments[:20], **({"title": str(args["title"])[:200]} if args.get("title") else {})})
+            if out.get("error"):
+                return {"error": out["error"]}
+            self.emit({"type": "story", "story_id": out.get("story_id")})
+            return {"ok": True, "pieces": out.get("pieces"),
+                    "note": "The story is being made and is shown to the user with your answer; it plays in a minute or so. Say so in one line."}
         if name == "list_sources":
             return {"sources": [{"id": s["id"], "name": s["name"], "location": s.get("location"), "type": s.get("type"),
                                  "status": s.get("status"), "senses": s.get("senses", []), "can_look": bool(s.get("can_look"))} for s in self.sources]}
@@ -402,6 +429,7 @@ class Session:
             "- Mention only results that answer the question; leave out unrelated ones (a vehicle when asked about people).\n"
             "- Never identify people by name or guess who someone is.\n"
             "- If the user wants to know about something in future (an ongoing need), call propose_watch once.\n"
+            "- To show how something happened across cameras (\"show me how the cat got out\"), find the moments, then call make_story with their refs.\n"
             "- Be brief: a sentence or two, or a short list."
         )
 

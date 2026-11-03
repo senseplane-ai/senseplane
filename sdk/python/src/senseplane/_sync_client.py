@@ -49,9 +49,10 @@ ConversationEvent = (
     | m.ConversationStreamEvent4
     | m.ConversationStreamEvent5
     | m.ConversationStreamEvent6
+    | m.ConversationStreamEvent7
 )
-"""One event of a streamed answer: status, delta, moment, suggested_watch, then done (or error)."""
-_CONVERSATION_EVENTS = frozenset({"status", "delta", "moment", "suggested_watch", "done", "error"})
+"""One event of a streamed answer: status, delta, moment, suggested_watch, story, then done (or error)."""
+_CONVERSATION_EVENTS = frozenset({"status", "delta", "moment", "suggested_watch", "story", "done", "error"})
 
 __all__ = ["Senseplane", "SenseplaneDemo"]
 

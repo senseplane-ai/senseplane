@@ -34,7 +34,7 @@ export type Device = S["Device"];
 export type DeviceAction = S["DeviceAction"];
 export type DeviceCommand = S["DeviceCommand"];
 export type SuggestedWatch = S["SuggestedWatch"];
-/** One event of a streamed answer: status, delta, moment, suggested_watch, then done (or error). */
+/** One event of a streamed answer: status, delta, moment, suggested_watch, story, then done (or error). */
 export type ConversationStreamEvent = S["ConversationStreamEvent"];
 export type LiveViewSession = S["LiveViewSession"];
 export type Destination = S["Destination"];

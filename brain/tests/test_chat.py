@@ -61,6 +61,24 @@ class FakeTools:
         self.calls.append(("view_event", {"event_id": event_id, "question": question}))
         return {"answer": "A person in a red coat holding a black phone."}
 
+    def make_story(self, args):
+        self.calls.append(("make_story", args))
+        return {"story_id": "sty_1", "status": "queued", "pieces": [{"source": "Front door", "from": HIT["at"], "to": HIT["at"]}]}
+
+
+def test_makes_a_story_of_the_moments_it_found():
+    cat = {**HIT, "event_id": "evt_cat", "type": "detection.animal", "summary": "A cat by the cat flap."}
+    model = scripted(
+        [("tool", "search_history", {"query": "the cat"})],
+        [("tool", "make_story", {"refs": ["m1", "m9"], "title": "How the cat got out"})],
+        [("delta", "Here is how the cat got out [m1]; the story is on its way.")],
+    )
+    tools = FakeTools(results=[cat])
+    content, events = run({**REQ, "question": "Show me how the cat got out"}, model, tools)
+    assert ("make_story", {"moments": [{"event": "evt_cat"}], "title": "How the cat got out"}) in tools.calls  # m9 doesn't exist
+    assert {"type": "story", "story_id": "sty_1"} in events
+    assert content.startswith("Here is how the cat got out [1]")
+
 
 def scripted(*turns):
     """A model that plays one turn per call: a list of ("delta", text) / ("tool", name, args)."""

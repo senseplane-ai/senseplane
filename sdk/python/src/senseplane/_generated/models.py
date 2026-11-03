@@ -771,6 +771,18 @@ class Clip(BaseModel):
     playback_expires_at: AwareDatetime | None = None
 
 
+class StoryRef(BaseModel):
+    """
+    A story an answer made (GET /stories/{id} for it).
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    id: str
+
+
 class StoryMoment(BaseModel):
     """
     An event (from a little before it to a little after it ended), or a source with from and to.
@@ -2995,6 +3007,19 @@ class ConversationStreamEvent4(BaseModel):
     data: SuggestedWatch
 
 
+class ConversationStreamEvent7(BaseModel):
+    """
+    One Server-Sent Event: `event:` is the name below and `data:` its JSON.
+    """
+
+    model_config = ConfigDict(
+        extra='allow',
+        populate_by_name=True,
+    )
+    event: Literal['story']
+    data: StoryRef
+
+
 class WatchTestRequest(BaseModel):
     model_config = ConfigDict(
         extra='allow',
@@ -4031,6 +4056,7 @@ class ConversationStreamEvent(
         | ConversationStreamEvent4
         | ConversationStreamEvent5
         | ConversationStreamEvent6
+        | ConversationStreamEvent7
     ]
 ):
     root: (
@@ -4040,6 +4066,7 @@ class ConversationStreamEvent(
         | ConversationStreamEvent4
         | ConversationStreamEvent5
         | ConversationStreamEvent6
+        | ConversationStreamEvent7
     )
     """
     One Server-Sent Event: `event:` is the name below and `data:` its JSON.

@@ -655,6 +655,9 @@ class Worker:
             def read_sensors(self, args):
                 return call("read_sensors", args)
 
+            def make_story(self, args):
+                return call("make_story", args)
+
         complete = (lambda messages, tools: self.model.chat(messages, tools, meta)) if self.model else None
 
         def run():

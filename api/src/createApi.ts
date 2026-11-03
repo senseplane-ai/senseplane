@@ -52,8 +52,8 @@ import {
 import { type TelegramConfig, TelegramBot, telegramConfigFromEnv } from "./telegram.js";
 import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
-import { registerStoryRoutes } from "./routes/stories.js";
-import { startStoryWorker } from "./stories.js";
+import { makeStory, registerStoryRoutes } from "./routes/stories.js";
+import { startStoryWorker, toStory } from "./stories.js";
 import { registerFollowRoutes } from "./routes/follows.js";
 import { startFollowWorker } from "./follow.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
@@ -444,7 +444,11 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   });
   registerEventRoutes(app, { data, urls: eventUrls });
   const watchRoutes = registerWatchRoutes(app, { data, bus, storage, urls: eventUrls });
-  registerConversationRoutes(app, { data, bus, storage, urls: eventUrls, checkHistory: watchRoutes.test });
+  registerConversationRoutes(app, {
+    data, bus, storage, urls: eventUrls, checkHistory: watchRoutes.test,
+    // The chat's make_story (ADR 0070): the same checks as POST /v1/stories.
+    ...(storage ? { makeStory: async (req, input) => { const out = await makeStory({ data, bus, audit }, req, input); return toStory(out.story, out.pieces); } } : {}),
+  });
   registerInboxRoutes(app, { data, urls: eventUrls });
   registerActivityRoutes(app, { data });
   // The media driver (ADR 0049): rooms, feeds and viewers through the control API, callbacks back here.

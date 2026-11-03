@@ -189,6 +189,20 @@ describe("conversations", () => {
     expect([...objects.keys()].filter((k) => k.includes("/chat-"))).toHaveLength(0);
   });
 
+  it("makes a story of the moments an answer found (\"show me how the cat got out\")", async () => {
+    script = async (_p, on) => {
+      const made = (await on.tool("make_story", { moments: [{ event: doorEvent }, { source: "src_elsewhere", from: "2026-10-16T10:00:00Z", to: "2026-10-16T10:01:00Z" }], title: "At the door" })) as Record<string, any>;
+      await on.event({ type: "story", story_id: made.story_id });
+      await on.event({ type: "done", content: `story ${made.story_id} ${made.status} with ${made.pieces?.length} piece` });
+    };
+    const c = (await call(owner, "POST", "/v1/conversations")).json();
+    const msg = (await call(owner, "POST", `/v1/conversations/${c.id}/messages`, { content: "Show me who came to the door" })).json();
+    const [, id, status, n] = msg.content.match(/^story (sty_\w+) (\w+) with (\d) piece$/)!;
+    expect([status, n]).toEqual(["queued", "1"]); // the source outside the conversation was dropped
+    const story = (await call(owner, "GET", `/v1/stories/${id}`)).json();
+    expect(story).toMatchObject({ title: "At the door", pieces: [{ source_id: door, event_id: doorEvent }] });
+  });
+
   it("an agent key sees only its own conversations and only its granted sources", async () => {
     script = async (p, on) => {
       const found = (await on.tool("search_history", { query: "person", sources: [yard] })) as { results: unknown[] };

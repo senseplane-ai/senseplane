@@ -71,6 +71,8 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
   data: DataAccess; bus?: ApiBus; storage?: ObjectStorage; urls: (req: FastifyRequest) => EventUrls;
   /** Checking history after the fact (the watch backtest, ADR 0057), for the chat's check_history tool. */
   checkHistory?: (req: FastifyRequest, body: { instruction?: string; watch_id?: string; sources?: string[]; from: string; to: string; max_checks?: number }) => Promise<Record<string, unknown>>;
+  /** A story of moments the answer found (ADR 0070), for the chat's make_story tool. */
+  makeStory?: (req: FastifyRequest, input: { title?: string; moments: { event?: string; source?: string; from?: string; to?: string }[] }) => Promise<{ id: string; status: string; pieces: { source_name: string; from: string; to: string }[] }>;
 }) {
   /** Account keys see the account's conversations; an agent key only the ones it started. */
   const mine = (req: FastifyRequest, s: AccountScope) => {
@@ -349,8 +351,24 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
             return { error: err instanceof ApiError ? err.message : "the check could not run" };
           }
         }
+        if (name === "make_story" && deps.makeStory) {
+          // Only this conversation's sources, and the caller's grants on every piece (checked by the story itself).
+          const moments = (Array.isArray(args.moments) ? args.moments as Record<string, unknown>[] : []).slice(0, 20)
+            .map((m) => typeof m.event === "string" ? { event: m.event } : { source: String(m.source ?? ""), from: String(m.from ?? ""), to: String(m.to ?? "") })
+            .filter((m) => "event" in m || allowed.has(m.source));
+          if (!moments.length) return { error: "no moments to make a story of" };
+          try {
+            const story = await deps.makeStory(req, { moments, ...(typeof args.title === "string" ? { title: args.title.slice(0, 200) } : {}) });
+            madeStories.add(story.id);
+            return { story_id: story.id, status: story.status, pieces: story.pieces.map((p) => ({ source: p.source_name, from: p.from, to: p.to })) };
+          } catch (err) {
+            return { error: err instanceof ApiError ? err.message : "the story could not be made" };
+          }
+        }
         return { error: `unknown tool ${name}` };
       };
+      /** Stories this answer made: the only ones a `story` event may name. */
+      const madeStories = new Set<string>();
 
       const event = async (e: { type: string } & Record<string, unknown>) => {
         if (e.type === "status" || e.type === "delta") {
@@ -370,6 +388,8 @@ export function registerConversationRoutes(app: FastifyInstance, deps: {
             suggested = { instruction, sources: [...new Set(sources)] };
             send("suggested_watch", suggested);
           }
+        } else if (e.type === "story") {
+          if (typeof e.story_id === "string" && madeStories.has(e.story_id)) send("story", { id: e.story_id });
         } else if (e.type === "done") {
           answer = typeof e.content === "string" ? e.content : "";
         } else if (e.type === "error") {

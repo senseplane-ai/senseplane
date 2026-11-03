@@ -3096,7 +3096,7 @@ paths:
         Every model call counts as an AI check (`ai_checks`, detail `chat`).
         With `Accept: text/event-stream` the answer streams as Server-Sent
         Events: `status` `{text}` while it works, `delta` `{text}` as it writes,
-        `moment` (a Moment) when it first cites one, `suggested_watch`
+        `moment` (a Moment) when it first cites one, `story` `{id}` when it made a story (ADR 0070), `suggested_watch`
         `{instruction, sources}`, then `done` `{message}` with the stored
         assistant Message, or `error` `{error}` (the error envelope's body).
         Otherwise the response is the assistant Message as JSON.
@@ -3197,6 +3197,12 @@ components:
     Watch: {$ref: './schemas/watch.json'}
     Event: {$ref: './schemas/event.json'}
     Clip: {$ref: './schemas/clip.json'}
+    StoryRef:
+      type: object
+      required: [id]
+      description: A story an answer made (GET /stories/{id} for it).
+      properties:
+        id: {type: string}
     StoryCreate:
       type: object
       additionalProperties: false
@@ -4258,6 +4264,11 @@ components:
           properties:
             event: {const: error}
             data: {$ref: '#/components/schemas/Error'}
+        - type: object
+          required: [event, data]
+          properties:
+            event: {const: story}
+            data: {$ref: '#/components/schemas/StoryRef'}
     # --- end Conversations -----------------------------------------------------
     # --- watch destinations (ADR 0043) -----------------------------------------
     Destination: {$ref: './schemas/destination.json'}

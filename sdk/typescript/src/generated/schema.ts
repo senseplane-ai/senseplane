@@ -2016,7 +2016,7 @@ export interface paths {
         put?: never;
         /**
          * Ask a question; the answer cites moments from history or a live look
-         * @description The brain searches history, lists events, looks at cameras now and may suggest a watch, using only the sources and senses the key is granted. Every model call counts as an AI check (`ai_checks`, detail `chat`). With `Accept: text/event-stream` the answer streams as Server-Sent Events: `status` `{text}` while it works, `delta` `{text}` as it writes, `moment` (a Moment) when it first cites one, `suggested_watch` `{instruction, sources}`, then `done` `{message}` with the stored assistant Message, or `error` `{error}` (the error envelope's body). Otherwise the response is the assistant Message as JSON.
+         * @description The brain searches history, lists events, looks at cameras now and may suggest a watch, using only the sources and senses the key is granted. Every model call counts as an AI check (`ai_checks`, detail `chat`). With `Accept: text/event-stream` the answer streams as Server-Sent Events: `status` `{text}` while it works, `delta` `{text}` as it writes, `moment` (a Moment) when it first cites one, `story` `{id}` when it made a story (ADR 0070), `suggested_watch` `{instruction, sources}`, then `done` `{message}` with the stored assistant Message, or `error` `{error}` (the error envelope's body). Otherwise the response is the assistant Message as JSON.
          */
         post: operations["sendMessage"];
         delete?: never;
@@ -2059,6 +2059,10 @@ export interface components {
         Watch: components["schemas"]["watch"];
         Event: components["schemas"]["event"];
         Clip: components["schemas"]["clip"];
+        /** @description A story an answer made (GET /stories/{id} for it). */
+        StoryRef: {
+            id: string;
+        };
         /** @description Moments, a search, or both. */
         StoryCreate: {
             title?: string;
@@ -3133,6 +3137,10 @@ export interface components {
             /** @constant */
             event: "error";
             data: components["schemas"]["error"];
+        } | {
+            /** @constant */
+            event: "story";
+            data: components["schemas"]["StoryRef"];
         };
         Destination: components["schemas"]["destination"];
         WatchSchedule: components["schemas"]["watch-schedule"];

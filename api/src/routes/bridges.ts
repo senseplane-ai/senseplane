@@ -271,7 +271,7 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
         properties: {
           entity_id: { type: "string", minLength: 3, maxLength: 200, pattern: "^[a-z0-9_]+\\.[a-z0-9_]+$" }, name: { type: "string", maxLength: 200 },
           area: { type: "string", maxLength: 120 }, device_class: { type: "string", maxLength: 64 },
-          sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40 }, kind: { enum: ["number", "state", "event"] },
+          sense: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio", "sensors", "control"] } }, kind: { enum: ["number", "state", "event"] },
           // What the box can do to it (ADR 0067); the API offers only what the device's type allows.
           controls: { type: "array", maxItems: 20, items: { type: "string", maxLength: 40 } },
         },

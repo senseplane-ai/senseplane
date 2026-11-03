@@ -16,7 +16,9 @@ export const UNIT_SYMBOLS: Readonly<Record<string, string>> = catalog.units;
 
 /** Camera senses; every other sense is a sensor's. */
 export const MEDIA_SENSES = new Set(["video", "audio"]);
-export const isSensorSense = (sense: string) => !MEDIA_SENSES.has(sense);
+export const isSensorSense = (sense: string) => !MEDIA_SENSES.has(sense) && !NOT_READINGS.has(sense);
+/** Grant words, never measured: `sensors` (every sensor sense) and `control` (switching devices, ADR 0067). */
+export const NOT_READINGS = new Set(["sensors", "control"]);
 
 /** A reading as pushed (POST /v1/sources/{id}/readings). */
 export interface ReadingInput {
@@ -68,6 +70,7 @@ const bad = (msg: string) => new ApiError(400, "validation_failed", msg);
 /** Checks one pushed reading against the catalog; throws validation_failed. */
 export function cleanReading(r: ReadingInput, now = new Date()): CleanReading {
   if (MEDIA_SENSES.has(r.sense)) throw bad(`${r.sense} is a camera sense, not a reading`);
+  if (NOT_READINGS.has(r.sense)) throw bad(`${r.sense} is a permission, not a reading`);
   const known = SENSES.get(r.sense);
   const kind: Kind = r.kind ?? known?.kind ?? (typeof r.value === "boolean" ? "state" : r.value === undefined ? "event" : "number");
   if (known && known.kind !== kind) throw bad(`${r.sense} is a${known.kind === "event" ? "n" : ""} ${known.kind} reading`);

@@ -99,7 +99,7 @@ const createBody = {
     type: { type: "string", enum: ["browser", "sensor", "whip", "rtsp"] },
     record_audio: { type: "boolean", default: false },
     retention_days: { type: ["integer", "null"], minimum: 1 },
-    senses: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio"] } } },
+    senses: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio", "sensors", "control"] } } },
     rtsp_url: { type: "string", maxLength: 2048, pattern: "^rtsps?://" },
     bridge_id: { type: "string", minLength: 1, maxLength: 64 },
   },

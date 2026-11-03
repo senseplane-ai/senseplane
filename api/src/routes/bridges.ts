@@ -507,6 +507,19 @@ export interface BridgeAdminDeps {
 
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
 
+/** A bridges row as the console's list shows it. */
+export type BridgeRow = { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null; matter_connected: boolean | null; matter_nodes: number | null; cameras_found: number | null; mqtt_publish?: boolean };
+
+/** A bridge as the API shows it (spec Bridge). */
+export const toBridge = (b: BridgeRow) => ({
+  id: b.id, name: b.name, version: b.version, created_at: iso(b.created_at), last_seen_at: iso(b.last_seen_at),
+  online: !!b.last_seen_at && Date.now() - new Date(b.last_seen_at).getTime() < BRIDGE_SILENT_SECONDS * 1000,
+  home_assistant: b.home_connected === null ? null : { connected: b.home_connected, entities: b.home_entities ?? 0, sending: b.home_sending ?? 0 },
+  matter: b.matter_connected === null ? null : { connected: b.matter_connected, nodes: b.matter_nodes ?? 0 },
+  cameras_found: b.cameras_found,
+  mqtt_publish: b.mqtt_publish ?? false,
+});
+
 /**
  * The console's side of bridges (ADR 0061): add a bridge (for a Home
  * Assistant box, with or without cameras), list them, and choose which of a
@@ -514,14 +527,6 @@ const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOStrin
  * the sensor source of its room, made on first use.
  */
 export function registerBridgeAdminRoutes(app: FastifyInstance, deps: BridgeAdminDeps) {
-  const toBridge = (b: { id: string; name: string; version: string | null; last_seen_at: Date | null; created_at: Date; home_connected: boolean | null; home_entities: number | null; home_sending: number | null; matter_connected: boolean | null; matter_nodes: number | null; cameras_found: number | null }) => ({
-    id: b.id, name: b.name, version: b.version, created_at: iso(b.created_at), last_seen_at: iso(b.last_seen_at),
-    online: !!b.last_seen_at && Date.now() - new Date(b.last_seen_at).getTime() < BRIDGE_SILENT_SECONDS * 1000,
-    home_assistant: b.home_connected === null ? null : { connected: b.home_connected, entities: b.home_entities ?? 0, sending: b.home_sending ?? 0 },
-    matter: b.matter_connected === null ? null : { connected: b.matter_connected, nodes: b.matter_nodes ?? 0 },
-    cameras_found: b.cameras_found,
-  });
-
   app.post<{ Body: { name: string } }>(
     "/v1/bridges",
     { schema: { body: { type: "object", additionalProperties: false, required: ["name"], properties: { name: { type: "string", minLength: 1, maxLength: 120 } } } } },

@@ -28,6 +28,7 @@ import { republishWatches, watchKv } from "./routes/watches.js";
 import { demoConfig, registerDemoRoutes, sweepDemos } from "./routes/demo.js";
 import { registerSourceConfigRoutes } from "./routes/source-config.js";
 import { registerReadingsWebhook } from "./routes/readings-webhook.js";
+import { registerBridgeOutputRoutes } from "./routes/bridge-outputs.js";
 import { startClipWorker, startWebhookWorker } from "./workers.js";
 import type { Source } from "./data/access.js";
 import { createIngestSigner } from "./ingest.js";
@@ -525,6 +526,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   });
   registerBridgeAdminRoutes(app, { data, maxSources: async (id) => (await quotaFor(id)).maxSources, maxResolution: maxResolutionFor, audit,
     ...(mediaDriver?.disconnect ? { disconnect: (id: string) => mediaDriver.disconnect!(id, "removed") } : {}) });
+  // MQTT out through a box, only when the account turns it on for that box (ADR 0071).
+  registerBridgeOutputRoutes(app, { data, audit });
   registerPairingRoutes(app, { data, audit, ...(auth.consoleUrls[0] ? { consoleUrl: auth.consoleUrls[0] } : {}) });
   // Switching devices, only when a person asks (ADR 0067); requests waiting for a person also go to linked chats.
   const devices = registerDeviceRoutes(app, { data, audit, ...options.deviceTimings, onConfirmation: (accountId, c, where) => notifyConfirmation(channels, accountId, c, where) });

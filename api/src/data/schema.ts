@@ -118,6 +118,8 @@ export interface BridgesTable {
   matter_nodes: ColumnType<number | null, number | null | undefined, number | null>;
   /** How many cameras the box lists to pick from (ADR 0063); null when it doesn't look. */
   cameras_found: ColumnType<number | null, number | null | undefined, number | null>;
+  /** Whether the box publishes Senseplane's events to its MQTT broker (ADR 0071); off by default. */
+  mqtt_publish: Generated<boolean>;
 }
 
 /** A camera a box found, on its network (ONVIF) or in Home Assistant (ADR 0063). */

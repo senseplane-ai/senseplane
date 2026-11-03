@@ -46,6 +46,11 @@ ARTEFACTS = {
     "minilm_tokenizer": Artefact("minilm-l6-v2-tokenizer.json",
                                  "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer.json",
                                  "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0", "Apache-2.0"),
+    # DINOv2-small (Meta, Apache 2.0), int8 ONNX export by Xenova, pinned revision: image embeddings for
+    # following an object or a pet across cameras (follow.py, ADR 0070). Never used on people.
+    "dinov2_small": Artefact("dinov2-small-int8.onnx",
+                             "https://huggingface.co/Xenova/dinov2-small/resolve/c2bb04a51fab207c420665f1946016107bffc701/onnx/model_quantized.onnx",
+                             "3afdc8bc63b50558d6e5770f5b799bb82455c2311183a2de43803f343a29d917", "Apache-2.0"),
     # YuNet face detector (Shiqi Yu et al., OpenCV Zoo, MIT), the dynamic-input export, pinned commit.
     # Only for privacy blurring (redact.py, ADR 0068): it finds faces, it does not recognise anyone.
     "yunet": Artefact("face_detection_yunet_2026may.onnx",

@@ -27,7 +27,9 @@ This product depends on third-party software, including:
 The self-host compose bundle runs, unmodified and as separate containers:
 RustFS (Apache License 2.0), PostgreSQL with pgvector (PostgreSQL License),
 Valkey (BSD 3-Clause License). The media image includes an LGPL build of FFmpeg
-(GNU LGPL 2.1+, https://ffmpeg.org), run as a separate process. The optional
+(GNU LGPL 2.1+, https://ffmpeg.org), run as a separate process; so does the API
+image, for stories and object following, built with Cisco's OpenH264 encoder
+(BSD 2-Clause License, https://www.openh264.org, Debian's package). The optional
 observability profile runs the OpenTelemetry Collector Contrib, Jaeger and
 Prometheus (all Apache License 2.0), unmodified.
 
@@ -43,6 +45,9 @@ Models (downloaded at build time, pinned by SHA-256; see brain/src/senseplane_br
 - LPD-YuNet number plate detector (license_plate_detection_lpd_yunet_2023mar.onnx), Copyright (c) 2022
   WATRIX, Apache License 2.0, https://github.com/opencv/opencv_zoo/tree/main/models/license_plate_detection_yunet
   (privacy blurring only)
+- DINOv2-small (dinov2-small-int8.onnx), Copyright (c) Meta Platforms, Inc. and affiliates, Apache
+  License 2.0, https://github.com/facebookresearch/dinov2; int8 ONNX export by Xenova,
+  https://huggingface.co/Xenova/dinov2-small (following objects and pets only, never people)
 The brain also uses ONNX Runtime (MIT), LiteRT / ai-edge-litert (Apache 2.0),
 OpenCV (Apache 2.0, bundles an LGPL FFmpeg), NumPy (BSD), redis-py (MIT).
 

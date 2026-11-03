@@ -112,7 +112,7 @@ WATCH_GAP_S = 60.0  # a watch activity ends this long after its condition last h
 CHAT_EVENTS_TTL_S = 300
 # What this brain can do beyond the base protocol, in its heartbeat: the API sends a request that needs
 # blurring only when every live brain says "blur" (a brain from before blurring would answer it raw).
-FEATURES = ["blur"]
+FEATURES = ["blur", "follow"]  # follow: object following (ADR 0070)
 CHAT_TOOL_TIMEOUT_S = 30
 
 
@@ -176,6 +176,7 @@ class Worker:
         self.model = model
         self.monitors: dict[str, ViewMonitor] = {}
         self.redactor = redactor or Redactor()  # its models load the first time a source asks for blurring
+        self._follower = None  # object following (ADR 0070): its embedder loads on the first request
         self._cpu = (time.process_time(), time.monotonic())
         self.cpu_percent = 0.0
         self.started_at = iso(time.time())
@@ -480,7 +481,8 @@ class Worker:
             if reply_to:
                 await self.r.publish(reply_to, json.dumps(out))
             return
-        fn = {"compile": self.do_compile, "ask": self.do_ask, "embed": self.do_embed, "check": self.do_check, "redact": self.do_redact}.get(method)
+        fn = {"compile": self.do_compile, "ask": self.do_ask, "embed": self.do_embed, "check": self.do_check, "redact": self.do_redact,
+              "follow_reference": self.do_follow_reference, "follow_scan": self.do_follow_scan}.get(method)
         loop = asyncio.get_running_loop()
         # The API's request span is the parent; model calls inside are children.
         with telemetry.tracer().start_as_current_span(f"rpc.brain.{method}", context=parent, kind=telemetry.SpanKind.SERVER,
@@ -536,6 +538,73 @@ class Worker:
         from .embed import MODEL_NAME
 
         return {"vectors": self.embedder.embed(req["texts"]).round(6).tolist(), "model": MODEL_NAME}
+
+    # --- following an object or a pet (ADR 0070) -------------------------------------
+    def follower(self):
+        if self._follower is None:
+            from .follow import Follower, ImageEmbedder
+
+            # The confirm detector when there is one: the person check on the reference must not miss.
+            self._follower = Follower(self.confirm or self.detector, ImageEmbedder(), self.model)
+        return self._follower
+
+    def do_follow_reference(self, req):
+        """The reference for a follow from a box on a frame; refused when it is a person."""
+        from .follow import PersonRefused
+
+        rgb = decode_jpeg(base64.b64decode(req.get("jpeg_b64") or ""))
+        box = req.get("box") or []
+        if rgb is None:
+            return {"error": "bad_image"}
+        if len(box) != 4:
+            return {"error": "bad_box"}
+        h, w = rgb.shape[:2]
+        key = f"{req['account_id']}.{req['source_id']}"
+        try:
+            ref, calls = self.follower().reference(rgb, (box[0] * w, box[1] * h, box[2] * w, box[3] * h), {"account": req["account_id"]},
+                                                   redact=lambda c: self.redact(key, c))
+        except PersonRefused:
+            return {"error": "person"}
+        except ValueError:
+            return {"error": "bad_box"}
+        return {"reference": ref.to_wire(), "model_calls": calls}
+
+    def do_follow_scan(self, req):
+        """Where the reference is in a batch of one camera's frames: the best match per frame, with its confidence."""
+        from .follow import Reference
+
+        frames, times = [], []
+        for f in req.get("frames") or []:
+            rgb = decode_jpeg(base64.b64decode(f.get("jpeg_b64") or ""))
+            if rgb is not None:
+                frames.append(rgb)
+                times.append(f.get("t"))
+        budget = max(0, int(req.get("budget") or 0))
+        key = f"{req['account_id']}.{req['source_id']}"
+        meta = {"account": req["account_id"]}
+        redact = lambda c: self.redact(key, c)  # noqa: E731 - what goes to the model is blurred as the camera asks
+        f = self.follower()
+        calls = 0
+        found = None
+        if req.get("reference"):
+            ref = Reference.from_wire(req["reference"])
+        elif req.get("description"):
+            if f.model is None:
+                return {"error": "no_model"}
+            ref, _, calls = f.find_described(frames, str(req["description"])[:300], budget, meta, redact=redact)
+            if ref is None:
+                return {"sightings": [], "frames_examined": len(frames), "model_calls": calls}
+            found = ref.to_wire()
+        else:
+            return {"error": "no_reference"}
+        sightings, used = f.scan(ref, frames, budget - calls, meta, redact=redact)
+        out = []
+        for s in sightings:
+            h, w = frames[s.index].shape[:2]
+            x1, y1, x2, y2 = s.box
+            out.append({"t": times[s.index], "box": [round(x1 / w, 4), round(y1 / h, 4), round(x2 / w, 4), round(y2 / h, 4)],
+                        "score": round(s.score, 4), "confidence": round(s.confidence, 3), "confirmed": s.confirmed})
+        return {"sightings": out, "frames_examined": len(frames), "model_calls": calls + used, **({"reference": found} if found else {})}
 
     async def run_chat(self, loop, req: dict, parent=None):
         """Runs chat.answer in a thread; its events and tool calls go through the API's lists (spec/brain rpc chat)."""

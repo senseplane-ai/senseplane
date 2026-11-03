@@ -1,0 +1,317 @@
+# Copyright 2026 The Senseplane Authors
+# SPDX-License-Identifier: Apache-2.0
+"""Following an object or a pet across cameras (ADR 0070): "how did this box
+move through the house?". Never a person.
+
+The API reads frames from the recordings and sends them here a camera at a
+time; this finds the reference in them:
+
+- Candidates in each frame: YOLOX detections that are not people (a cat, a
+  dog, a suitcase), and regions that differ from the camera's background
+  (the median of the frames sent), for things YOLOX has no class for, like a
+  cardboard box. Anything mostly inside a person's box is dropped before it
+  is looked at, so nothing here ever describes a person.
+- Each candidate is compared with the reference: DINOv2-small (Meta, Apache
+  2.0, int8 ONNX, 24 MB), which knows shape and texture but was trained to
+  ignore colour, so a colour histogram counts too.
+- Close calls go to the vision model ("is this the same object?"), within the
+  request's budget; strong matches don't.
+
+The reference is checked first: a box on a person (YOLOX), or one the model
+says is a person, is refused. Nothing is kept: the reference's vector goes
+back to the API for the next batch and is dropped when the follow ends."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+import cv2
+import numpy as np
+import onnxruntime as ort
+
+from . import models
+
+Box = tuple[float, float, float, float]  # x1, y1, x2, y2 in frame pixels
+
+# A candidate is the reference from STRONG; between MAYBE and STRONG the model decides (or, without one, it
+# counts from UNCONFIRMED with its score as the confidence). Tuned on the synthetic tests and the fixtures.
+STRONG = 0.82
+MAYBE = 0.68
+UNCONFIRMED = 0.76
+# Appearance (DINOv2) and colour, weighted.
+W_APPEARANCE = 0.6
+W_COLOUR = 0.4
+# A selection is a person when it overlaps a person's box this much (IoU), or sits this much inside one.
+PERSON_IOU = 0.3
+PERSON_INSIDE = 0.6
+# Candidates per frame, and the size range of a region that changed (fraction of the frame's area).
+MAX_CANDIDATES = 8
+MIN_AREA = 0.002
+MAX_AREA = 0.4
+DIFF_THRESHOLD = 28
+CROP_PAD = 0.0  # padding takes in the background, which differs from camera to camera
+SIZE = 224
+MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+class PersonRefused(Exception):
+    """The reference is a person: following people is not something Senseplane does."""
+
+
+def iou(a: Box, b: Box) -> float:
+    ix1, iy1, ix2, iy2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def inside(a: Box, b: Box) -> float:
+    """How much of `a` lies inside `b` (0..1)."""
+    ix1, iy1, ix2, iy2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    area = (a[2] - a[0]) * (a[3] - a[1])
+    return inter / area if area > 0 else 0.0
+
+
+def is_person_box(box: Box, people: list[Box]) -> bool:
+    """A selection or candidate that is (mostly) a person, or holds one."""
+    return any(iou(box, p) >= PERSON_IOU or inside(box, p) >= PERSON_INSIDE or inside(p, box) >= PERSON_INSIDE for p in people)
+
+
+def crop(rgb: np.ndarray, box: Box, pad: float = CROP_PAD) -> np.ndarray:
+    h, w = rgb.shape[:2]
+    x1, y1, x2, y2 = box
+    px, py = (x2 - x1) * pad, (y2 - y1) * pad
+    a, b = max(0, int(x1 - px)), max(0, int(y1 - py))
+    c, d = min(w, int(np.ceil(x2 + px))), min(h, int(np.ceil(y2 + py)))
+    return rgb[b:max(d, b + 1), a:max(c, a + 1)]
+
+
+def colour_signature(rgb: np.ndarray) -> np.ndarray:
+    """An HSV histogram (hue 12 × saturation 4 × value 4) of the middle of a crop (its edges are often background), summing to 1."""
+    h, w = rgb.shape[:2]
+    if h >= 10 and w >= 10:
+        rgb = rgb[h // 10:h - h // 10, w // 10:w - w // 10]
+    hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+    hist = cv2.calcHist([hsv], [0, 1, 2], None, [12, 4, 4], [0, 180, 0, 256, 0, 256]).flatten().astype(np.float32)
+    s = float(hist.sum())
+    return hist / s if s > 0 else hist
+
+
+def colour_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Histogram intersection, 0..1."""
+    return float(np.minimum(a, b).sum())
+
+
+class ImageEmbedder:
+    """DINOv2-small (int8 ONNX): the class token and the mean of the patch tokens, L2-normalised (768 dims)."""
+
+    MODEL = "dinov2_small"
+
+    def __init__(self):
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = int(os.environ.get("FOLLOW_THREADS", "2"))
+        self.session = ort.InferenceSession(str(models.fetch(self.MODEL)), opts, providers=["CPUExecutionProvider"])
+        self.input = self.session.get_inputs()[0].name
+
+    def embed(self, crops: list[np.ndarray]) -> np.ndarray:
+        if not crops:
+            return np.zeros((0, 768), dtype=np.float32)
+        batch = np.stack([self._prep(c) for c in crops])
+        out = []
+        for i in range(0, len(batch), 16):
+            hidden = self.session.run(None, {self.input: batch[i:i + 16]})[0]
+            out.append(np.concatenate([hidden[:, 0], hidden[:, 1:].mean(1)], axis=1))
+        v = np.concatenate(out).astype(np.float32)
+        return v / np.clip(np.linalg.norm(v, axis=1, keepdims=True), 1e-9, None)
+
+    @staticmethod
+    def _prep(rgb: np.ndarray) -> np.ndarray:
+        # Letterboxed to a square so a long object keeps its shape; padded grey like the normalised mean.
+        h, w = rgb.shape[:2]
+        s = SIZE / max(h, w)
+        small = cv2.resize(rgb, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC)
+        sq = np.full((SIZE, SIZE, 3), 124, dtype=np.uint8)
+        y, x = (SIZE - small.shape[0]) // 2, (SIZE - small.shape[1]) // 2
+        sq[y:y + small.shape[0], x:x + small.shape[1]] = small
+        return ((sq.astype(np.float32) / 255.0 - MEAN) / STD).transpose(2, 0, 1)
+
+
+@dataclass
+class Reference:
+    vector: np.ndarray
+    colour: np.ndarray
+    label: str | None  # the detector's class when it has one (cat, dog, suitcase), else None
+    crop: np.ndarray  # for the model's same-object question; never stored
+
+    def to_wire(self) -> dict:
+        ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(self.crop, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        import base64
+
+        return {"vector": self.vector.round(5).tolist(), "colour": self.colour.round(6).tolist(), "label": self.label,
+                "crop_jpeg_b64": base64.b64encode(jpg.tobytes()).decode() if ok else None}
+
+    @staticmethod
+    def from_wire(d: dict) -> "Reference":
+        import base64
+
+        crop_rgb = None
+        if d.get("crop_jpeg_b64"):
+            bgr = cv2.imdecode(np.frombuffer(base64.b64decode(d["crop_jpeg_b64"]), np.uint8), cv2.IMREAD_COLOR)
+            crop_rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB) if bgr is not None else None
+        return Reference(np.asarray(d["vector"], dtype=np.float32), np.asarray(d["colour"], dtype=np.float32), d.get("label"),
+                         crop_rgb if crop_rgb is not None else np.zeros((8, 8, 3), np.uint8))
+
+
+@dataclass
+class Sighting:
+    index: int  # the frame's index in the batch
+    box: Box
+    score: float
+    confidence: float
+    confirmed: bool | None  # True: the model said it is the same; None: not asked
+
+
+class Follower:
+    """Finds a reference in frames. `detector` is YOLOX (detect(rgb) → Detection list), `model` the vision model
+    client or None, `embedder` an ImageEmbedder."""
+
+    def __init__(self, detector, embedder: ImageEmbedder, model=None):
+        self.detector, self.embedder, self.model = detector, embedder, model
+
+    # --- the reference ------------------------------------------------------------
+    def reference(self, rgb: np.ndarray, box: Box, meta: dict | None = None, redact=None) -> tuple[Reference, int]:
+        """The reference from a box on a frame. Raises PersonRefused for a person. Returns it and the model calls used."""
+        h, w = rgb.shape[:2]
+        x1, y1, x2, y2 = max(0.0, box[0]), max(0.0, box[1]), min(float(w), box[2]), min(float(h), box[3])
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            raise ValueError("the box is too small")
+        box = (x1, y1, x2, y2)
+        dets = self.detector.detect(rgb)
+        if is_person_box(box, [d.box for d in dets if d.label == "person"]):
+            raise PersonRefused("the selection is a person")
+        label = None
+        best = 0.0
+        for d in dets:
+            if d.label != "person" and iou(box, d.box) > max(0.5, best):
+                label, best = d.label, iou(box, d.box)
+        c = crop(rgb, box)
+        calls = 0
+        if self.model is not None:
+            calls += 1
+            a = self.model.ask(redact(c) if redact else c, "Is the main thing in this picture a person, or part of a person (a face, a hand, a body)?",
+                               {**(meta or {}), "purpose": "follow"})
+            if a.yes is True:
+                raise PersonRefused("the model says the selection is a person")
+        vec = self.embedder.embed([c])[0]
+        # The crop only ever goes to the model (and back through the API to the next batch): blurred like any frame that leaves.
+        return Reference(vec, colour_signature(c), label, redact(c) if redact else c), calls
+
+    def find_described(self, frames: list[np.ndarray], description: str, budget: int, meta: dict | None = None,
+                       redact=None) -> tuple[Reference | None, int, int]:
+        """The first candidate the model says matches a description, as the reference (index of its frame, model calls).
+        Candidates are never people (see candidates), so a description can't lead to one either."""
+        if self.model is None:
+            raise RuntimeError("no_model")
+        calls = 0
+        cands = self.candidates(frames)
+        # Bigger changes first: likelier the thing someone means.
+        order = sorted(((i, b) for i, bs in enumerate(cands) for b in bs), key=lambda x: -((x[1][2] - x[1][0]) * (x[1][3] - x[1][1])))
+        for i, b in order:
+            if calls >= budget:
+                break
+            c = crop(frames[i], b)
+            shown = redact(c) if redact else c
+            calls += 1
+            a = self.model.ask(shown, f"Does this picture show {description}? Answer no if it shows a person.", {**(meta or {}), "purpose": "follow"})
+            if a.yes is True:
+                return Reference(self.embedder.embed([c])[0], colour_signature(c), None, shown), i, calls
+        return None, -1, calls
+
+    # --- candidates -------------------------------------------------------------------
+    def candidates(self, frames: list[np.ndarray]) -> list[list[Box]]:
+        """Per frame: boxes of non-person detections and of regions that changed against the background, people excluded."""
+        if not frames:
+            return []
+        h, w = frames[0].shape[:2]
+        scale = 240.0 / max(h, w)
+        small = [cv2.GaussianBlur(cv2.resize(f, (max(1, round(f.shape[1] * scale)), max(1, round(f.shape[0] * scale)))), (5, 5), 0) for f in frames]
+        same_size = all(s.shape == small[0].shape for s in small)
+        background = np.median(np.stack(small), axis=0).astype(np.uint8) if same_size and len(small) >= 3 else None
+        out: list[list[Box]] = []
+        for f, s in zip(frames, small):
+            dets = self.detector.detect(f)
+            people = [d.box for d in dets if d.label == "person"]
+            boxes: list[Box] = [d.box for d in dets if d.label != "person"]
+            if background is not None and s.shape == background.shape:
+                diff = cv2.absdiff(s, background).max(axis=2)
+                mask = (diff > DIFF_THRESHOLD).astype(np.uint8) * 255
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+                n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+                fh, fw = f.shape[:2]
+                for k in range(1, n):
+                    x, y, bw, bh, _area = stats[k]
+                    frac = (bw * bh) / float(mask.shape[0] * mask.shape[1])
+                    if MIN_AREA <= frac <= MAX_AREA:
+                        boxes.append((x / scale, y / scale, min(fw, (x + bw) / scale), min(fh, (y + bh) / scale)))
+            kept: list[Box] = []
+            for b in sorted(boxes, key=lambda b: -(b[2] - b[0]) * (b[3] - b[1])):
+                if is_person_box(b, people) or any(iou(b, k) > 0.6 for k in kept):
+                    continue
+                kept.append(b)
+            out.append(kept[:MAX_CANDIDATES])
+        return out
+
+    # --- matching ---------------------------------------------------------------------
+    def score(self, ref: Reference, crops: list[np.ndarray]) -> np.ndarray:
+        if not crops:
+            return np.zeros(0, dtype=np.float32)
+        vecs = self.embedder.embed(crops)
+        appearance = vecs @ ref.vector
+        colour = np.array([colour_similarity(ref.colour, colour_signature(c)) for c in crops], dtype=np.float32)
+        return W_APPEARANCE * appearance + W_COLOUR * colour
+
+    def scan(self, ref: Reference, frames: list[np.ndarray], budget: int, meta: dict | None = None,
+             redact=None) -> tuple[list[Sighting], int]:
+        """The best match per frame, if any, and the model calls used. `redact(rgb)` blurs what goes to the model."""
+        cands = self.candidates(frames)
+        flat = [(i, b) for i, bs in enumerate(cands) for b in bs]
+        scores = self.score(ref, [crop(frames[i], b) for i, b in flat])
+        best: dict[int, tuple[Box, float]] = {}
+        for (i, b), s in zip(flat, scores.tolist()):
+            if s >= MAYBE and s > best.get(i, ((0, 0, 0, 0), -1.0))[1]:
+                best[i] = (b, s)
+        calls = 0
+        out: list[Sighting] = []
+        for i in sorted(best):
+            b, s = best[i]
+            if s >= STRONG:
+                out.append(Sighting(i, b, s, min(0.99, s), None))
+                continue
+            if self.model is not None and calls < budget:
+                calls += 1
+                cand = crop(frames[i], b)
+                if redact is not None:
+                    cand = redact(cand)
+                a = self.model.ask(_side_by_side(ref.crop, cand),
+                                   "The left half shows an object or animal. Is the thing in the right half the same individual "
+                                   "object or animal (not just the same kind of thing)?", {**(meta or {}), "purpose": "follow"})
+                if a.yes is True:
+                    out.append(Sighting(i, b, s, max(s, min(0.95, a.confidence or 0.85)), True))
+                continue
+            if s >= UNCONFIRMED:
+                out.append(Sighting(i, b, s, s * 0.9, None))
+        return out, calls
+
+
+def _side_by_side(a: np.ndarray, b: np.ndarray, h: int = 256) -> np.ndarray:
+    def fit(x):
+        s = h / x.shape[0]
+        return cv2.resize(x, (max(1, round(x.shape[1] * s)), h))
+
+    left, right = fit(a), fit(b)
+    gap = np.full((h, 8, 3), 255, dtype=np.uint8)
+    return np.concatenate([left, gap, right], axis=1)

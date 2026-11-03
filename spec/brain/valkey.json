@@ -38,7 +38,9 @@
         "embed",
         "chat",
         "check",
-        "redact"
+        "redact",
+        "follow_reference",
+        "follow_scan"
       ]
     },
     "changes": {
@@ -49,7 +51,7 @@
     }
   },
   "balancer": {
-    "brains": "string sp:brain:{brain_id} = {id, cameras, cpu, threads, started_at, version, features}, EX 6, refreshed every 2 s; cpu is the brain process's CPU percent (100 = one core); set sp:brains lists brain ids (an id whose key is gone is dead). features lists what the brain supports beyond the base protocol: \"blur\" (ADR 0068); the API sends a request that needs blurring only when every live brain lists it.",
+    "brains": "string sp:brain:{brain_id} = {id, cameras, cpu, threads, started_at, version, features}, EX 6, refreshed every 2 s; cpu is the brain process's CPU percent (100 = one core); set sp:brains lists brain ids (an id whose key is gone is dead). features lists what the brain supports beyond the base protocol: \"blur\" (ADR 0068), \"follow\" (ADR 0070); the API sends a request that needs blurring only when every live brain lists it.",
     "assign": "hash sp:assign, field {account_id}.{source_id} = brain_id, set by the API with a compare-and-set script when the camera's first frames arrive (and again when its brain is dead). Least busy live brain wins: fewest cameras, then lowest cpu; a new brain has none, so it takes new cameras first. HDEL when the camera goes offline. A gentle rebalance moves one camera every 30 s from the busiest brain while it has 2 or more cameras more than the least busy one (lock sp:balancer:lock, NX EX 25).",
     "takeover": "A brain that gets frames for a camera it has no pipeline for re-reads that camera's zones and watches before the first frame."
   },
@@ -1187,6 +1189,239 @@
           "error": {
             "type": "string",
             "description": "bad_image"
+          }
+        }
+      }
+    },
+    "follow_reference": {
+      "direction": "api \u2192 brain (ADR 0070)",
+      "description": "The reference for following an object or a pet: a box on a frame (an event snapshot or a recorded frame). Refused when it is a person (the detector, then the vision model when one is set up).",
+      "request": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "source_id",
+          "jpeg_b64",
+          "box"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "jpeg_b64": {
+            "type": "string"
+          },
+          "box": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "x1, y1, x2, y2 as fractions of the frame (0..1)"
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "object",
+            "description": "The reference as follow_reference returned it, passed back with each batch; kept by the API only while the follow runs",
+            "properties": {
+              "vector": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "colour": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "crop_jpeg_b64": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Blurred as the camera asks; only for the vision model"
+              }
+            }
+          },
+          "model_calls": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string",
+            "description": "person, bad_image or bad_box"
+          }
+        }
+      }
+    },
+    "follow_scan": {
+      "direction": "api \u2192 brain (ADR 0070)",
+      "description": "Where the reference is in a batch of frames from one camera: the best match per frame. With `description` and no reference, the first candidate the vision model says matches becomes the reference (returned). Candidates are never people.",
+      "request": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "source_id",
+          "frames"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "object",
+            "description": "The reference as follow_reference returned it, passed back with each batch; kept by the API only while the follow runs",
+            "properties": {
+              "vector": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "colour": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "crop_jpeg_b64": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Blurred as the camera asks; only for the vision model"
+              }
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "integer",
+            "description": "Vision model calls this batch may make (close calls and descriptions)"
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "t",
+                "jpeg_b64"
+              ],
+              "properties": {
+                "t": {
+                  "type": "string",
+                  "description": "RFC 3339 capture time"
+                },
+                "jpeg_b64": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "reply": {
+        "type": "object",
+        "properties": {
+          "sightings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "t": {
+                  "type": "string"
+                },
+                "box": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "description": "x1, y1, x2, y2 as fractions of the frame (0..1)"
+                },
+                "score": {
+                  "type": "number",
+                  "description": "Appearance and colour against the reference, 0..1"
+                },
+                "confidence": {
+                  "type": "number"
+                },
+                "confirmed": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "true: the vision model said it is the same one; null: not asked"
+                }
+              }
+            }
+          },
+          "frames_examined": {
+            "type": "integer"
+          },
+          "model_calls": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "object",
+            "description": "The reference as follow_reference returned it, passed back with each batch; kept by the API only while the follow runs",
+            "properties": {
+              "vector": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "colour": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "crop_jpeg_b64": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Blurred as the camera asks; only for the vision model"
+              }
+            }
+          },
+          "error": {
+            "type": "string",
+            "description": "no_model (a description needs the vision model) or no_reference"
           }
         }
       }

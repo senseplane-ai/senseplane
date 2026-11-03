@@ -156,6 +156,7 @@ describe("workflows", () => {
     await sp.workflows.run("wfl_1", { door: "front" });
     expect(await sp.workflows.runs("wfl_1", { status: "failed", limit: 5 })).toEqual([{ id: "x" }]);
     await sp.workflows.getRun("wfr_1");
+    await sp.workflows.cancelRun("wfr_1");
     await sp.workflows.rotateHookSecret("wfl_1");
     await sp.workflows.delete("wfl_1");
     expect(calls).toEqual([
@@ -165,6 +166,7 @@ describe("workflows", () => {
       'POST /v1/workflows/wfl_1/run {"input":{"door":"front"}}',
       "GET /v1/workflows/wfl_1/runs?status=failed&limit=5",
       "GET /v1/workflow-runs/wfr_1",
+      "POST /v1/workflow-runs/wfr_1/cancel",
       "POST /v1/workflows/wfl_1/hook-secret",
       "DELETE /v1/workflows/wfl_1",
     ]);

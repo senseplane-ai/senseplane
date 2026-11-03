@@ -791,6 +791,10 @@ class AsyncWorkflows(_Resource):
         """A run with each step's status, timing, output and error."""
         return parse(m.WorkflowRun, await self._t.request("getWorkflowRun", path={"id": id}))
 
+    async def cancel_run(self, id: str) -> m.WorkflowRun:
+        """Stops a run: its remaining steps are skipped (admins and up)."""
+        return parse(m.WorkflowRun, await self._t.request("cancelWorkflowRun", path={"id": id}))
+
     async def trigger(
         self, id: str, hook_secret: str, input: Mapping[str, Any] | None = None
     ) -> m.WorkflowHooksIdPostResponse:

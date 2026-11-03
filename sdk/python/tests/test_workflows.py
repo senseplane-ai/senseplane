@@ -72,6 +72,8 @@ def api(r: httpx.Request) -> httpx.Response:
         return respond({**RUN, "status": "queued", "steps": []}, 202)
     if p == f"/v1/workflows/{WF_ID}/hook-secret":
         return respond({**WF, "hook_secret": "whsec_new"})
+    if p == "/v1/workflow-runs/wfr_1/cancel":
+        return respond({**RUN, "status": "cancelled", "error": "cancelled by user:usr_1"})
     if p == "/v1/workflow-runs/wfr_1":
         return respond(RUN)
     if p == f"/v1/workflow-hooks/{WF_ID}":
@@ -102,6 +104,8 @@ def test_workflows_and_their_runs() -> None:
     assert sp.workflows.run(WF_ID, {"door": "front"}).status.root == "queued"
     assert rec.json(-1) == {"input": {"door": "front"}}
     assert sp.workflows.rotate_hook_secret(WF_ID).hook_secret == "whsec_new"
+    cancelled = sp.workflows.cancel_run("wfr_1")
+    assert cancelled.status.root == "cancelled" and rec.requests[-1].method == "POST"
     sp.workflows.delete(WF_ID)
     assert rec.requests[-1].method == "DELETE"
 

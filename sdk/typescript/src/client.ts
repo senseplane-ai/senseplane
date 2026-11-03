@@ -234,6 +234,8 @@ export class Senseplane {
       unwrap(this.raw.GET("/workflows/{id}/runs", { params: { path: { id }, query } })).then((r) => r.data as WorkflowRun[]),
     /** A run with each step's status, timing, output and error. */
     getRun: (id: string) => unwrap(this.raw.GET("/workflow-runs/{id}", { params: { path: { id } } })),
+    /** Stops a run: its remaining steps are skipped (admins and up). */
+    cancelRun: (id: string) => unwrap(this.raw.POST("/workflow-runs/{id}/cancel", { params: { path: { id } } })),
     /**
      * Starts a workflow with a webhook trigger, signed with its hook secret, as n8n, Zapier or a script would:
      * `Senseplane-Signature` over the exact body. Takes no API key.

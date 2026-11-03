@@ -40,8 +40,14 @@ sealed at rest like webhook secrets). With one, every push carries
 exactly as Senseplane signs outgoing webhooks, so the SDKs' helpers and
 people's existing code work both ways. A push without a body signs its query
 string. The time must be within 5 minutes, and each signature is taken once:
-the ones seen in the last 10 minutes are kept per token (`reading_signatures`,
-pruned on each signed push), so a captured request can't be sent again. A
+the ones seen are kept per token with their time `t` (`reading_signatures`,
+pruned by `t` on the API's clock once 15 minutes old, well past the
+tolerance), so a captured request can't be sent again. The signature is taken
+in the same transaction as the readings, so a push that fails to be stored
+doesn't use it up. A body and a query string that both carry a reading are
+refused (only one of them would be signed), bodies must be UTF-8, and
+`measured_at` must be within a year of now, on every readings path, so a bad
+clock can't file readings (or make partitions) decades away. A
 token with signing on can use no other endpoint (the older readings route
 doesn't check signatures). A rotated token keeps the secret, so rotating
 never turns signing off. The bearer token stays required: it says which
@@ -63,8 +69,13 @@ Assistant's own entities (`homeassistant.ToReading`, tested against
 `['key']`, `[0]`, and the `float`, `int`, `round(n)`, `lower`, `upper`,
 `trim` filters); anything else, Jinja logic included, is never executed and
 the entity isn't listed. Malformed configs, wildcards in a state topic, and
-components or device classes with no sense are ignored. Plain topics for
-devices without discovery are configured as `TOPIC=SENSE[:UNIT][@JSON.PATH]`.
+components or device classes with no sense are ignored, as are messages over
+64 KiB and entities past 2,000; a state topic no entity reads any more is
+unsubscribed. Plain topics for devices without discovery are configured as
+`TOPIC=SENSE[:UNIT][@JSON.PATH]`; states take on/off, true/false and 1/0 and
+only their own sense's words (wet/dry for a leak, not for a door), and an
+event sense's `:PAYLOAD` is what it fires on (default ON, press, pressed, 1 or
+true), so a button that sends ON then OFF presses once.
 The entities are listed like Home Assistant's (`mqtt.<component>_<id>`), and
 only the ones a person chooses are sent, through the same path as every
 other box sensor. As an add-on, discovered sensors are not listed by default
@@ -77,17 +88,31 @@ lets the box publish this account's events to its broker. The box fetches
 them, outbound only: `GET /v1/bridge/outputs` is long-polled like the command
 channel (up to 25 s), returns the cameras with their online state, the
 watches that alert, and the person, vehicle and animal detections and watch
-firings after the box's cursor. Without a cursor it starts from now, so old
-events are never replayed into Home Assistant. Off, it answers
-`mqtt_publish: false` with empty lists, after waiting like a poll for events,
-so a box that is off asks about once every 25 s. The box publishes them as
+firings of those watches only (filtered in SQL) after the box's cursor. The
+cursor is a position in time, always given (the newest event handed over, or
+now): event ids are minted before their transaction commits, so each answer
+repeats the 5 s before the cursor and the box drops ids it already took; the
+cursor never reaches more than 10 minutes back. Without a cursor it starts
+from now, so old events are never replayed into Home Assistant. A waiting
+poll is woken in-process when an event is stored for the account or the
+setting changes, and otherwise looks again every 5 s (for events stored by
+another replica), reading the setting once per look. Events are found by a
+`(account_id, id)` index. Off, it answers `mqtt_publish: false` with empty
+lists after waiting like a poll for events. Each event carries its age on the
+server's clock (`age_ms`), and the answer the server's `now`: the box times a
+sensor's hold by that age, not by its own clock, sends no watch firing more
+than 5 minutes old, and keeps up to 20 recent firings while its broker is away
+to send when it is back. A box that gets an answer without a cursor waits 5 s
+before asking again. The box publishes them as
 Home Assistant discovery entities, retained, so they appear by themselves:
 per camera a device with Person (occupancy), Vehicle and Animal binary
 sensors, each on for a minute after one is seen and then off, and Online
 (connectivity); per watch an event entity that fires with the event's
 summary and camera (not retained). Everything is named after the box (its
 bridge id: `senseplane_<box>_<camera>` nodes, `senseplane/<box>/…` topics),
-so boxes can share a broker. `senseplane/<box>/status` is the availability
+with ids in lowercase base32 so ids that differ only in case or in `-` and
+`_` stay apart, and cleanup removes a config only when its node's box part is
+exactly this box's, so boxes can share a broker. `senseplane/<box>/status` is the availability
 topic: online, offline on a clean stop, and offline as the will, which is set
 only once the box may publish (it connects again to set or clear it, with a
 clean disconnect so the old will isn't sent). Configs for cameras and watches
@@ -117,8 +142,18 @@ doesn't link MQTT.
   scripts, IFTTT) use the token alone.
 - A box with a broker lists MQTT sensors next to Home Assistant's and Matter's,
   and can put Senseplane's events into Home Assistant with no automation.
-- A box polls `GET /v1/bridge/outputs` only when MQTT is configured on it,
-  one query a second while a poll waits.
+- A box polls `GET /v1/bridge/outputs` only when MQTT is configured on it; a
+  waiting poll costs one short transaction every 5 s unless woken.
+- The broker link drops a connection whose publish or subscribe gets no answer
+  in 5 s. The broker URL is checked once at start-up and never logged with its
+  password (credentials travel apart from it); the password is best given in
+  `MQTT_PASSWORD` rather than as a flag.
+- **Box sensors from MQTT are online while the broker is reachable.** The
+  heartbeat takes an optional `mqtt` field (`connected`, `entities`); the box's
+  sensor sources are online while Home Assistant or the broker is reachable.
+  The box sends the field only when `GET /v1/bridge/config` lists the
+  `health_mqtt` feature: an older API refuses heartbeats with fields it doesn't
+  know, and a newer box must not lose its heartbeat against one.
 - A box with publishing off publishes nothing, not even a will.
 - Two boxes on one account that both publish show each camera twice in Home
   Assistant, once per box; that is what turning it on for both asks for.

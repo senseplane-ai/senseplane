@@ -49,11 +49,12 @@ Or several at once:
 | `unit` | For numbers: Senseplane's unit, such as `celsius`, `percent`, `watt`, `kilowatt_hour`, `lux`, `ppm`. A known sense can leave it out (temperature is in celsius). |
 | `device_id`, `device_name` | Which device it is, when one sensor gathers several (`"device": {"id": …, "name": …}` works too). |
 | `detail` | For events: which kind (`"double"` for a double press). |
-| `measured_at` | When it was measured, as RFC 3339 or Unix seconds; leave it out for now. |
+| `measured_at` | When it was measured, as RFC 3339 or Unix seconds, within a year of now; leave it out for now. |
 
 The same fields work as a form (`application/x-www-form-urlencoded`), as
 plain text holding JSON (IFTTT), and, for a request without a body, as query
-parameters: `POST …/v1/integration/readings?sense=doorbell`.
+parameters: `POST …/v1/integration/readings?sense=doorbell`. Use one or the
+other: a reading in both the body and the query is refused. Bodies are UTF-8.
 
 The answer is `202` with `{"accepted": 1, "events": []}`: the IDs of any
 events the readings fired (a watch, a threshold). A reading that doesn't fit
@@ -76,7 +77,8 @@ Senseplane-Signature: t=<Unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" with 
 - `<body>` is the request body exactly as sent; a request without a body signs
   its query string (what follows `?`).
 - The time must be within 5 minutes of the server's clock.
-- Each signature is taken once: sending the same request again is refused.
+- Each signature is taken once: sending the same request again is refused. A
+  request that fails (say, a reading that doesn't fit) doesn't use it up.
 - A token with signing on can only push readings here.
 
 A missing, wrong, old or reused signature answers `401`. Tools that can't

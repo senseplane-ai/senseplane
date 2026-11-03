@@ -14,7 +14,8 @@ image: ghcr.io/senseplane-ai/bridge-addon
 init: false
 startup: application
 boot: auto
-# Reads states, areas and entities; never calls a service.
+# Reads states, areas and entities; calls a service only to switch a device a
+# person asked to switch (ADR 0067).
 homeassistant_api: true
 # On the home network itself, to find ONVIF cameras (a multicast probe that
 # cameras answer directly, ADR 0063). The panel still answers only the

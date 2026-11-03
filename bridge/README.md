@@ -40,7 +40,7 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--matter-url` | `MATTER_URL` | Read Matter devices through this Matter Server (`ws://localhost:5580/ws`) |
 | `--find-cameras` | `SENSEPLANE_FIND_CAMERAS` | Look for ONVIF cameras on the network to pick in the console (default on; `false` turns it off) |
 | `--mqtt-url` | `MQTT_URL` | Read sensors from, and publish events to, this MQTT broker (`mqtt://`, `mqtts://`, `ws://`, `wss://`); off when empty |
-| `--mqtt-username`, `--mqtt-password` | `MQTT_USERNAME`, `MQTT_PASSWORD` | The broker's credentials |
+| `--mqtt-username`, `--mqtt-password` | `MQTT_USERNAME`, `MQTT_PASSWORD` | The broker's credentials; prefer the environment for the password, since flags show in process lists |
 | `--mqtt-topic` (repeatable) | `MQTT_TOPICS` (comma-separated) | A plain topic to read, `TOPIC=SENSE[:UNIT][@JSON.PATH]` |
 | `--mqtt-discovery-prefix` | `MQTT_DISCOVERY_PREFIX` | Home Assistant's discovery prefix (default `homeassistant`) |
 | `--mqtt-prefix` | `MQTT_PREFIX` | Where the box publishes its own states (default `senseplane`) |
@@ -76,22 +76,31 @@ add-on through the Supervisor), the bridge connects to an MQTT broker
   path (`{{ value_json.a.b }}`, with `float`, `int`, `round(n)`, `lower`,
   `upper`, `trim`); nothing is executed. `--mqtt-topic` adds devices without
   discovery: `tele/plug/SENSOR=power:watt@ENERGY.Power` (a number in a
-  Senseplane unit), `garage/door=contact` (on/off, open/closed, true/false),
-  `bell/press=doorbell` (an event per message). Only chosen ones are sent. As
+  Senseplane unit), `garage/door=contact` (on/off, true/false, 1/0, and the
+  sense's own words: open/closed for a contact, wet/dry for a leak,
+  locked/unlocked for a lock), `bell/press=doorbell` (an event on ON, press,
+  pressed, 1 or true; `bell/state=doorbell:RING` fires on RING only). Messages
+  over 64 KiB and entities past 2,000 are ignored. Only chosen ones are sent. As
   an add-on, discovered sensors aren't listed unless `mqtt_sensors` is on,
   since Home Assistant already lists them.
 - **Out.** When **Publish to MQTT** is on for the box in the console (off by
   default), it long-polls `GET /v1/bridge/outputs` and publishes, retained,
   in Home Assistant's discovery format: per camera Person, Vehicle and Animal
   binary sensors (on for a minute after one is seen) and Online; per watch an
-  event entity fired with the event's summary. Topics are named after the box:
+  event entity fired with the event's summary (firings more than 5 minutes
+  old aren't sent; a few wait while the broker is away). Topics are named
+  after the box, with ids in lowercase base32:
   `homeassistant/binary_sensor/senseplane_<box>_<camera>/person/config`,
   states under `senseplane/<box>/camera/<camera>/`, and
   `senseplane/<box>/status` (online, or offline as the will). Turned off, it
-  removes what it published.
+  removes what it published, never another box's. The hold is timed by each
+  event's age on the server's clock, not the box's.
 
 It reconnects with backoff (1 s to 1 min) and subscribes and publishes again
 on every connection and when Home Assistant restarts (`homeassistant/status`).
+A publish or subscribe that gets no answer in 5 s drops the connection. The
+broker URL is checked once at start-up and never logged with its password;
+credentials are sent apart from it.
 
 ## Cameras on the network
 

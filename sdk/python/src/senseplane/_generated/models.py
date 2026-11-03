@@ -1600,7 +1600,7 @@ class TimelineResponse(BaseModel):
     """
 
 
-class Device(BaseModel):
+class WebhookReadingDevice(BaseModel):
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
@@ -1623,7 +1623,7 @@ class WebhookReading(BaseModel):
     value: float | bool | str | None = None
     unit: Annotated[str | None, Field(pattern='^[a-z0-9_]{1,32}$')] = None
     detail: Annotated[str | None, Field(max_length=64)] = None
-    device: Device | None = None
+    device: WebhookReadingDevice | None = None
     device_id: Annotated[str | None, Field(max_length=200)] = None
     device_name: Annotated[str | None, Field(max_length=200)] = None
     measured_at: str | float | None = None
@@ -2215,7 +2215,7 @@ class DeviceState(BaseModel):
     at: AwareDatetime | None = None
 
 
-class Device2(BaseModel):
+class Device(BaseModel):
     model_config = ConfigDict(
         extra='allow',
         populate_by_name=True,
@@ -3392,7 +3392,7 @@ class DevicesGetResponse(BaseModel):
         extra='allow',
         populate_by_name=True,
     )
-    data: list[Device2]
+    data: list[Device]
     next_cursor: str | None = None
 
 

@@ -77,7 +77,8 @@ def test_speak_and_what_was_said() -> None:
     assert sp.speak_messages.get("spk_1").clip_url == "http://api.test/media/t/speak.wav"
     with pytest.raises(SenseplaneError) as e:
         sp.sources.speak("src_cam", "everything that happened")
-    assert e.value.code == "message_too_long" and e.value.details["message"]["status"] == "refused"
+    assert e.value.code == "message_too_long"
+    assert e.value.details is not None and e.value.details["message"]["status"] == "refused"
 
 
 def test_speak_tool() -> None:

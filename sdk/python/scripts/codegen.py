@@ -79,12 +79,14 @@ def models() -> None:
             raise SystemExit(f"codegen: no class {old} to rename; update RENAMES")
         text = re.sub(rf"\b{old}\b", new, text)
     text = text.replace("_RENAMED_", "")
+    if not re.search(r"^class Device\(BaseModel\):\n(?:.*\n)*?    entity_id: ", text, flags=re.M):
+        raise SystemExit("codegen: class Device isn't the spec's Device schema; update RENAMES")
     out.write_text(HEADER.format(source="openapi.yaml") + text)
 
 
-# reading.json's $defs/device (a reading's device: id and name) is generated before the Device
-# schema and takes its name.
-RENAMES = [("Device", "ReadingDevice"), ("Device1", "_RENAMED_Device")]
+# reading.json's $defs/device and WebhookReading's inline device (a reading's device: id and name) are
+# generated before the Device schema and take its name.
+RENAMES = [("Device", "ReadingDevice"), ("Device1", "_RENAMED_WebhookReadingDevice"), ("Device2", "_RENAMED_Device")]
 
 
 def labels() -> None:

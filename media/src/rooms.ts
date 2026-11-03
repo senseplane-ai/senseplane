@@ -18,7 +18,10 @@ import type { Grants, JoinClaims, ParticipantKind, SubscribeRule } from "./token
 export type ErrorCode =
   | "unauthorized" | "replayed" | "protocol_version" | "forbidden_transport" | "forbidden" | "not_subscribable"
   | "subscription_limit" | "room_closed" | "no_such_room" | "no_such_producer" | "no_such_transport"
-  | "duplicate_identity" | "node_draining" | "capacity" | "bad_request" | "internal";
+  | "duplicate_identity" | "node_draining" | "capacity" | "bad_request" | "speaker_busy" | "internal";
+
+/** The appData.source of a viewer's push-to-talk track. */
+export const TALKBACK = "talkback";
 
 export class MediaError extends Error {
   constructor(readonly code: ErrorCode, message?: string) {
@@ -415,6 +418,12 @@ export class RoomManager {
       ? String((appData as { source: string }).source).slice(0, 32) : undefined;
     const need = requiredPublishKind(source, kind);
     if (p.grants.publishKinds && !p.grants.publishKinds.includes(need)) throw new MediaError("forbidden", `this token may not publish ${need}`);
+    // Talk-back (push-to-talk): a microphone sent to the camera's speaker, one person at a time per room.
+    if (source === TALKBACK) {
+      if (kind !== "audio") throw new MediaError("bad_request", "talkback is audio");
+      const other = [...p.room.participants.values()].find((o) => o !== p && !o.closed && [...o.producers.values()].some((e) => e.source === TALKBACK && !e.producer.closed));
+      if (other) throw new MediaError("speaker_busy", "someone else is talking through this camera");
+    }
     let producer: types.Producer;
     try {
       producer = await e.transport.produce({ kind, rtpParameters: rtpParameters as types.RtpParameters, appData: source ? { source } : {} });
@@ -506,6 +515,19 @@ export class RoomManager {
     const c = this.consumer(p, consumerId);
     if (c.kind === "video") await c.requestKeyFrame();
     return { requested: true };
+  }
+
+  // --- talk-back --------------------------------------------------------------
+
+  /**
+   * Tells one participant (a camera's capture page) to play a clip at `url`, or to stop one.
+   * The page fetches and plays it; false when that participant isn't in the room.
+   */
+  speak(roomId: string, identity: string, frame: { event: "speak"; id: string; url: string; durationMs: number } | { event: "speakStop"; id: string }): boolean {
+    const p = this.rooms.get(roomId)?.participants.get(identity);
+    if (!p || p.closed) return false;
+    p.peer.send(frame);
+    return true;
   }
 
   // --- lifecycle --------------------------------------------------------------

@@ -144,6 +144,28 @@ export function registerControl(app: FastifyInstance, deps: ControlDeps) {
       return reply.code(204).send();
     });
 
+    // --- talk-back: a clip for a camera's capture page to play, or to stop ---
+    const clipId = (v: unknown) => {
+      if (typeof v !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(v)) throw new Bad(400, "bad_request", "id must be a short id");
+      return v;
+    };
+    scope.post<{ Params: { roomId: string; identity: string }; Body: Record<string, unknown> }>("/control/rooms/:roomId/participants/:identity/speak", async (req, reply) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const id = clipId(b.id);
+      const url = typeof b.url === "string" ? b.url : "";
+      // A path on the caller's API (the page resolves it against the API it uses) or an absolute http(s) URL.
+      if (!url || url.length > 2048 || !(/^\/[^/]/.test(url) || /^https?:\/\//i.test(url))) throw new Bad(400, "bad_request", "url must be a path or an http(s) URL");
+      const durationMs = Number(b.durationMs);
+      if (!Number.isInteger(durationMs) || durationMs < 1 || durationMs > 60_000) throw new Bad(400, "bad_request", "durationMs must be 1 to 60000");
+      if (!deps.rooms.speak(req.params.roomId, req.params.identity, { event: "speak", id, url, durationMs })) return reply.code(404).send({ error: "no such participant" });
+      return reply.code(204).send();
+    });
+    scope.post<{ Params: { roomId: string; identity: string }; Body: Record<string, unknown> }>("/control/rooms/:roomId/participants/:identity/speak/stop", async (req, reply) => {
+      const id = clipId(((req.body ?? {}) as Record<string, unknown>).id);
+      if (!deps.rooms.speak(req.params.roomId, req.params.identity, { event: "speakStop", id })) return reply.code(404).send({ error: "no such participant" });
+      return reply.code(204).send();
+    });
+
     // --- egress: the caller asks for an outcome; which box runs it is ours ---
     const egress = () => {
       if (!deps.egress) throw new Bad(501, "this media plane has no egress configured");

@@ -13,7 +13,7 @@ import types
 import typing
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Literal, TypeVar, cast
@@ -84,11 +84,16 @@ def iso(value: datetime) -> str:
 def body_of(model: type[BaseModel], body: BaseModel | Mapping[str, Any] | None, fields: Mapping[str, Any]) -> Any:
     """A request body from a model, a dict (sent as given) or keyword arguments (checked against the model).
 
-    Keyword arguments use Python names (`from_` for `from`) and are validated, so a typo in a
-    known field fails before the request; a dict is sent exactly as written.
+    Keyword arguments use Python names (`from_` for `from`) and are validated, so a misspelt or
+    unknown field fails before the request; a dict is sent exactly as written (for fields newer
+    than this SDK).
     """
     if not fields:
         return jsonable(body) if body is not None else {}
+    known = {n for name, info in model.model_fields.items() for n in (name, info.alias) if n}
+    unknown = sorted(set(fields) - known)
+    if unknown:
+        raise TypeError(f"{model.__name__} has no field {', '.join(unknown)} (pass a dict to send it anyway)")
     base: dict[str, Any] = {}
     if isinstance(body, BaseModel):
         base = body.model_dump(by_alias=False, exclude_unset=True)
@@ -121,8 +126,8 @@ class Prepared:
     url: str
     params: dict[str, str]
     json: Any
-    headers: dict[str, str]
-    retryable: bool
+    headers: dict[str, str] = field(repr=False)  # the API key: never in a traceback
+    retryable: bool = False
 
 
 def prepare(
@@ -235,21 +240,21 @@ def _construct(model: type[M], data: Any) -> M:
         return model.model_construct()
     values: dict[str, Any] = {}
     known: set[str] = set()
-    for name, field in model.model_fields.items():
-        key = field.alias or name
+    for name, info in model.model_fields.items():
+        key = info.alias or name
         known.add(key)
         if key in data:
-            values[name] = _coerce(field.annotation, data[key])
+            values[name] = _coerce(info.annotation, data[key])
     extra = {k: v for k, v in data.items() if k not in known}
     return model.model_construct(**values, **extra)
 
 
 def _tags_match(model: type[BaseModel], value: Mapping[str, Any]) -> bool:
     """False when a Literal field (a union's tag, such as `event` or `type`) has another value."""
-    for name, field in model.model_fields.items():
-        key = field.alias or name
-        if typing.get_origin(field.annotation) is Literal and key in value:
-            if value[key] not in typing.get_args(field.annotation):
+    for name, info in model.model_fields.items():
+        key = info.alias or name
+        if typing.get_origin(info.annotation) is Literal and key in value:
+            if value[key] not in typing.get_args(info.annotation):
                 return False
     return True
 

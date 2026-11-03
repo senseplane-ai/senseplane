@@ -118,7 +118,11 @@ def test_checks_keyword_arguments_against_the_model() -> None:
     client, rec = make_client(lambda r: respond({}))
     with pytest.raises(ValueError):  # pydantic's ValidationError is a ValueError
         client.watches.test(instruction="x", sources=["a"])  # too short, and from/to missing
+    with pytest.raises(TypeError, match="SourceCreate has no field sensor_threshold"):
+        client.sources.create(name="Kitchen", type="sensor", sensor_threshold={})
     assert rec.requests == []
+    client.sources.create({"name": "Kitchen", "type": "sensor", "newer_field": 1})  # a dict goes as written
+    assert rec.json(0) == {"name": "Kitchen", "type": "sensor", "newer_field": 1}
 
 
 def test_short_forms_for_questions() -> None:

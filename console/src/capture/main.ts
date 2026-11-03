@@ -5,10 +5,13 @@
 // fragment carries a capture ticket (t), the API base URL (a) and the source
 // name (n). The ticket is exchanged for a short-lived media join token on every
 // connect, then the page speaks signalling protocol v1 over a WebSocket (ADR 0017).
+// It is also the camera's speaker (ADR 0069): it plays a person's push-to-talk
+// and agents' messages, and says so on screen while they play.
 import { ConnectTimings, newTraceparent, traceEnabled } from "./trace";
 import { Device } from "mediasoup-client";
-import type { Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
+import type { Consumer, Producer, RtpCapabilities, RtpParameters, Transport, TransportOptions } from "mediasoup-client/types";
 import { canRetry, reactTo, retryDelay } from "./events";
+import { PhoneSpeaker, type Sound, speakingText } from "./speaker";
 import { PROTOCOL_VERSION, SignallingClient } from "./signalling";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -17,6 +20,8 @@ const indicator = $<HTMLSpanElement>("indicator");
 const toggleBtn = $<HTMLButtonElement>("toggle");
 const stopBtn = $<HTMLButtonElement>("stop");
 const preview = $<HTMLVideoElement>("preview");
+const speakingEl = $<HTMLParagraphElement>("speaking");
+const allowSound = $<HTMLButtonElement>("allow-sound");
 
 const params = new URLSearchParams(location.hash.slice(1));
 const ticket = params.get("t") ?? "";
@@ -69,6 +74,26 @@ let transport: Transport | undefined;
 let signalling: SignallingClient | undefined;
 let producers: Producer[] = [];
 let wakeLock: WakeLockSentinel | undefined;
+let recv: Transport | undefined;
+const talkConsumers = new Map<string, Consumer>();
+/** Plays a person's push-to-talk track, once the page is publishing. */
+let hearTalkNow: ((producerId: string) => Promise<void>) | undefined;
+
+// Whatever comes out of the speaker is shown on screen, so people near the phone know.
+const speaker = new PhoneSpeaker({
+  apiUrl,
+  clipSound: (url) => new Audio(url) as unknown as Sound,
+  onChange: (s) => {
+    speakingEl.textContent = speakingText(s);
+    speakingEl.hidden = !s;
+  },
+  onBlocked: () => (allowSound.hidden = false),
+});
+allowSound.addEventListener("click", () => {
+  // A tap lets the browser play sound from now on.
+  void new Audio().play().catch(() => undefined);
+  allowSound.hidden = true;
+});
 let state: "idle" | "live" | "paused" | "stopped" = "idle";
 
 const setStatus = (text: string) => (statusEl.textContent = text);
@@ -118,9 +143,20 @@ async function start() {
   await sig.request("join", { protocolVersion: PROTOCOL_VERSION, token, ...(traceEnabled ? { traceparent: newTraceparent() } : {}) });
   timings?.mark("join_ms");
   const snapshot = await joined;
-  const grants = (snapshot.grants ?? {}) as { publishKinds?: string[] };
+  const grants = (snapshot.grants ?? {}) as { publishKinds?: string[]; canSubscribe?: boolean };
   const recordAudio = (grants.publishKinds ?? []).includes("audio");
   sig.onEvent((e) => {
+    if (speaker.onEvent(e)) return;
+    if ((e.event === "producerAppeared" || e.event === "newProducer") && e.source === "talkback") {
+      void hearTalkNow?.(String(e.producerId)).catch(() => undefined);
+      return;
+    }
+    if (e.event === "producerClosed" && e.consumerId) {
+      talkConsumers.get(String(e.producerId))?.close();
+      talkConsumers.delete(String(e.producerId));
+      speaker.personStopped(String(e.producerId));
+      return;
+    }
     const r = reactTo(e);
     if (r.action === "reconnect") {
       reconnectSoon(r.message, r.afterMs);
@@ -180,6 +216,30 @@ async function start() {
   const audio = stream.getAudioTracks()[0];
   if (audio) producers.push(await transport.produce({ track: audio, appData: { source: "microphone" } }));
 
+  /** A person's push-to-talk (ADR 0069): consume their track and play it. */
+  const hearTalk = async (producerId: string) => {
+    if (!grants.canSubscribe || talkConsumers.has(producerId)) return;
+    if (!recv) {
+      const p = await sig.request<TransportOptions & { transportId?: string }>("createTransport", { direction: "recv" });
+      const t = device.createRecvTransport({ ...p, id: p.transportId ?? p.id });
+      t.on("connect", ({ dtlsParameters }, ok, fail) => sig.request("connectTransport", { transportId: t.id, dtlsParameters }).then(() => ok(), fail));
+      recv = t;
+    }
+    const c = await sig.request<{ consumerId: string; producerId: string; kind: "audio" | "video"; rtpParameters: RtpParameters }>("consume", {
+      transportId: recv.id, producerId, rtpCapabilities: device.recvRtpCapabilities,
+    });
+    const consumer = await recv.consume({ id: c.consumerId, producerId: c.producerId, kind: c.kind, rtpParameters: c.rtpParameters });
+    talkConsumers.set(producerId, consumer);
+    await sig.request("resumeConsumer", { consumerId: c.consumerId });
+    const el = new Audio();
+    el.srcObject = new MediaStream([consumer.track]);
+    speaker.personStarted(producerId, el as unknown as Sound);
+  };
+  hearTalkNow = hearTalk;
+  for (const p of (snapshot.producers ?? []) as { producerId: string; source?: string }[]) {
+    if (p.source === "talkback") void hearTalk(p.producerId).catch(() => undefined);
+  }
+
   await holdWakeLock();
   attempt = 0;
   state = "live";
@@ -199,6 +259,12 @@ async function halt(next: "paused" | "stopped", notify = true) {
   signalling?.close();
   signalling = undefined;
   for (const p of producers) p.close();
+  speaker.stopAll();
+  for (const c of talkConsumers.values()) c.close();
+  talkConsumers.clear();
+  recv?.close();
+  recv = undefined;
+  hearTalkNow = undefined;
   transport?.close();
   stream?.getTracks().forEach((t) => t.stop());
   await wakeLock?.release().catch(() => {});

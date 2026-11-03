@@ -11,8 +11,13 @@
 // there: the helper tells the API (POST /v1/live/{session}/keepalive) on user
 // activity (pointer, keys, touch, scroll, the tab becoming visible), at most
 // every 30 s, never on a timer alone (ADR 0049).
+//
+// Push-to-talk (ADR 0069): with `talk`, the session may also send the
+// microphone to the camera's phone, heard by nobody else. `talk.start()`
+// (button held) sends one audio track with appData.source "talkback";
+// `talk.stop()` closes it. The microphone is asked for on the first press.
 import { Device } from "mediasoup-client";
-import type { Consumer, RtpCapabilities, RtpParameters, Transport, TransportOptions } from "mediasoup-client/types";
+import type { Consumer, Producer as SendProducer, RtpCapabilities, RtpParameters, Transport, TransportOptions } from "mediasoup-client/types";
 import { PROTOCOL_VERSION, SignallingClient, SignallingError } from "../capture/signalling";
 
 export interface OpenLiveOptions {
@@ -23,10 +28,21 @@ export interface OpenLiveOptions {
   video: HTMLVideoElement;
   /** Also play the camera's audio (needs an audio grant; default false). */
   audio?: boolean;
+  /** Push-to-talk through the camera's speaker (member and up, a phone camera; default false). */
+  talk?: boolean;
+}
+
+/** Push-to-talk: hold to send the microphone to the camera's speaker. */
+export interface Talk {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  readonly active: boolean;
 }
 
 export interface LiveView {
   close(): void;
+  /** Present when the session may talk through the camera. */
+  talk?: Talk;
   /** Rough glass-to-glass latency estimate: jitter buffer plus half the round trip. */
   stats(): Promise<{ latencyMs?: number }>;
 }
@@ -45,6 +61,7 @@ interface LiveSession {
   expires_at: string;
   idle_timeout_seconds: number;
   audio?: boolean;
+  talk?: boolean;
 }
 type Producer = { producerId: string; kind: "audio" | "video" };
 
@@ -56,7 +73,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
   const res = await fetch(url, {
     method: "POST",
     headers: { authorization: `Bearer ${opts.apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ audio: opts.audio === true }),
+    body: JSON.stringify({ audio: opts.audio === true, ...(opts.talk ? { talk: true } : {}) }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new LiveError(json?.error?.code ?? "unknown", json?.error?.message ?? `could not start live view (${res.status})`, res.status);
@@ -66,6 +83,10 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
   const stream = new MediaStream();
   const consumers = new Map<string, Consumer>(); // by producer id
   let transport: Transport | undefined;
+  let send: Transport | undefined;
+  let mic: MediaStream | undefined;
+  let speaking: SendProducer | undefined;
+  let device: Device | undefined;
   let closed = false;
   const cleanups: (() => void)[] = [];
 
@@ -76,6 +97,10 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     for (const c of cleanups.splice(0)) c();
     for (const c of consumers.values()) c.close();
     consumers.clear();
+    speaking?.close();
+    speaking = undefined;
+    send?.close();
+    for (const t of mic?.getTracks() ?? []) t.stop();
     transport?.close();
     for (const t of stream.getTracks()) stream.removeTrack(t);
     if (opts.video.srcObject === stream) opts.video.srcObject = null;
@@ -87,7 +112,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     const joinedEvent = sig.nextEvent("joined");
     await sig.request("join", { protocolVersion: PROTOCOL_VERSION, token: session.token });
     const joined = (await joinedEvent) as unknown as { routerRtpCapabilities: RtpCapabilities; producers: Producer[] };
-    const device = new Device();
+    device = new Device();
     await device.load({ routerRtpCapabilities: joined.routerRtpCapabilities });
     const params = await sig.request<TransportOptions & { transportId?: string }>("createTransport", { direction: "recv" });
     const recv = device.createRecvTransport({ ...params, id: params.transportId ?? params.id });
@@ -99,7 +124,7 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     const consume = async (p: Producer) => {
       if (closed || consumers.has(p.producerId)) return;
       const c = await sig.request<{ consumerId: string; producerId: string; kind: "audio" | "video"; rtpParameters: RtpParameters }>("consume", {
-        transportId: recv.id, producerId: p.producerId, rtpCapabilities: device.recvRtpCapabilities,
+        transportId: recv.id, producerId: p.producerId, rtpCapabilities: device!.recvRtpCapabilities,
       });
       const consumer = await recv.consume({ id: c.consumerId, producerId: c.producerId, kind: c.kind, rtpParameters: c.rtpParameters });
       consumers.set(p.producerId, consumer);
@@ -160,7 +185,49 @@ export async function openLive(opts: OpenLiveOptions): Promise<LiveView> {
     throw err;
   }
 
+  /** The send side, made on the first press so nothing asks for the microphone until then. */
+  const sendTransport = async () => {
+    if (send) return send;
+    const params = await sig.request<TransportOptions & { transportId?: string }>("createTransport", { direction: "send" });
+    const t = device!.createSendTransport({ ...params, id: params.transportId ?? params.id });
+    t.on("connect", ({ dtlsParameters }, ok, fail) => {
+      sig.request("connectTransport", { transportId: t.id, dtlsParameters }).then(() => ok(), fail);
+    });
+    t.on("produce", ({ kind, rtpParameters, appData }, ok, fail) => {
+      sig.request<{ producerId: string }>("produce", { transportId: t.id, kind, rtpParameters, appData }).then(({ producerId }) => ok({ id: producerId }), fail);
+    });
+    send = t;
+    return t;
+  };
+  const talk: Talk | undefined = session.talk ? {
+    get active() {
+      return !!speaking;
+    },
+    async start() {
+      if (closed || speaking) return;
+      try {
+        // Speech, not a camera's room sound: the browser's call processing helps here.
+        mic ??= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        const track = mic.getAudioTracks()[0];
+        if (!track) throw new LiveError("no_microphone", "No microphone was found.");
+        const t = await sendTransport();
+        speaking = await t.produce({ track, stopTracks: false, appData: { source: "talkback" } });
+      } catch (err) {
+        if (err instanceof SignallingError) throw new LiveError(err.code, err.code === "speaker_busy" ? "Someone else is talking through this camera." : err.message);
+        throw err;
+      }
+    },
+    async stop() {
+      const p = speaking;
+      speaking = undefined;
+      if (!p) return;
+      p.close();
+      await sig.request("closeProducer", { producerId: p.id }).catch(() => undefined);
+    },
+  } : undefined;
+
   return {
+    ...(talk ? { talk } : {}),
     close: () => close(),
     async stats() {
       const video = [...consumers.values()].find((c) => c.kind === "video");

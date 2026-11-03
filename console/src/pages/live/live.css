@@ -105,3 +105,8 @@ video.lv-media[data-live] { opacity: 1; }
   .lv-locked { min-height: 380px; }
   .lv-locked-card { padding: 20px; }
 }
+
+/* Push-to-talk (ADR 0069) */
+.lv-talk { touch-action: none; user-select: none; }
+.lv-talk-on { background: var(--danger, #c0392b); color: #fff; border-color: transparent; }
+.lv-talk-note { margin: 6px 0 0; font-size: 12px; }

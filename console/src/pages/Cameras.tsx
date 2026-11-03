@@ -92,7 +92,7 @@ function CameraCard({ s, now, last, index }: { s: Source; now?: Now; last?: Even
           <span className={`cam-status cam-status-${st.kind}`}>{st.label}</span>
         </span>
         <span className="cam-card-meta">{[s.location, lastText(s, last)].filter(Boolean).join(" · ")}</span>
-        <span className="cam-card-tags">{s.senses.map((x) => <Tag key={x}>{x}</Tag>)}</span>
+        <span className="cam-card-tags">{s.senses.map((x) => <Tag key={x}>{x}</Tag>)}{isVideo(s) && s.speaker && <Tag>speaker</Tag>}</span>
       </div>
     </Link>
   );

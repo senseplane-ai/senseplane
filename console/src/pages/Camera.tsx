@@ -86,6 +86,8 @@ export function CameraPage({ id }: { id: string }) {
   const facts = [
     source.location, ingestLong(source), video && res ? `Records up to ${res}` : undefined,
     video ? (source.record_audio ? "Audio recorded" : "Audio not recorded") : undefined,
+    // Talk-back (ADR 0069): agents and people can be heard through it.
+    video && source.speaker ? "Has a speaker" : undefined,
     `Keeps ${keepsLabel(source, account)}`.replace("Keeps Until", "Keeps until"),
   ].filter(Boolean) as string[];
   const tabs: { id: Tab; label: string }[] = video

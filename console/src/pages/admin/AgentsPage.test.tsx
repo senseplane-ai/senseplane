@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { accessOf, grantBody } from "./AccessPicker";
+import { accessOf, defaultPermissions, grantBody } from "./AccessPicker";
 import { AgentsPage, mcpUrl } from "./AgentsPage";
 import { SRC, agent, isoAgo, me, page, setup, sources } from "./test-utils";
 
@@ -91,6 +91,28 @@ describe("AgentsPage", () => {
     expect(accessOf(g(["sensors"])).permissions).toEqual(["environment"]);
     expect(accessOf(g(["control"])).permissions).toEqual(["control"]);
     expect(grantBody({ sources: ["s"], permissions: ["environment"] }).senses).toEqual(["sensors"]);
+  });
+
+  it("grants Speak as the speak sense, off by default and implied by nothing else", async () => {
+    const { props, api } = setup(routes());
+    render(<AgentsPage {...props} />);
+    await screen.findByRole("listitem", { name: "Claude Code" });
+    fireEvent.click(within(card("Claude Code")).getByRole("button", { name: "Edit access for Claude Code" }));
+    const c = within(card("Claude Code"));
+    expect(c.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(c.getByRole("button", { name: "Read sensors" }));
+    fireEvent.click(c.getByRole("button", { name: "Control devices" }));
+    expect(c.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(c.getByRole("button", { name: "Speak" }));
+    expect(c.getByText(/say things out loud through cameras that have a speaker/)).toBeTruthy();
+    fireEvent.click(c.getByRole("button", { name: "Save access" }));
+    await waitFor(() => expect(api.called("POST", "/grants")).toHaveLength(1));
+    expect(api.called("POST", "/grants")[0]!.body.senses).toEqual(["video", "audio", "sensors", "control", "speak"]);
+
+    const g = (senses: string[]) => [{ id: "g", agent_id: "a", source_ids: ["s"], senses, abilities: [], created_at: "" }] as never;
+    expect(accessOf(g(["sensors", "control"])).permissions).toEqual(["environment", "control"]);
+    expect(accessOf(g(["speak"])).permissions).toEqual(["speak"]);
+    expect(defaultPermissions).not.toContain("speak");
   });
 
   it("limits an app to blurred pictures with blurred_only, off by default", async () => {

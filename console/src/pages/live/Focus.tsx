@@ -8,20 +8,55 @@ import { Link } from "../../router";
 import { useApp } from "../../shell/AppData";
 import { statusOf } from "../../shell/sources";
 import { Button, FrameGround, IconButton, StatusDot, useToast } from "../../ui";
+import type { Talk } from "../../live/client";
 import { formatLatency, useDetection, useFeed } from "./feed";
 import { lastSeen } from "./Tile";
+
+/** Push-to-talk through a phone camera (ADR 0069): people who are members and up. */
+export const canTalk = (source: Source, role: string | undefined) =>
+  source.type === "browser" && !!source.speaker && (!role || ["owner", "admin", "member"].includes(role));
+
+/** Hold to talk: the microphone goes to the camera's speaker while the button is held. */
+export function TalkButton({ talk, name }: { talk: Talk; name: string }) {
+  const toast = useToast();
+  const [on, setOn] = useState(false);
+  const start = () => {
+    if (on) return;
+    setOn(true);
+    void talk.start().catch((e) => {
+      setOn(false);
+      toast(e instanceof Error ? e.message : "Couldn't use the microphone.", "error");
+    });
+  };
+  const stop = () => {
+    if (!on) return;
+    setOn(false);
+    void talk.stop();
+  };
+  return (
+    <button type="button" className={`btn btn-sm lv-talk${on ? " lv-talk-on" : ""}`} aria-pressed={on}
+      aria-label={on ? `Talking through ${name}; release to stop` : `Hold to talk through ${name}`}
+      onPointerDown={(e) => { e.preventDefault(); start(); }} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop}
+      onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); start(); } }}
+      onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") stop(); }}
+      onBlur={stop}>
+      {on ? "Talking… release to stop" : "Hold to talk"}
+    </button>
+  );
+}
 
 /** One camera large, with actions and a strip of the others. */
 export function Focus({ source, others, detections, onBack, onPick, onLiveError }: {
   source: Source; others: Source[]; detections: boolean; onBack: () => void; onPick: (id: string) => void; onLiveError: (e: unknown) => void;
 }) {
-  const { client } = useApp();
+  const { client, me } = useApp();
   const toast = useToast();
   const frame = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const [audio, setAudio] = useState(false);
   const [saving, setSaving] = useState(false);
-  const feed = useFeed(source, video, { audio, onError: onLiveError });
+  const talkable = canTalk(source, me?.role);
+  const feed = useFeed(source, video, { audio, talk: talkable, onError: onLiveError });
   const detection = useDetection(source.id, detections && source.status === "online");
   const status = statusOf(source);
   const down = status.kind !== "on";
@@ -57,6 +92,7 @@ export function Focus({ source, others, detections, onBack, onPick, onLiveError 
           <span className="lv-focus-labels">
             {feed.live && <span className="live-badge">LIVE</span>}
             <span className="lv-focus-label">{source.name} · {feed.live ? (latency ? `${latency} behind` : "live") : down ? status.label.toLowerCase() : "snapshot"}</span>
+            {source.speaker && <span className="lv-focus-label">Has a speaker</span>}
           </span>
           {down && (
             <span className="lv-down">
@@ -76,7 +112,9 @@ export function Focus({ source, others, detections, onBack, onPick, onLiveError 
           <Link className="btn btn-ghost btn-sm" to={`/cameras/${source.id}?t=${encodeURIComponent(new Date(Date.now() - 60_000).toISOString())}`}>Rewind 1 minute</Link>
           <Button size="sm" onClick={() => void saveLast()} busy={saving}>Save the last 30 s</Button>
           <Link className="btn btn-ghost btn-sm" to={`/?camera=${source.id}`}>Ask about this camera</Link>
+          {feed.talk && <TalkButton talk={feed.talk} name={source.name} />}
         </div>
+        {feed.talk && <p className="muted lv-talk-note">Whoever is near {source.name} hears you. The phone shows that someone is speaking, and it&apos;s in the audit log.</p>}
       </div>
       {others.length > 0 && (
         <div className="lv-others">

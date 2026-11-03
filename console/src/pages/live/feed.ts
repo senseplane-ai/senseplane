@@ -6,7 +6,7 @@
 // isn't available. Also polls the newest detection label for the overlay.
 import { type RefObject, useEffect, useState } from "react";
 import type { Source } from "senseplane";
-import { openLive } from "../../live/client";
+import { type Talk, openLive } from "../../live/client";
 import { useApp } from "../../shell/AppData";
 import { labelText } from "../../shell/sources";
 
@@ -16,6 +16,8 @@ const STATS_MS = 5_000;
 
 export interface Feed {
   live: boolean;
+  /** Push-to-talk, when the session may talk through the camera (ADR 0069). */
+  talk?: Talk;
   latencyMs?: number;
   snapshot: string | null;
 }
@@ -27,12 +29,14 @@ export function liveErrorCode(e: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
-export function useFeed(src: Source, video: RefObject<HTMLVideoElement | null>, opts: { audio?: boolean; onError?: (e: unknown) => void } = {}): Feed {
+export function useFeed(src: Source, video: RefObject<HTMLVideoElement | null>, opts: { audio?: boolean; talk?: boolean; onError?: (e: unknown) => void } = {}): Feed {
   const { apiUrl, apiKey, client } = useApp();
   const [live, setLive] = useState(false);
   const [latencyMs, setLatency] = useState<number | undefined>();
   const [snapshot, setSnapshot] = useState<string | null>(null);
+  const [talk, setTalk] = useState<Talk | undefined>();
   const audio = !!opts.audio;
+  const wantsTalk = !!opts.talk;
   const onError = opts.onError;
 
   useEffect(() => {
@@ -42,10 +46,11 @@ export function useFeed(src: Source, video: RefObject<HTMLVideoElement | null>, 
     let handle: { close(): void; stats(): Promise<{ latencyMs?: number }> } | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
     el.muted = !audio;
-    openLive({ apiUrl, apiKey, sourceId: src.id, video: el, audio }).then((h) => {
+    openLive({ apiUrl, apiKey, sourceId: src.id, video: el, audio, talk: wantsTalk }).then((h) => {
       if (gone) return h.close();
       handle = h;
       setLive(true);
+      setTalk(h.talk);
       const read = () => void h.stats().then((s) => !gone && setLatency(s.latencyMs)).catch(() => undefined);
       read();
       timer = setInterval(read, STATS_MS);
@@ -59,9 +64,10 @@ export function useFeed(src: Source, video: RefObject<HTMLVideoElement | null>, 
       if (timer) clearInterval(timer);
       handle?.close();
       setLive(false);
+      setTalk(undefined);
       setLatency(undefined);
     };
-  }, [src.id, src.status, audio, apiUrl, apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [src.id, src.status, audio, wantsTalk, apiUrl, apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (live) return;
@@ -77,7 +83,7 @@ export function useFeed(src: Source, video: RefObject<HTMLVideoElement | null>, 
     };
   }, [live, src.id, client]);
 
-  return { live, latencyMs, snapshot };
+  return { live, latencyMs, snapshot, ...(talk ? { talk } : {}) };
 }
 
 /** "person 0.94" for the newest detection on this camera in the last minute, or null. */

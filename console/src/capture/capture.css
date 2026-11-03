@@ -17,3 +17,7 @@ button { flex: 1; min-height: 48px; border: 0; border-radius: 12px; font: inheri
 button.danger { background: #4a1714; }
 button:disabled { opacity: .5; }
 button:focus-visible { outline: 3px solid #7cb7ff; outline-offset: 2px; }
+/* Talk-back (ADR 0069): whatever comes out of the speaker is shown, so people near the phone know. */
+.speaking { position: absolute; z-index: 2; top: calc(max(16px, env(safe-area-inset-top)) + 48px); left: 16px; right: 16px; margin: 0; padding: 12px 14px; border-radius: 12px; background: #0b57d0e6; font-weight: 700; text-align: center; }
+.allow-sound { position: absolute; z-index: 2; left: 16px; right: 16px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 140px); flex: none; background: #0b57d0; }
+.speaking[hidden], .allow-sound[hidden] { display: none; }

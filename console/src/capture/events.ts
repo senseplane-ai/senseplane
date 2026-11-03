@@ -23,6 +23,8 @@ export function reactTo(e: { event: string; [k: string]: unknown }): Reaction {
           : "This camera was closed by the server.",
       };
     case "producerClosed":
+      // A track the page consumed (a person's push-to-talk, ADR 0069) ended: not the camera stopping.
+      if (e.consumerId) return { action: "ignore" };
       return { action: "notice", message: "Recording stopped by the server. Press Resume to try again." };
     default:
       return { action: "ignore" };

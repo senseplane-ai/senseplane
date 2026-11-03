@@ -25,7 +25,7 @@ import (
 var (
 	mqttURL       = flag.String("mqtt-url", os.Getenv("MQTT_URL"), "read sensors from, and publish Senseplane's events to, this MQTT broker, e.g. mqtt://192.168.1.10:1883 (env MQTT_URL; off when empty)")
 	mqttUser      = flag.String("mqtt-username", os.Getenv("MQTT_USERNAME"), "MQTT username (env MQTT_USERNAME)")
-	mqttPass      = flag.String("mqtt-password", os.Getenv("MQTT_PASSWORD"), "MQTT password (env MQTT_PASSWORD)")
+	mqttPass      = flag.String("mqtt-password", os.Getenv("MQTT_PASSWORD"), "MQTT password; prefer the env MQTT_PASSWORD, since flags show in process lists")
 	mqttDiscovery = flag.String("mqtt-discovery-prefix", envOr("MQTT_DISCOVERY_PREFIX", "homeassistant"), "Home Assistant's MQTT discovery prefix (env MQTT_DISCOVERY_PREFIX)")
 	mqttPrefix    = flag.String("mqtt-prefix", envOr("MQTT_PREFIX", "senseplane"), "where the box publishes its own states (env MQTT_PREFIX)")
 	mqttTopics    multi
@@ -72,6 +72,10 @@ func mqttOptions(ctx context.Context, log *slog.Logger) (*mqtt.Options, error) {
 	if o.URL == "" {
 		return nil, nil
 	}
+	// Checked once at start-up; the error never repeats the URL, which may hold a password.
+	if err := mqtt.CheckURL(o.URL); err != nil {
+		return nil, err
+	}
 	for _, t := range topics {
 		if t = strings.TrimSpace(t); t == "" {
 			continue
@@ -99,7 +103,7 @@ func withMQTT(ctx context.Context, o *bridge.Options, log *slog.Logger) {
 	if o.Sensors == nil {
 		o.Sensors = map[string]bridge.SensorLink{}
 	}
-	o.Sensors["mqtt"] = mqttLink{l}
+	o.Sensors[bridge.LinkMQTT] = mqttLink{l}
 	o.Outputs = l
 	log.Info("MQTT on", "broker", mqtt.Redact(mo.URL), "topics", len(mo.Topics))
 }

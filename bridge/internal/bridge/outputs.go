@@ -20,6 +20,9 @@ type OutputSink interface {
 // outputsWait is how long one long-poll for outputs waits for an event.
 const outputsWait = 25 * time.Second
 
+// emptyCursorWait is the pause before polling again after an answer without a cursor (Bridge.emptyWait in tests).
+const emptyCursorWait = 5 * time.Second
+
 // runOutputs long-polls the API for outputs and hands each answer over; the
 // API answers at once when there is something new and holds the request otherwise.
 func (b *Bridge) runOutputs(ctx context.Context) {
@@ -48,6 +51,13 @@ func (b *Bridge) runOutputs(ctx context.Context) {
 		cursor = out.Cursor
 		if !out.MQTTPublish {
 			cursor = "" // turned on again later, it starts from then
+		} else if cursor == "" {
+			// An API that gave no position would answer the next poll at once: wait instead of spinning.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(b.emptyWait):
+			}
 		}
 	}
 }

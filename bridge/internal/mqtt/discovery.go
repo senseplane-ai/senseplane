@@ -261,20 +261,24 @@ func (e *entity) reading(payload []byte, at time.Time, retained bool) (api.Readi
 
 // Topic is a plain topic (a device without discovery) and what it measures:
 // a number in a Senseplane unit (celsius, percent, watt…), an on/off state, or
-// an event (doorbell, button) on every message. Path, when set, is a JSON path
-// in the payload (`AM2301.Temperature`).
+// an event (doorbell, button) on each message with its trigger payload. Path,
+// when set, is a JSON path in the payload (`AM2301.Temperature`).
 type Topic struct {
 	Topic, Sense, Unit, Path, Name string
+	// Trigger is the payload an event fires on (for doorbell and button; default ON, press, pressed, 1 or true).
+	Trigger string
 }
 
 var eventSenses = map[string]bool{"doorbell": true, "button": true}
 
+var defaultTriggers = map[string]bool{"on": true, "press": true, "pressed": true, "1": true, "true": true}
+
 func (t *Topic) kind() string {
 	switch {
-	case t.Unit != "":
-		return "number"
 	case eventSenses[t.Sense]:
 		return "event"
+	case t.Unit != "":
+		return "number"
 	}
 	return "state"
 }
@@ -282,7 +286,8 @@ func (t *Topic) kind() string {
 var senseRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
 var unitRe = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
 
-// ParseTopic reads `TOPIC=SENSE[:UNIT][@JSON.PATH]`, e.g. `tele/sonoff/SENSOR=temperature:celsius@AM2301.Temperature`.
+// ParseTopic reads `TOPIC=SENSE[:UNIT][@JSON.PATH]`, e.g. `tele/sonoff/SENSOR=temperature:celsius@AM2301.Temperature`;
+// for an event sense the part after `:` is the payload it fires on (`bell/state=doorbell:RING`).
 func ParseTopic(s string) (Topic, error) {
 	i := strings.LastIndex(s, "=")
 	if i <= 0 {
@@ -299,6 +304,9 @@ func ParseTopic(s string) (Topic, error) {
 	}
 	if !senseRe.MatchString(t.Sense) || t.Sense == "video" || t.Sense == "audio" || t.Sense == "sensors" || t.Sense == "control" {
 		return Topic{}, fmt.Errorf("%q: %q isn't a sensor sense (temperature, contact, doorbell…)", s, t.Sense)
+	}
+	if eventSenses[t.Sense] {
+		t.Trigger, t.Unit = t.Unit, ""
 	}
 	if t.Unit != "" && !unitRe.MatchString(t.Unit) {
 		return Topic{}, fmt.Errorf("%q: the unit is a Senseplane unit (celsius, percent, watt…)", s)
@@ -320,8 +328,46 @@ func (t *Topic) entity() *entity {
 	return &entity{id: "mqtt." + slug("topic_"+t.Topic), name: name, stateTopic: t.Topic, value: tpl, plain: t}
 }
 
-var onWords = map[string]bool{"on": true, "true": true, "1": true, "yes": true, "open": true, "opened": true, "wet": true, "detected": true, "unlocked": true}
-var offWords = map[string]bool{"off": true, "false": true, "0": true, "no": true, "closed": true, "close": true, "dry": true, "clear": true, "locked": true}
+// Words every state takes, and the ones only some senses do (a leak is wet or dry, a door open or closed).
+var onWords = map[string]bool{"on": true, "true": true, "1": true, "yes": true}
+var offWords = map[string]bool{"off": true, "false": true, "0": true, "no": true}
+
+var senseWords = map[string][2][]string{
+	"contact":         {{"open", "opened"}, {"closed", "close"}},
+	"cover":           {{"open", "opened"}, {"closed", "close"}},
+	"leak":            {{"wet", "detected"}, {"dry", "clear"}},
+	"lock":            {{"unlocked", "open"}, {"locked"}},
+	"motion":          {{"detected", "motion"}, {"clear"}},
+	"occupancy":       {{"detected", "occupied"}, {"clear", "unoccupied"}},
+	"smoke":           {{"detected"}, {"clear"}},
+	"gas":             {{"detected"}, {"clear"}},
+	"carbon_monoxide": {{"detected"}, {"clear"}},
+	"vibration":       {{"detected"}, {"clear"}},
+	"tamper":          {{"detected"}, {"clear"}},
+	"alarm":           {{"armed", "triggered"}, {"disarmed"}},
+}
+
+// stateWord reads a state payload for a sense: true or false, ok false for a word it doesn't take.
+func stateWord(sense, w string) (on, ok bool) {
+	if onWords[w] {
+		return true, true
+	}
+	if offWords[w] {
+		return false, true
+	}
+	words := senseWords[sense]
+	for _, x := range words[0] {
+		if w == x {
+			return true, true
+		}
+	}
+	for _, x := range words[1] {
+		if w == x {
+			return false, true
+		}
+	}
+	return false, false
+}
 
 func (t *Topic) reading(e *entity, payload []byte, at time.Time, retained bool) (api.Reading, bool) {
 	v, ok := e.value.apply(payload)
@@ -338,13 +384,18 @@ func (t *Topic) reading(e *entity, payload []byte, at time.Time, retained bool) 
 		f = math.Round(f*100) / 100
 		r.Number, r.Unit = &f, t.Unit
 	case "event":
-		if retained { // it happened before
+		// Only its trigger payload fires it: a button that sends ON then OFF presses once.
+		w := strings.TrimSpace(v)
+		hit := defaultTriggers[strings.ToLower(w)]
+		if t.Trigger != "" {
+			hit = strings.EqualFold(w, t.Trigger)
+		}
+		if retained || !hit { // a retained one happened before
 			return api.Reading{}, false
 		}
 	default:
-		w := strings.ToLower(strings.TrimSpace(v))
-		on := onWords[w]
-		if !on && !offWords[w] {
+		on, ok := stateWord(t.Sense, strings.ToLower(strings.TrimSpace(v)))
+		if !ok {
 			return api.Reading{}, false
 		}
 		r.State = &on

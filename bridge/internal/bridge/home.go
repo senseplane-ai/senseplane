@@ -53,6 +53,8 @@ type link struct {
 const (
 	linkHomeAssistant = "home_assistant"
 	linkMatter        = "matter"
+	// LinkMQTT is the name of the MQTT link in Options.Sensors (ADR 0071).
+	LinkMQTT = "mqtt"
 )
 
 func newHome(client *api.Client, log *slog.Logger, notify func(), every time.Duration) *home {
@@ -198,4 +200,15 @@ func (h *home) health() (*api.HomeHealth, *api.MatterHealth) {
 		mt = &api.MatterHealth{Connected: l.up, Nodes: l.nodes}
 	}
 	return ha, mt
+}
+
+// mqttHealth is the MQTT link's state for the heartbeat (nil without one).
+func (h *home) mqttHealth() *api.MQTTHealth {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	l := h.links[LinkMQTT]
+	if l == nil {
+		return nil
+	}
+	return &api.MQTTHealth{Connected: l.up, Entities: len(l.entities)}
 }

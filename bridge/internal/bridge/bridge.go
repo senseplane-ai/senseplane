@@ -91,11 +91,15 @@ type Bridge struct {
 	home    *home
 	found   *found
 	maxRes  string // the plan's largest stream, from the config
+	// features are what the API said it takes (the config's `features`).
+	features map[string]bool
 	// ha switches Home Assistant's devices on the session Run keeps (nil without one).
 	ha *homeassistant.Client
 	// controls are the links that switch devices, by link name.
 	controls map[string]Controllable
 	settle   time.Duration // how long device_control waits for the state
+	// emptyWait is the pause after an outputs answer without a cursor.
+	emptyWait time.Duration
 }
 
 // New returns a bridge; call Run.
@@ -104,7 +108,7 @@ func New(o Options) *Bridge {
 		o.Log = slog.Default()
 	}
 	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1),
-		controls: map[string]Controllable{}, settle: settleFor}
+		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait}
 	if o.HomeAssistant != nil || o.Matter != nil || len(o.Sensors) > 0 {
 		b.home = newHome(o.Client, o.Log, b.poke, o.SendEvery)
 	}
@@ -270,6 +274,10 @@ func (b *Bridge) sync(ctx context.Context) *api.Config {
 	}
 	b.mu.Lock()
 	b.maxRes = cfg.MaxResolution
+	b.features = map[string]bool{}
+	for _, f := range cfg.Features {
+		b.features[f] = true
+	}
 	b.mu.Unlock()
 	if b.home != nil {
 		b.home.publish(ctx)
@@ -359,6 +367,13 @@ func (b *Bridge) report(ctx context.Context) {
 	h := api.Health{Version: b.o.Version, Cameras: b.Cameras()}
 	if b.home != nil {
 		h.HomeAssistant, h.Matter = b.home.health()
+		// Only to an API that takes it: an older one refuses a heartbeat with fields it doesn't know.
+		b.mu.Lock()
+		mqttOK := b.features["health_mqtt"]
+		b.mu.Unlock()
+		if mqttOK {
+			h.MQTT = b.home.mqttHealth()
+		}
 	}
 	if b.found != nil {
 		h.CamerasFound = b.found.health()

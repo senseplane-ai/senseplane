@@ -39,6 +39,8 @@ type Config struct {
 	Sensors []string `json:"sensors"`
 	// MaxResolution is the plan's largest stream ("720p", "1080p").
 	MaxResolution string `json:"max_resolution"`
+	// Features are what this API takes that an older one may not (`health_mqtt`).
+	Features []string `json:"features"`
 }
 
 // Device is what measured a reading: here, a Home Assistant entity.
@@ -106,6 +108,8 @@ type Health struct {
 	Matter *MatterHealth `json:"matter,omitempty"`
 	// CamerasFound is how many cameras it lists to pick from, when it looks for them (ADR 0063).
 	CamerasFound *int `json:"cameras_found,omitempty"`
+	// MQTT is its MQTT broker (ADR 0071), sent only to an API whose config lists `health_mqtt`.
+	MQTT *MQTTHealth `json:"mqtt,omitempty"`
 }
 
 // FoundCamera is a camera the box found, on its network with ONVIF or in

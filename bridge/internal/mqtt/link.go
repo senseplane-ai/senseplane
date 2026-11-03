@@ -52,7 +52,25 @@ type Options struct {
 	MinBackoff, MaxBackoff time.Duration
 	// KeepAlive is the MQTT keep-alive (default 30 s).
 	KeepAlive time.Duration
-	Log       *slog.Logger
+	// CallTimeout bounds one publish or subscribe (default 5 s); a call that runs out drops the
+	// connection, so a broker that stopped answering doesn't hold the link.
+	CallTimeout time.Duration
+	// MaxPayload is the largest message read (default 64 KiB); MaxEntities the most discovered entities kept (default 2,000).
+	MaxPayload, MaxEntities int
+	Log                     *slog.Logger
+}
+
+// CheckURL tells whether a broker URL can be used, without repeating it (it may hold a password).
+func CheckURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return errors.New("the MQTT broker URL can't be read; it looks like mqtt://host:1883")
+	}
+	switch u.Scheme {
+	case "mqtt", "tcp", "mqtts", "ssl", "tls", "ws", "wss":
+		return nil
+	}
+	return errors.New("the MQTT broker URL must start with mqtt://, mqtts://, ws:// or wss://")
 }
 
 // Sink is what the link tells the bridge (bridge.SensorSink).
@@ -76,6 +94,9 @@ type Link struct {
 	// will is the status topic to set as the will on the next connection ("" while the box doesn't publish);
 	// connWill is the one the current connection has.
 	will, connWill string
+
+	// bad is set when the broker URL can't be used (the link then does nothing).
+	bad error
 
 	// Owned by the worker (run).
 	entities map[string]*entity   // by discovery config topic (or plain topic)
@@ -109,11 +130,33 @@ func New(o Options) *Link {
 	if o.KeepAlive == 0 {
 		o.KeepAlive = 30 * time.Second
 	}
+	if o.CallTimeout == 0 {
+		o.CallTimeout = 5 * time.Second
+	}
+	if o.MaxPayload == 0 {
+		o.MaxPayload = 64 << 10
+	}
+	if o.MaxEntities == 0 {
+		o.MaxEntities = 2000
+	}
+	// Credentials travel apart from the URL, which is then safe to dial and to show in errors.
+	bad := CheckURL(o.URL)
+	if bad == nil {
+		u, _ := url.Parse(o.URL)
+		if u.User != nil {
+			if o.Username == "" {
+				o.Username = u.User.Username()
+				o.Password, _ = u.User.Password()
+			}
+			u.User = nil
+			o.URL = u.String()
+		}
+	}
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
 	l := &Link{o: o, msgs: make(chan *mq.Message, 4096), outs: make(chan api.Outputs, 8), up: make(chan *mq.BaseClient, 1),
-		entities: map[string]*entity{}, byState: map[string][]*entity{}, subbed: map[string]bool{}}
+		entities: map[string]*entity{}, byState: map[string][]*entity{}, subbed: map[string]bool{}, bad: bad}
 	l.out = newOutputs(l)
 	for i := range o.Topics {
 		e := o.Topics[i].entity()
@@ -123,10 +166,13 @@ func New(o Options) *Link {
 	return l
 }
 
-// Redact hides a broker URL's password, for logs.
+// Redact hides a broker URL's password, for logs; a URL that can't be read isn't shown at all.
 func Redact(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err != nil {
+		return "<unparseable URL>"
+	}
+	if u.User == nil {
 		return raw
 	}
 	if _, ok := u.User.Password(); ok {
@@ -157,6 +203,10 @@ func (l *Link) client() *mq.BaseClient {
 
 // Run connects, reconnects with backoff and handles messages until ctx ends.
 func (l *Link) Run(ctx context.Context, sink Sink) {
+	if l.bad != nil {
+		l.o.Log.Error("MQTT is off", "err", l.bad)
+		return
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -236,6 +286,10 @@ func (l *Link) connect(ctx context.Context) (*mq.BaseClient, string, error) {
 	}
 	// Messages are handed to the worker: the client reads the next packet only after this returns.
 	cli.Handle(mq.HandlerFunc(func(m *mq.Message) {
+		if len(m.Payload) > l.o.MaxPayload {
+			l.o.Log.Debug("MQTT message too large; ignored", "topic", m.Topic, "bytes", len(m.Payload))
+			return
+		}
 		select {
 		case l.msgs <- m:
 		default:
@@ -280,7 +334,7 @@ func (l *Link) setWill(on bool, status string) bool {
 	if differs {
 		l.o.Log.Info("connecting to the MQTT broker again, to set the box's status", "status", want)
 		// A clean goodbye, so the broker doesn't send the old will.
-		bye, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		bye, stop := context.WithTimeout(context.Background(), l.o.CallTimeout)
 		if cli.Disconnect(bye) != nil {
 			_ = cli.Close()
 		}
@@ -342,7 +396,7 @@ func (l *Link) subscribed(ctx context.Context, cli *mq.BaseClient) {
 		subs = append(subs, mq.Subscription{Topic: t, QoS: mq.QoS0})
 		l.subbed[t] = true
 	}
-	sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	sctx, cancel := context.WithTimeout(ctx, l.o.CallTimeout)
 	defer cancel()
 	// Brokers take a limited number of filters at once.
 	for i := 0; i < len(subs); i += 50 {
@@ -362,13 +416,39 @@ func (l *Link) subscribe(ctx context.Context, topic string) {
 	if cli == nil {
 		return // subscribed on the next connection
 	}
-	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	sctx, cancel := context.WithTimeout(ctx, l.o.CallTimeout)
 	defer cancel()
 	if _, err := cli.Subscribe(sctx, mq.Subscription{Topic: topic, QoS: mq.QoS0}); err != nil {
 		l.o.Log.Warn("MQTT subscribe failed", "topic", topic, "err", err)
+		l.timedOut(ctx, cli, err)
 		return
 	}
 	l.subbed[topic] = true
+}
+
+// unsubscribe stops reading a state topic no entity uses any more.
+func (l *Link) unsubscribe(ctx context.Context, topic string) {
+	if !l.subbed[topic] {
+		return
+	}
+	delete(l.subbed, topic)
+	cli := l.client()
+	if cli == nil {
+		return
+	}
+	uctx, cancel := context.WithTimeout(ctx, l.o.CallTimeout)
+	defer cancel()
+	if err := cli.Unsubscribe(uctx, topic); err != nil {
+		l.timedOut(ctx, cli, err)
+	}
+}
+
+// timedOut drops a connection whose call ran out of time: a half-open one would hold every later call too.
+func (l *Link) timedOut(ctx context.Context, cli *mq.BaseClient, err error) {
+	if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		l.o.Log.Warn("the MQTT broker stopped answering; connecting again")
+		_ = cli.Close()
+	}
 }
 
 // handle takes one message; true when the entity list changed.
@@ -403,6 +483,9 @@ func (l *Link) discovered(ctx context.Context, topic string, payload []byte) boo
 		delete(l.entities, topic)
 	}
 	if len(payload) == 0 {
+		if old != nil {
+			l.unused(ctx, old.stateTopic)
+		}
 		return old != nil
 	}
 	e, why := parseDiscovery(topic, payload, l.o.DiscoveryPrefix)
@@ -410,10 +493,24 @@ func (l *Link) discovered(ctx context.Context, topic string, payload []byte) boo
 		l.o.Log.Debug("MQTT discovery ignored", "topic", topic, "why", why)
 		return old != nil
 	}
+	if old == nil && len(l.entities) >= l.o.MaxEntities {
+		l.o.Log.Warn("too many MQTT entities; one more ignored", "max", l.o.MaxEntities, "topic", topic)
+		return false
+	}
 	l.entities[topic] = e
 	l.byState[e.stateTopic] = append(l.byState[e.stateTopic], e)
 	l.subscribe(ctx, e.stateTopic)
+	if old != nil {
+		l.unused(ctx, old.stateTopic)
+	}
 	return true
+}
+
+// unused unsubscribes a state topic once no entity reads it.
+func (l *Link) unused(ctx context.Context, topic string) {
+	if len(l.byState[topic]) == 0 {
+		l.unsubscribe(ctx, topic)
+	}
 }
 
 func (l *Link) drop(e *entity) {
@@ -437,12 +534,13 @@ func (l *Link) publish(ctx context.Context, topic string, payload []byte, retain
 	if cli == nil {
 		return false
 	}
-	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	pctx, cancel := context.WithTimeout(ctx, l.o.CallTimeout)
 	defer cancel()
 	if err := cli.Publish(pctx, &mq.Message{Topic: topic, Payload: payload, Retain: retain, QoS: mq.QoS1}); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			l.o.Log.Warn("MQTT publish failed", "topic", topic, "err", err)
 		}
+		l.timedOut(ctx, cli, err)
 		return false
 	}
 	return true

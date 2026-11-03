@@ -15,12 +15,14 @@ import (
 // publish to its MQTT broker. MQTTPublish is false, and the lists empty, until
 // the account turns publishing on for this box.
 type Outputs struct {
-	MQTTPublish bool           `json:"mqtt_publish"`
-	BridgeID    string         `json:"bridge_id"`
-	Cursor      string         `json:"cursor"`
-	Cameras     []OutputCamera `json:"cameras"`
-	Watches     []OutputWatch  `json:"watches"`
-	Events      []OutputEvent  `json:"events"`
+	MQTTPublish bool   `json:"mqtt_publish"`
+	BridgeID    string `json:"bridge_id"`
+	// Now is the server's time.
+	Now     string         `json:"now"`
+	Cursor  string         `json:"cursor"`
+	Cameras []OutputCamera `json:"cameras"`
+	Watches []OutputWatch  `json:"watches"`
+	Events  []OutputEvent  `json:"events"`
 }
 
 // OutputCamera is one camera of the account, with its online state.
@@ -43,7 +45,9 @@ type OutputEvent struct {
 	SourceID   string `json:"source_id"`
 	WatchID    string `json:"watch_id,omitempty"`
 	OccurredAt string `json:"occurred_at"`
-	Summary    string `json:"summary"`
+	// AgeMs is how old it is by the server's clock, so the box needn't trust its own.
+	AgeMs   int64  `json:"age_ms"`
+	Summary string `json:"summary"`
 }
 
 // Outputs waits up to `wait` for events after the cursor `after` ("" for none: the API starts from now).
@@ -59,4 +63,10 @@ func (c *Client) Outputs(ctx context.Context, after string, wait time.Duration) 
 		return nil, err
 	}
 	return &out, nil
+}
+
+// MQTTHealth is the box's MQTT broker in a health report.
+type MQTTHealth struct {
+	Connected bool `json:"connected"`
+	Entities  int  `json:"entities"`
 }

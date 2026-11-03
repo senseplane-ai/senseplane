@@ -46,6 +46,16 @@ ARTEFACTS = {
     "minilm_tokenizer": Artefact("minilm-l6-v2-tokenizer.json",
                                  "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer.json",
                                  "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0", "Apache-2.0"),
+    # YuNet face detector (Shiqi Yu et al., OpenCV Zoo, MIT), the dynamic-input export, pinned commit.
+    # Only for privacy blurring (redact.py, ADR 0068): it finds faces, it does not recognise anyone.
+    "yunet": Artefact("face_detection_yunet_2026may.onnx",
+                      "https://github.com/opencv/opencv_zoo/raw/26cc381e4d2594bb9f47a26eb8fd96c94a13660d/models/face_detection_yunet/face_detection_yunet_2026may.onnx",
+                      "ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0", "MIT"),
+    # LPD-YuNet number plate detector (Dong Xu, watrix.ai, OpenCV Zoo, Apache 2.0), pinned commit. Trained on
+    # Chinese plates. Also only for privacy blurring: it finds plates, nothing reads them.
+    "lpd_yunet": Artefact("license_plate_detection_lpd_yunet_2023mar.onnx",
+                          "https://github.com/opencv/opencv_zoo/raw/b4971d625240509dae6119e19201fe30919a285f/models/license_plate_detection_yunet/license_plate_detection_lpd_yunet_2023mar.onnx",
+                          "6d4978a7b6d25514d5e24811b82bfb511d166bdd8ca3b03aa63c1623d4d039c7", "Apache-2.0"),
 }
 
 

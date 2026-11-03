@@ -1,0 +1,649 @@
+{
+  "$comment": "Faces for the privacy-blurring recall check (brain/scripts/face_recall.py, ADR 0068). Photos are public-domain works of US federal agencies (FEMA, NPS, FSA/OWI) on Wikimedia Commons; they are downloaded for the check and never committed. Boxes are [x1, y1, x2, y2] in the photo scaled to 640 px wide, drawn by hand on a 10 px grid (forehead to chin, ear to ear or nose tip in profile); hard = mostly turned away or hidden. Pictures of people (posters, a cut-out, an ID badge) are not labelled.",
+  "photos": [
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_73_-_Photograph_by_Dave_Saville_taken_on_10-06-1999_in_North_Carolina.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/FEMA_-_73_-_Photograph_by_Dave_Saville_taken_on_10-06-1999_in_North_Carolina.jpg/1280px-FEMA_-_73_-_Photograph_by_Dave_Saville_taken_on_10-06-1999_in_North_Carolina.jpg",
+      "sha256": "760a96b68b724f815729bcea61f2d39831e2c41a8f03db41a62534fb96b37a1e",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            155,
+            45,
+            240,
+            160
+          ]
+        },
+        {
+          "box": [
+            410,
+            90,
+            525,
+            195
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_32125_-_FEMA_Community_Relations_workers_Walk_Door-to-Door.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/FEMA_-_32125_-_FEMA_Community_Relations_workers_Walk_Door-to-Door.jpg/1280px-FEMA_-_32125_-_FEMA_Community_Relations_workers_Walk_Door-to-Door.jpg",
+      "sha256": "6402a276ee24b50f95dc7363f7b83db617318a115c042242016ed14c92e5ee0c",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            168,
+            110,
+            205,
+            148
+          ]
+        },
+        {
+          "box": [
+            301,
+            124,
+            314,
+            140
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_32126_-_FEMA_Speaks_With_Ohio_Resident..jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/FEMA_-_32126_-_FEMA_Speaks_With_Ohio_Resident..jpg/1280px-FEMA_-_32126_-_FEMA_Speaks_With_Ohio_Resident..jpg",
+      "sha256": "1f5fef2842bd333e9f335db32294fb2e3e83455d9aa7ff1561438349d89f8f2a",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            180,
+            95,
+            255,
+            190
+          ]
+        },
+        {
+          "box": [
+            418,
+            160,
+            445,
+            240
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_32129_-_FEMA_Community_Relations_worker_in_Ottawa,_Ohio.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/FEMA_-_32129_-_FEMA_Community_Relations_worker_in_Ottawa,_Ohio.jpg/1280px-FEMA_-_32129_-_FEMA_Community_Relations_worker_in_Ottawa,_Ohio.jpg",
+      "sha256": "ed6155f415f36a8e12776cc0c2d7337fcec081f03f0b5ec861926a632d2fa4f2",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            400,
+            70,
+            485,
+            150
+          ]
+        },
+        {
+          "box": [
+            212,
+            85,
+            250,
+            160
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_32747_-_FEMA_Community_Relations_worker_talking_to_a_Ohio_resident.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/17/FEMA_-_32747_-_FEMA_Community_Relations_worker_talking_to_a_Ohio_resident.jpg/1280px-FEMA_-_32747_-_FEMA_Community_Relations_worker_talking_to_a_Ohio_resident.jpg",
+      "sha256": "ebc272fcb83009d24ded9b70c11c3865e93ae47f91cedef5ae1c14a0eeae6a64",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            150,
+            35,
+            210,
+            125
+          ]
+        },
+        {
+          "box": [
+            432,
+            25,
+            497,
+            110
+          ]
+        },
+        {
+          "box": [
+            480,
+            300,
+            550,
+            385
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_33984_-_FEMA_Community_Relations%28CR%29_Specialist_talking_to_residents.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/FEMA_-_33984_-_FEMA_Community_Relations%28CR%29_Specialist_talking_to_residents.jpg/1280px-FEMA_-_33984_-_FEMA_Community_Relations%28CR%29_Specialist_talking_to_residents.jpg",
+      "sha256": "d53c58d890d0b4ae9e3dd077db2d028321c56093b155f3f3f52ebf2f6aa46d46",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            30,
+            85,
+            65,
+            140
+          ]
+        },
+        {
+          "box": [
+            185,
+            110,
+            210,
+            180
+          ],
+          "hard": true
+        },
+        {
+          "box": [
+            298,
+            100,
+            345,
+            150
+          ]
+        },
+        {
+          "box": [
+            485,
+            125,
+            525,
+            170
+          ]
+        },
+        {
+          "box": [
+            530,
+            110,
+            570,
+            170
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_34854_-_FEMA_worker_distributes_disaster_recovery_flyers_to_residents_in_Georgia.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/FEMA_-_34854_-_FEMA_worker_distributes_disaster_recovery_flyers_to_residents_in_Georgia.jpg/1280px-FEMA_-_34854_-_FEMA_worker_distributes_disaster_recovery_flyers_to_residents_in_Georgia.jpg",
+      "sha256": "3e801ec9f2c3a32d71f8e687f351ec2449529f43d95ac07f9fe611827f0d2835",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            112,
+            65,
+            185,
+            185
+          ]
+        },
+        {
+          "box": [
+            395,
+            35,
+            465,
+            150
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_35389_-_Community_Relations_specialist_talks_to_homeowner.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fc/FEMA_-_35389_-_Community_Relations_specialist_talks_to_homeowner.jpg/1280px-FEMA_-_35389_-_Community_Relations_specialist_talks_to_homeowner.jpg",
+      "sha256": "0dbb4afbbd0fcc30cbdff3fa2b88976161a51fab39ec092c518348643d67b8e2",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            150,
+            55,
+            275,
+            170
+          ]
+        },
+        {
+          "box": [
+            460,
+            70,
+            560,
+            200
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_39605_-_FEMA_Community_Relations_worker_speaks_with_a_resident_at_in_California.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/FEMA_-_39605_-_FEMA_Community_Relations_worker_speaks_with_a_resident_at_in_California.jpg/1280px-FEMA_-_39605_-_FEMA_Community_Relations_worker_speaks_with_a_resident_at_in_California.jpg",
+      "sha256": "df86c2431dc17430a0241cf829358309921a5a404c08606b153fc923451c4033",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            410,
+            120,
+            490,
+            215
+          ]
+        },
+        {
+          "box": [
+            200,
+            115,
+            240,
+            200
+          ],
+          "hard": true
+        },
+        {
+          "box": [
+            270,
+            160,
+            305,
+            200
+          ]
+        },
+        {
+          "box": [
+            320,
+            170,
+            350,
+            210
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_42211_-_FEMA_Community_Relations_Outreach_Goes_Door_to_Door.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/FEMA_-_42211_-_FEMA_Community_Relations_Outreach_Goes_Door_to_Door.jpg/1280px-FEMA_-_42211_-_FEMA_Community_Relations_Outreach_Goes_Door_to_Door.jpg",
+      "sha256": "30eee6701b04b0e67c1296851791748b8bd388e1f47d08e71efd82bdc9369992",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            208,
+            95,
+            265,
+            165
+          ]
+        },
+        {
+          "box": [
+            600,
+            100,
+            640,
+            180
+          ]
+        },
+        {
+          "box": [
+            430,
+            160,
+            445,
+            200
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_43643_-_FEMA_Community_Relations_specialist_talks_to_a_resident_in_New_Jersey.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/FEMA_-_43643_-_FEMA_Community_Relations_specialist_talks_to_a_resident_in_New_Jersey.jpg/1280px-FEMA_-_43643_-_FEMA_Community_Relations_specialist_talks_to_a_resident_in_New_Jersey.jpg",
+      "sha256": "8a46fc8ce6334f693248e6896017108b2688915ddd2886208577a21c6ee2856c",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            408,
+            55,
+            450,
+            105
+          ]
+        },
+        {
+          "box": [
+            180,
+            95,
+            235,
+            150
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_43683_-_FEMA_Community_Relations_Specialist_visits_a_resident_in_New_Jersey.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/FEMA_-_43683_-_FEMA_Community_Relations_Specialist_visits_a_resident_in_New_Jersey.jpg/1280px-FEMA_-_43683_-_FEMA_Community_Relations_Specialist_visits_a_resident_in_New_Jersey.jpg",
+      "sha256": "5bd4b71541559187c5aa101a8d9a66de8a15847c67cc99b01cf4f0cb284cfc55",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            160,
+            220,
+            320,
+            400
+          ]
+        },
+        {
+          "box": [
+            470,
+            0,
+            640,
+            210
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:FEMA_-_43708_-_FEMA_Community_Relations_worker_going_door_to_door_in_New_Jersey.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/FEMA_-_43708_-_FEMA_Community_Relations_worker_going_door_to_door_in_New_Jersey.jpg/1280px-FEMA_-_43708_-_FEMA_Community_Relations_worker_going_door_to_door_in_New_Jersey.jpg",
+      "sha256": "f1dcadc3cb8f73dcc7f6ca2457c1b16a9cdb42b2e5320afd86073d49b151faa2",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": []
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Canal_Visitor_Center_--_ranger_talks_to_visitors_%285efc502c-155d-4519-3e90-dc6e91baadac%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Canal_Visitor_Center_--_ranger_talks_to_visitors_%285efc502c-155d-4519-3e90-dc6e91baadac%29.jpg/1280px-Canal_Visitor_Center_--_ranger_talks_to_visitors_%285efc502c-155d-4519-3e90-dc6e91baadac%29.jpg",
+      "sha256": "dc8c3ee70d4303b8b7660183b5b786e29db5acc964ead05e53286fa2226c88dc",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            68,
+            55,
+            140,
+            150
+          ]
+        },
+        {
+          "box": [
+            428,
+            120,
+            495,
+            180
+          ]
+        },
+        {
+          "box": [
+            500,
+            160,
+            560,
+            260
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Rangers_at_the_front_desk_welcoming_visitors._%284ccc20e8-155d-451f-671d-de779a3005ac%29.JPG",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a4/Rangers_at_the_front_desk_welcoming_visitors._%284ccc20e8-155d-451f-671d-de779a3005ac%29.JPG/1280px-Rangers_at_the_front_desk_welcoming_visitors._%284ccc20e8-155d-451f-671d-de779a3005ac%29.JPG",
+      "sha256": "d8b1753d9f3102119f3c753f67336e0a3ac2d27d9ac7df8a065150b5736bf4a4",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            105,
+            70,
+            270,
+            220
+          ]
+        },
+        {
+          "box": [
+            350,
+            100,
+            515,
+            280
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Denali_Visitor_Center_%2817f7459e-2776-419c-81c3-bde17332332a%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Denali_Visitor_Center_%2817f7459e-2776-419c-81c3-bde17332332a%29.jpg/1280px-Denali_Visitor_Center_%2817f7459e-2776-419c-81c3-bde17332332a%29.jpg",
+      "sha256": "028b11debb6846309d5426d3835e06715b4205afec6b4df647082a88658699cf",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            505,
+            75,
+            565,
+            150
+          ]
+        },
+        {
+          "box": [
+            395,
+            130,
+            430,
+            180
+          ]
+        },
+        {
+          "box": [
+            210,
+            110,
+            255,
+            160
+          ]
+        },
+        {
+          "box": [
+            75,
+            90,
+            115,
+            150
+          ],
+          "hard": true
+        },
+        {
+          "box": [
+            160,
+            120,
+            180,
+            150
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:A_park_ranger_and_park_visitors_%28280f1d9d-ae54-411b-9a39-9b1a5fc3ffce%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/A_park_ranger_and_park_visitors_%28280f1d9d-ae54-411b-9a39-9b1a5fc3ffce%29.jpg/1280px-A_park_ranger_and_park_visitors_%28280f1d9d-ae54-411b-9a39-9b1a5fc3ffce%29.jpg",
+      "sha256": "6ae775a5184327c529bfd1bf06f8e3bceafd335cba8e25da36179d549c992ff4",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            320,
+            135,
+            400,
+            230
+          ]
+        },
+        {
+          "box": [
+            455,
+            130,
+            510,
+            210
+          ]
+        },
+        {
+          "box": [
+            145,
+            30,
+            200,
+            130
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:A_park_ranger_speaks_with_visitors_%2883caf5c7-344d-474b-b2d6-f691f419cf96%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/A_park_ranger_speaks_with_visitors_%2883caf5c7-344d-474b-b2d6-f691f419cf96%29.jpg/1280px-A_park_ranger_speaks_with_visitors_%2883caf5c7-344d-474b-b2d6-f691f419cf96%29.jpg",
+      "sha256": "10e879f5b287ad7aebbc31558b09e0eb7623f8581eb60850d0cea41463c2df1c",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            403,
+            110,
+            450,
+            175
+          ]
+        },
+        {
+          "box": [
+            140,
+            55,
+            175,
+            110
+          ]
+        },
+        {
+          "box": [
+            482,
+            50,
+            515,
+            125
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Park_Ranger_with_Visitors_%2813083673614%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0a/Park_Ranger_with_Visitors_%2813083673614%29.jpg/1280px-Park_Ranger_with_Visitors_%2813083673614%29.jpg",
+      "sha256": "c57e6dbcf9b7d68650978dc20bef2da82e990eb1c9dcf4cf15ab757678cb9efe",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            240,
+            170,
+            285,
+            212
+          ],
+          "hard": true
+        },
+        {
+          "box": [
+            285,
+            135,
+            322,
+            200
+          ],
+          "hard": true
+        },
+        {
+          "box": [
+            380,
+            155,
+            435,
+            200
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Ranger_Helping_Visitors_at_Logan_Pass_Visitor_Center_%2850513910926%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/16/Ranger_Helping_Visitors_at_Logan_Pass_Visitor_Center_%2850513910926%29.jpg/1280px-Ranger_Helping_Visitors_at_Logan_Pass_Visitor_Center_%2850513910926%29.jpg",
+      "sha256": "6751fbd04b499702da17b8fcd3d154c3b6b343aad2240031cf512f74e3ecd73e",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            360,
+            110,
+            425,
+            170
+          ]
+        },
+        {
+          "box": [
+            215,
+            150,
+            232,
+            185
+          ],
+          "hard": true
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Ranger_Talking_to_Visitors_At_Logan_Pass_%2850513910866%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fc/Ranger_Talking_to_Visitors_At_Logan_Pass_%2850513910866%29.jpg/1280px-Ranger_Talking_to_Visitors_At_Logan_Pass_%2850513910866%29.jpg",
+      "sha256": "4f3f4d714e17d139d102c5b813d639df31a72729f93229d27ab8a9720cdab0bb",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            200,
+            155,
+            230,
+            200
+          ]
+        },
+        {
+          "box": [
+            378,
+            160,
+            412,
+            195
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Park_Ranger_Program_%2854252021247%29.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Park_Ranger_Program_%2854252021247%29.jpg/1280px-Park_Ranger_Program_%2854252021247%29.jpg",
+      "sha256": "a83f7d7c66a59c4aed461b037c4a111722d8904765876a7b3b4714348e1a3d4e",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            340,
+            170,
+            372,
+            205
+          ]
+        }
+      ]
+    },
+    {
+      "page": "https://commons.wikimedia.org/wiki/File:Lancaster_County%2C_Pennsylvania._Mrs._Royer_churning_butter_on_back_porch%2C_Enos_Royer_farm%2C_1938_by_Sheldon_Dick.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d1/Lancaster_County%2C_Pennsylvania._Mrs._Royer_churning_butter_on_back_porch%2C_Enos_Royer_farm%2C_1938_by_Sheldon_Dick.jpg/1280px-Lancaster_County%2C_Pennsylvania._Mrs._Royer_churning_butter_on_back_porch%2C_Enos_Royer_farm%2C_1938_by_Sheldon_Dick.jpg",
+      "sha256": "60e9800a5726b66bff864ed747fca9163474847896760a3207d6634223cabeef",
+      "licence": "Public domain (work of the US federal government, per its Commons page)",
+      "faces": [
+        {
+          "box": [
+            288,
+            140,
+            322,
+            185
+          ]
+        }
+      ]
+    }
+  ]
+}

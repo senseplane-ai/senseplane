@@ -414,6 +414,14 @@ docker compose -f deploy/compose/docker-compose.yml --profile app up -d --build
   API starts and are forward-only.
 - Restarting the media plane interrupts streaming sources. Their recordings
   show a gap in the timeline, and capture pages may need reopening.
+- **Upgrade the brains before the API** when a release adds a brain feature.
+  Blurring faces and plates (ADR 0068) is one: a brain says in its heartbeat
+  that it can blur, and until every running brain does, the API refuses
+  what needs blurring (looks, answers and checks on blurred cameras, and
+  anything for an agent that only sees blurred media) with a 503 rather than
+  risk a brain from before sending raw frames. With the one-file compose
+  stack, `up -d --build` restarts both; it is several brains behind a
+  balancer where the order matters.
 
 ## Monitoring
 

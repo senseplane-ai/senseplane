@@ -24,22 +24,32 @@ leaves it:
   console), and the snapshot returned with a look or an answer.
 
 Masks still come first: the API blacks out masked areas before a frame
-reaches the brain, and blurring keeps them black. **Recordings stay as
+reaches the brain, and blurring keeps the camera's mask polygons black
+(only those: a dark face at night is pixelated like any other). **Recordings stay as
 recorded**: segments are not decoded or re-encoded, so playback, clips and
 live view show the original picture. Exports carry snapshots as they were
 stored. A snapshot stored before blurring was turned on stays as it was,
 except for an agent that only sees blurred media (below).
 
 **Only on frames on their way out.** Detection runs on the frames that
-leave, not on the five frames a second the brain analyses, and its models
-load the first time a camera asks for blurring. A brain whose cameras never
-ask loads nothing.
+leave, not on the five frames a second the brain analyses, always in a
+worker thread, never on the event loop. Its models load in a thread as soon
+as a camera's config asks for blurring; a brain whose cameras never ask
+loads nothing.
+
+**Failing closed.** A frame whose blurring fails is not sent: the snapshot
+is left out, the request fails, the model gets nothing. A camera the brain
+has no config for is unknown, so everything going out from it is blurred
+until its config arrives.
 
 **Settings.** `blur_faces` and `blur_plates`, per account (`PATCH
 /v1/account`, off by default) and per camera (`PATCH /v1/sources/{id}`;
 null follows the account). The API sends each camera's effective setting to
-the brain with its zones and masks (`blur` in `sp:sources`), again for every
-camera when the account's setting changes. In the console: two switches
+the brain with its zones and masks (`blur` in `sp:sources`): when a camera
+is saved, for every camera on each save of the account's setting (changed
+or not, so saving again is how someone makes sure), on every API start, and
+every five minutes (`sources.republish`), so a publish that failed while
+Valkey was away never leaves a camera unblurred for long. In the console: two switches
 next to the privacy masks, and the workspace defaults with the recording
 defaults.
 
@@ -51,11 +61,38 @@ so a snapshot from before blurring was on is covered too; if no brain
 answers, the snapshot is refused rather than served raw), and it gets no
 raw video: playback, clips and live view are refused with
 `forbidden_sense` and `details.blurred_only`, and its events carry no clip
-link. Media links carry a `bo` claim, and the media guard (ADR 0036) also
-reads the flag from the agent's current grants, so a grant made
-blurred-only reaches links issued before it within the guard's cache
-window. When an agent has several grants on a source, a blurred-only one
+link, nor do the moments in its answers. Media links carry a `bo` claim,
+and the media guard (ADR 0036) also reads the flag from the agent's current
+grants, so a grant made blurred-only reaches links issued before it within
+the guard's cache window (30 s); its open live views on those cameras are
+ended at once. Its snapshots are always streamed through the API, blurred:
+snapshots are sealed (ADR 0066) and never presigned, so no presigned
+snapshot URL exists to outlive the change (presigned links, 60 s,
+`PRESIGN_SECONDS`, are for recording segments, which it can no longer
+fetch). When an agent has several grants on a source, a blurred-only one
 wins: when in doubt, blur.
+
+**Telegram chats** are agents too: when a chat's agent only sees a camera
+blurred, its alert and answer photos are blurred by a brain first, and if
+that fails the message goes as text, never with the stored photo.
+
+**Watches.** A watch's model check and its event snapshot are blurred when
+the camera's setting says so, and also when the agent that made the watch,
+or an agent or chat it notifies, only sees one of its cameras blurred: the
+API adds `blur` to the watch it gives the brain (worked out each time the
+watch is published, and the account's watches are published again when a
+grant changes), so the check's summary, which goes to those agents, says
+nothing a blurred picture wouldn't show.
+
+**Brains first.** A request goes to any free brain, and a brain from before
+blurring would answer with raw frames. Brains say `features: ["blur"]` in
+their heartbeat; the API sends a look, an answer, a check or a snapshot
+that needs blurring (the camera's setting or the caller's grant) only when
+every live brain says it, and answers 503 otherwise. When upgrading,
+upgrade the brains before the API ([self-hosting](../self-host.md)). The
+blurring a brain does for frames on their own way out (events, watch
+checks, the latest snapshot) needs a brain that knows the `blur` config, so
+the same order applies.
 
 **Faces: YuNet** (OpenCV Zoo, `face_detection_yunet_2026may.onnx`, MIT,
 230 KB), through ONNX Runtime like the detector. The frame is looked at
@@ -70,7 +107,11 @@ face was found inside it: someone turned away, under a cap, or too small.
 there, weights included. It runs through OpenCV's DNN module, which takes
 the frame at its own size (the ONNX file fixes 320x240, too small for a
 plate across a drive), on each vehicle the tracker follows (up to four,
-enlarged), or on the whole frame for a stored snapshot. **It was trained on
+enlarged), or, when no vehicle is tracked (a parked car the tracker has
+dropped, a stored snapshot, a "before" frame, a frame from a sound), on the
+whole frame, which costs about 40 ms at 640x360 on an M1 Max. Inputs are
+padded to a multiple of 64 so the model's outputs and priors line up for
+any crop. **It was trained on
 Chinese plates**, so elsewhere it is a best effort: it finds a blue Chinese
 plate and missed the white European plates in our van fixture. The
 settings, the console and the docs say so.
@@ -114,10 +155,10 @@ and at half, so 112 faces. Faces 20-70 px wide, a face at a doorway: 98.3%
 found by YuNet, 98.3% inside what gets blurred (59 faces). All faces but
 those mostly turned away: 96.5% found, 98.8% covered (86). Including those:
 84.8% found, 92.9% covered (112). The time added to a 640x360 frame on an
-Apple M1 Max with two threads: median 21 ms, p95 30 ms for faces; with
-plates on vehicles, median 23 ms, p95 102 ms with several vehicles in view.
-The doorstep fixture can't be used for this: its publisher had already
-pixelated the face.
+Apple M1 Max with two threads: median 20 ms, p95 24 ms for faces; with
+plates too, median 66 ms, p95 92 ms (a whole-frame plate pass when no
+vehicle is tracked, or one per tracked vehicle). The doorstep fixture
+can't be used for this: its publisher had already pixelated the face.
 
 ## Consequences
 
@@ -127,7 +168,8 @@ pixelated the face.
   says so.
 - A camera with blurring on costs a face pass per frame that leaves the
   brain: one per event snapshot, one every 10 s for the latest snapshot,
-  and one per model call. Plates cost a pass per tracked vehicle.
+  and one per model call. Plates cost a pass per tracked vehicle, or one
+  whole-frame pass (about 40 ms) when none is tracked.
 - Detection only: no face crop, box or embedding is kept or sent; boxes
   live only while a frame is being blurred.
 - Model inputs are blurred, so a watch that asks about a face ("is it the

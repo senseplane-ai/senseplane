@@ -46,6 +46,8 @@ object BoxHolder {
                 Log.i("SenseplaneBox", line)
             }
         })
+        // Agents' and watches' messages for this phone's camera play here (ADR 0069).
+        b.setSpeaker(PhoneSpeaker())
         if (prefs.whipBase.isNotEmpty()) b.setWHIPBase(prefs.whipBase)
         if (prefs.matterAddress.isNotEmpty()) runCatching { b.setMatterAddress(prefs.matterAddress) }
         box = b

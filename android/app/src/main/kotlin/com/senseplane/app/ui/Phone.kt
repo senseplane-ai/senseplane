@@ -42,6 +42,7 @@ import com.senseplane.app.box.BoxHolder
 import com.senseplane.app.box.BoxService
 import com.senseplane.app.box.BoxStatus
 import com.senseplane.app.box.CameraState
+import com.senseplane.app.box.PhoneSpeaker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -114,6 +115,7 @@ fun CameraScreen(onBack: () -> Unit) {
     val prefs = remember { Prefs(context) }
     val status by BoxHolder.status.collectAsState()
     var dim by remember { mutableStateOf(false) }
+    val speaking by PhoneSpeaker.speaking.collectAsState()
     val (text, color) = stateText(status.phoneCamera(prefs))
     // Keep the screen on while it shows the camera; dimmed, the screen is black.
     DisposableEffect(Unit) {
@@ -130,6 +132,7 @@ fun CameraScreen(onBack: () -> Unit) {
         Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).clickable { dim = false }, contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Dot(color); Spacer(Modifier.width(8.dp)); Text(text, color = Ink.muted, fontSize = 13.sp) }
+                if (speaking) SpeakingNotice()
                 Text("Tap to wake", color = androidx.compose.ui.graphics.Color(0xFF55555C), fontSize = 12.sp)
             }
         }
@@ -140,6 +143,7 @@ fun CameraScreen(onBack: () -> Unit) {
     }) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(Ink.raise)) {
             if (BoxService.instance != null) CameraPreview()
+            if (speaking) Box(Modifier.align(Alignment.TopCenter).padding(10.dp)) { SpeakingNotice() }
             Row(Modifier.align(Alignment.BottomStart).padding(10.dp).clip(RoundedCornerShape(6.dp)).background(androidx.compose.ui.graphics.Color(0x990A0A0B)).padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Dot(color, 6); Spacer(Modifier.width(6.dp)); Text(text, color = Ink.text, fontSize = 12.sp)
@@ -151,6 +155,13 @@ fun CameraScreen(onBack: () -> Unit) {
         Body("A phone gets warm sending video all day: keep it plugged in and out of the sun. When it's warm it sends fewer frames until it cools.", color = Ink.muted, size = 13)
     }
 }
+
+/** Shown while a message plays through this phone (talk-back, ADR 0069), so people near it know. */
+@Composable
+private fun SpeakingNotice() = Text(
+    PhoneSpeaker.NOTICE, color = androidx.compose.ui.graphics.Color.White, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(androidx.compose.ui.graphics.Color(0xE60B57D0)).padding(horizontal = 12.dp, vertical = 8.dp),
+)
 
 @Composable
 private fun CameraPreview() = AndroidView(factory = { ctx ->

@@ -56,6 +56,7 @@ In the chat:
 | `/mute 1h`, `8h`, `1d`, `1w` | Pause alerts here. `/mute off` turns them back on |
 | `/new` | Start a new conversation (questions otherwise follow on for 30 minutes) |
 | `/use <workspace>` | Choose which workspace answers, when the chat is linked to more than one |
+| `/devices` | The devices this chat may switch, with buttons (see [Devices](#devices)) |
 | `/stop` | Unlink the chat |
 | `/help` | The list |
 
@@ -78,6 +79,30 @@ they use as buttons. A chat asks as an **agent** of its own, so:
 
 Turn questions off for a chat with its **Questions** switch in Settings →
 Notifications.
+
+## Devices
+
+A chat can switch the devices Senseplane reaches through a box, when a
+person asks (ADR 0067). Say what you want in plain words, such as "turn on
+the hall light", "set the bedroom thermostat to 20", "close the blinds" or
+"unlock the front door". In a group, start with `/ask`. `/devices` lists
+the devices this chat may switch, each with buttons.
+
+The chat acts as its agent, so it needs two things, both off by default:
+
+- An admin makes the device **controllable** on the **Devices** page.
+- The chat's agent gets the **Control devices** permission on the device's
+  room, on the **Agents** page. "Read sensors" doesn't include it.
+
+The answer says what the box read back afterwards. "Sent, but Hall light
+still reads off" means the device didn't change.
+
+**Locks, garage doors, gates and alarms** wait for a person to confirm.
+Every linked chat gets the request. Private chats get **Confirm** and
+**Refuse** buttons. Groups don't, because anyone in a group could press
+them, so confirm those requests in the console or the app. A request nobody
+confirms within two minutes is refused. Every request, and what happened
+to it, is in the audit log.
 
 ## Privacy
 

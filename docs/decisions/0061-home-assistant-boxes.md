@@ -1,6 +1,6 @@
 # 61. Home Assistant boxes: the bridge reads Home Assistant and pairs with a code
 
-Date: 2026-11-02 · Status: accepted
+Date: 2026-11-02 · Status: accepted; its "read-only" rule is superseded by ADR 0067 (switching a device when a person asks)
 
 ## Context
 

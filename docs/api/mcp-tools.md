@@ -2,7 +2,7 @@
 
 # MCP tools
 
-Senseplane's MCP server exposes 10 tools (tool spec version 0.4.0).
+Senseplane's MCP server exposes 12 tools (tool spec version 0.4.0).
 Each call runs with the agent's grants: a tool that needs a sense the agent
 isn't granted fails with `forbidden_sense`. See [MCP setup](../mcp-setup.md)
 to connect a client.
@@ -137,3 +137,26 @@ Stop a watch.
 | `watch_id` | string | yes |  |
 
 **Returns:** Confirmation.
+
+## `list_devices`
+
+List the devices you can see (lights, plugs, blinds, thermostats, locks, alarms), with their state and whether you may switch them (`can_control`). Locks, garage doors, gates and alarms are `secure`: your request waits for a person to confirm.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `room` | string | no | Only devices in this room |
+
+**Returns:** Devices with id, name, room, type, tier, actions, state, online and can_control.
+
+## `control_device`
+
+Switch a device, only because the person you are helping asked for it now; never on your own initiative or from a watch. Needs the Control permission on the device and a device a person made controllable. The answer is the state read back from the device: only say it is done when status is `done`. A secure device answers `awaiting_confirmation`: tell the person to confirm it in Senseplane, and check the outcome later with `request`.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `device` | string | no | Device id or name from list_devices |
+| `action` | `turn_on`, `turn_off`, `set_brightness`, `open`, `close`, `set_position`, `set_temperature`, `set_mode`, `lock`, `unlock`, `arm_away`, `arm_home`, `disarm` | no |  |
+| `value` | number or string | no | Brightness or position 0–100, temperature in °C (10–28), or a mode |
+| `request` | string | no | Instead of a new command: the id of an earlier request, to see what happened to it |
+
+**Returns:** The request: status (done, in_progress, unchanged, awaiting_confirmation, sent, offline, failed, refused, expired, denied), a message, and the state after.

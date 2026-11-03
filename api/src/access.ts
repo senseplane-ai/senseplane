@@ -58,6 +58,8 @@ export interface Access {
   role?: Role;
   /** Sensor integration tokens (ADR 0045): the one source they may push readings to. */
   integrationSource?: string;
+  /** The integration token's id and, when its pushes must be signed, its sealed signing secret (ADR 0071). */
+  integrationToken?: { id: string; signingSecret: string | null };
 }
 
 /** Senses one grant covers for a whole time range on a source (union over grants); "all" for account keys. */
@@ -190,6 +192,9 @@ export function checkRoute(req: FastifyRequest) {
   if (integration) {
     // An integration token pushes readings to its own source and reads that source; nothing else.
     const id = (req.params as { id?: string }).id;
+    // The readings webhook checks its own signature (ADR 0071); a token that must sign may use nothing else.
+    if (route === "POST /v1/integration/readings") return;
+    if (req.access?.integrationToken?.signingSecret) throw new ApiError(403, "forbidden", "this token signs its pushes; send them to POST /v1/integration/readings");
     if (route === "GET /v1/integration") return;
     if ((route === "POST /v1/sources/:id/readings" || route === "GET /v1/sources/:id") && id === integration) return;
     throw new ApiError(403, "forbidden", "an integration token can only push readings to its own source");

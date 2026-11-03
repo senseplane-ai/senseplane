@@ -173,11 +173,14 @@ export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
   /** Revokes a sensor's integration tokens and, when `issue`, stores a new one. */
   const replaceIntegrationToken = async (accountId: string, sourceId: string, issue: boolean) =>
     deps.data.withAccount(accountId, async (s) => {
-      await s.db.updateTable("ingest_tokens").set({ revoked_at: new Date() }).where("source_id", "=", sourceId).where("revoked_at", "is", null).execute();
+      // A new token keeps the old one's signing secret (ADR 0071): rotating never turns signing off.
+      const old = await s.db.updateTable("ingest_tokens").set({ revoked_at: new Date() }).where("source_id", "=", sourceId).where("revoked_at", "is", null)
+        .returning("signing_secret").execute();
       if (!issue) return undefined;
       const token = newIntegrationToken();
       await s.db.insertInto("ingest_tokens").values({
         id: `itk_${randomBytes(9).toString("base64url")}`, account_id: accountId, source_id: sourceId, token_hash: hashApiKey(token), prefix: token.slice(0, 8),
+        signing_secret: old.find((t) => t.signing_secret)?.signing_secret ?? null,
       }).execute();
       return token;
     });

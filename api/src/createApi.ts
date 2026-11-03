@@ -27,6 +27,7 @@ import { enforceLimits, isIngestMeter, overLimits, registerUsageRoutes, sampleSt
 import { republishWatches, watchKv } from "./routes/watches.js";
 import { demoConfig, registerDemoRoutes, sweepDemos } from "./routes/demo.js";
 import { registerSourceConfigRoutes } from "./routes/source-config.js";
+import { registerReadingsWebhook } from "./routes/readings-webhook.js";
 import { startClipWorker, startWebhookWorker } from "./workers.js";
 import type { Source } from "./data/access.js";
 import { createIngestSigner } from "./ingest.js";
@@ -302,7 +303,7 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       const p = await data.authenticateIntegrationToken(key);
       if (!p) throw new ApiError(401, "unauthorized", "unknown or revoked integration token");
       req.accountId = p.accountId;
-      req.access = { actor: `integration:${key.slice(0, 8)}`, integrationSource: p.sourceId, keyHash: hashApiKey(key) };
+      req.access = { actor: `integration:${key.slice(0, 8)}`, integrationSource: p.sourceId, integrationToken: { id: p.tokenId, signingSecret: p.signingSecret }, keyHash: hashApiKey(key) };
       return;
     }
     const principal = key ? await data.authenticate(key) : undefined;
@@ -481,6 +482,8 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
   registerUsageRoutes(app, { data, quotaFor });
   registerDemoRoutes(app, { data, bus, media: mediaControl, signer, storage, urls: eventUrls, apiPublicUrl: options.apiPublicUrl, config: demo, ipSalt });
   registerSourceConfigRoutes(app, { data, signer: playbackSigner, base, maxRetentionDays, publishConfig, keyRefs, storageCap: async (id) => (await quotaFor(id)).storageCapBytes });
+  // The readings webhook for IFTTT, n8n, Zapier, ESPHome, Shelly and scripts (ADR 0071).
+  registerReadingsWebhook(app, { data, base: (req) => options.apiPublicUrl ?? `${req.protocol}://${req.host}` });
   const storageCap = async (accountId: string) => (await quotaFor(accountId)).storageCapBytes;
   registerAccountRoutes(app, { data, maxRetentionDays, storageCap, quotaFor, onBlurChanged: publishAllConfigs });
   const liveIdleTimeoutSeconds = options.liveIdleTimeoutSeconds ?? Number(process.env.LIVE_IDLE_TIMEOUT_SECONDS ?? 600);

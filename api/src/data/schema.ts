@@ -602,6 +602,16 @@ export interface IngestTokensTable {
   prefix: string;
   created_at: Timestamp;
   revoked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** A sensor token's signing secret for the readings webhook, sealed (ADR 0071); null: pushes are not signed. */
+  signing_secret: ColumnType<string | null, string | null | undefined, string | null>;
+}
+
+/** Signatures the readings webhook took in the last minutes, to refuse a replay (ADR 0071). */
+export interface ReadingSignaturesTable {
+  account_id: string;
+  token_id: string;
+  mac: string;
+  seen_at: Timestamp;
 }
 
 export interface IdempotencyKeysTable {
@@ -649,6 +659,7 @@ export interface Database {
   media_feeds: MediaFeedsTable;
   agent_inbox: AgentInboxTable;
   ingest_tokens: IngestTokensTable;
+  reading_signatures: ReadingSignaturesTable;
   bridges: BridgesTable;
   bridge_entities: BridgeEntitiesTable;
   bridge_links: BridgeLinksTable;

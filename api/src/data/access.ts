@@ -227,9 +227,9 @@ export class DataAccess {
   }
 
   /** The sensor source and account behind an integration token, or undefined (ADR 0045). */
-  async authenticateIntegrationToken(token: string): Promise<{ sourceId: string; accountId: string } | undefined> {
-    const { rows } = await sql<{ source_id: string; account_id: string }>`select * from auth_integration_token(${hashApiKey(token)})`.execute(this.kdb);
-    return rows[0] ? { sourceId: rows[0].source_id, accountId: rows[0].account_id } : undefined;
+  async authenticateIntegrationToken(token: string): Promise<{ sourceId: string; accountId: string; tokenId: string; signingSecret: string | null } | undefined> {
+    const { rows } = await sql<{ source_id: string; account_id: string; token_id: string; signing_secret: string | null }>`select * from auth_integration_token(${hashApiKey(token)})`.execute(this.kdb);
+    return rows[0] ? { sourceId: rows[0].source_id, accountId: rows[0].account_id, tokenId: rows[0].token_id, signingSecret: rows[0].signing_secret } : undefined;
   }
 
   /** Bridges silent for longer than `seconds` that still have cameras not marked offline. */

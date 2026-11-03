@@ -52,6 +52,8 @@ import {
 import { type TelegramConfig, TelegramBot, telegramConfigFromEnv } from "./telegram.js";
 import { registerActivityRoutes } from "./routes/activity.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
+import { registerStoryRoutes } from "./routes/stories.js";
+import { startStoryWorker } from "./stories.js";
 import { createKeyRefSealer, createPlaybackSigner, newPlaybackSecret } from "./playback.js";
 import { createMediaGuard, mediaClaims } from "./media-access.js";
 import { metricsAllowed, registerRateLimits, trustProxyFromEnv } from "./rate-limit.js";
@@ -555,6 +557,9 @@ export async function createApi(options: CreateApiOptions): Promise<SenseplaneAp
       ...(bus ? { redactSnapshot } : {}),
     });
     if (options.workers !== false) stoppers.push(startClipWorker(data, storage, app.log));
+    // Stories (ADR 0070): rendered by a background job, played through the same signed links.
+    registerStoryRoutes(app, { data, storage, signer: playbackSigner, apiPublicUrl: options.apiPublicUrl, ttlSeconds: options.playbackTtlSeconds ?? 900, keyRefs, bus, audit });
+    if (options.workers !== false) stoppers.push(startStoryWorker({ data, storage, keys: keyRing, bus }, app.log));
   }
   if (options.workers !== false) {
     // Housekeeping, each job once per interval across every API process (ADR 0058).

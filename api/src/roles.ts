@@ -37,6 +37,7 @@ const under = (route: string, prefixes: string[]) => prefixes.some((p) => route 
 const MEMBER_WRITES = new Set([
   "POST /v1/watches", "PATCH /v1/watches/:id", "DELETE /v1/watches/:id", "POST /v1/watches/test",
   "POST /v1/clips", "DELETE /v1/clips/:id",
+  "POST /v1/stories", "POST /v1/stories/:id/link", "DELETE /v1/stories/:id", "POST /v1/follows", "DELETE /v1/follows/:id",
   "POST /v1/events/:id/feedback", "POST /v1/sources/:id/ask",
   // Switching a device someone made controllable, and confirming an agent's request (ADR 0067).
   "POST /v1/devices/:id/commands", "POST /v1/confirmations/:id",

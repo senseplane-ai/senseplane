@@ -52,7 +52,7 @@ const parseTime = (v: unknown, name: string): number => {
 };
 
 /** Segments overlapping [from, to), oldest first. */
-function segmentsIn(s: AccountScope, sourceId: string, from: number, to: number) {
+export function segmentsIn(s: AccountScope, sourceId: string, from: number, to: number) {
   return s.db
     .selectFrom("segments")
     .select(["id", "key", "init_key", "start_at", "duration_ms", "bytes", "enc_version", "enc_iv"])
@@ -233,6 +233,17 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
           return { ref: String(r.id), initRef: initRef.get(r.init_key)!, start: new Date(r.start_at), durationMs: r.duration_ms, ...enc(r) };
         });
       }
+      if (scope.kind === "story") {
+        // A story mixes keys (each camera's for copies, its own for a render): each segment names its key by seq.
+        const rows = await s.db.selectFrom("story_segments").selectAll().where("story_id", "=", scope.storyId).orderBy("seq").execute();
+        const initRef = new Map<string, string>();
+        return rows.map((r) => {
+          if (!initRef.has(r.init_key)) initRef.set(r.init_key, String(r.seq));
+          const e = stripAudio || r.strip_audio ? {} : encOf(r);
+          return { ref: String(r.seq), initRef: initRef.get(r.init_key)!, start: new Date(r.start_at), durationMs: r.duration_ms,
+            ...("enc" in e && e.enc ? { enc: { ...e.enc, ref: `${e.enc.version}-${r.seq}` } } : {}) };
+        });
+      }
       if (scope.kind !== "clip") return [];
       const rows = await s.db.selectFrom("clip_segments").selectAll().where("clip_id", "=", scope.clipId).orderBy("seq").execute();
       const initRef = new Map<string, string>();
@@ -287,6 +298,11 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
         if (start >= scope.to || start + r.duration_ms <= scope.from) return undefined;
         return r;
       }
+      if (scope.kind === "story") {
+        if (!/^\d+$/.test(ref)) return undefined;
+        return s.db.selectFrom("story_segments").select(["key", "init_key", "key_source as source_id", "enc_version", "enc_iv", "strip_audio"])
+          .where("story_id", "=", scope.storyId).where("seq", "=", Number(ref)).executeTakeFirst();
+      }
       if (scope.kind !== "clip") return undefined;
       return s.db.selectFrom("clip_segments").innerJoin("clips", "clips.id", "clip_segments.clip_id")
         .select(["clip_segments.key", "clip_segments.init_key", "clips.source_id", "clip_segments.enc_version", "clip_segments.enc_iv"])
@@ -297,7 +313,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     const { scope, stripAudio } = await authorizeVideo(req.params.token);
     const row = await lookup(scope, req.params.ref.replace(/\.m4s$/, ""));
     if (!row) throw new ApiError(404, "not_found", "segment not found");
-    if (stripAudio) {
+    if (stripAudio || ("strip_audio" in row && row.strip_audio)) {
       const decrypt = row.enc_version !== null && row.enc_iv ? async (b: Buffer) => decryptSegment(await sourceKey(scope.accountId, row.source_id, row.enc_version!), row.enc_iv!, b) : undefined;
       return deliverWithoutAudio(reply, row.key, row.init_key, false, decrypt);
     }
@@ -307,7 +323,7 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     const { scope, stripAudio } = await authorizeVideo(req.params.token);
     const row = await lookup(scope, req.params.ref.replace(/\.mp4$/, ""));
     if (!row) throw new ApiError(404, "not_found", "init segment not found");
-    if (stripAudio) return deliverWithoutAudio(reply, row.init_key, row.init_key, true);
+    if (stripAudio || ("strip_audio" in row && row.strip_audio)) return deliverWithoutAudio(reply, row.init_key, row.init_key, true);
     return deliver(reply, row.init_key, "video/mp4");
   });
 
@@ -322,10 +338,16 @@ export function registerPlaybackRoutes(app: FastifyInstance, deps: PlaybackDeps)
     const { scope, stripAudio } = await authorizeVideo(req.params.token);
     // A video-only link is served decrypted segments without audio; the key would open the audio too.
     if (stripAudio) throw new ApiError(403, "forbidden_sense", "this link has no key");
-    const version = Number(req.params.version.replace(/\.key$/, ""));
+    const [v, seq] = req.params.version.replace(/\.key$/, "").split("-");
+    const version = Number(v);
     if (!Number.isInteger(version) || version < 1) throw new ApiError(404, "not_found", "no such key");
     let sourceId: string | undefined;
-    if (scope.kind === "range") sourceId = scope.sourceId;
+    if (scope.kind === "story") {
+      // "{version}-{seq}": the key of that segment, which a story link can only get for a segment it serves with audio.
+      const row = seq && /^\d+$/.test(seq) ? await deps.data.withAccount(scope.accountId, (s) => s.db.selectFrom("story_segments")
+        .select(["key_source", "enc_version", "strip_audio"]).where("story_id", "=", scope.storyId).where("seq", "=", Number(seq)).executeTakeFirst()) : undefined;
+      if (row && row.enc_version === version && !row.strip_audio) sourceId = row.key_source;
+    } else if (scope.kind === "range") sourceId = scope.sourceId;
     else if (scope.kind === "clip") {
       sourceId = (await deps.data.withAccount(scope.accountId, (s) => s.db.selectFrom("clips").select("source_id").where("id", "=", scope.clipId).executeTakeFirst()))?.source_id;
     }

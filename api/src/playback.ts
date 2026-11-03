@@ -26,6 +26,8 @@ export interface MediaClaims {
 export type PlaybackScope = (
   | { kind: "range"; accountId: string; sourceId: string; from: number; to: number }
   | { kind: "clip"; accountId: string; clipId: string }
+  /** A story (ADR 0070): its segments are rendered, or copied from several cameras. */
+  | { kind: "story"; accountId: string; storyId: string }
   /** An object in storage, e.g. an event snapshot. */
   | { kind: "object"; accountId: string; key: string }
   /** The latest snapshot of a source (from the brain's snapshot KV). */
@@ -96,7 +98,7 @@ export interface PlaylistSegment {
   start: Date;
   durationMs: number;
   /** Encrypted with HLS AES-128 (ADR 0066): the account key version and the segment's IV. */
-  enc?: { version: number; iv: Buffer };
+  enc?: { version: number; iv: Buffer; ref?: string };
 }
 
 /**
@@ -122,7 +124,7 @@ export function buildPlaylist(segments: PlaylistSegment[]): string {
       init = s.initRef;
     }
     if (s.enc) {
-      lines.push(`#EXT-X-KEY:METHOD=AES-128,URI="k/${s.enc.version}.key",IV=0x${s.enc.iv.toString("hex")}`);
+      lines.push(`#EXT-X-KEY:METHOD=AES-128,URI="k/${s.enc.ref ?? s.enc.version}.key",IV=0x${s.enc.iv.toString("hex")}`);
       keyed = true;
     } else if (keyed) {
       lines.push("#EXT-X-KEY:METHOD=NONE");

@@ -138,6 +138,11 @@ export function grantFilter<DB, TB extends keyof DB>(req: FastifyRequest, timeCo
   };
 }
 
+const STORY_ROUTES = [
+  "POST /v1/stories", "GET /v1/stories", "GET /v1/stories/:id", "POST /v1/stories/:id/link",
+  "POST /v1/follows", "GET /v1/follows", "GET /v1/follows/:id",
+];
+
 /** Routes an agent key may call; everything else is owner-only. */
 const AGENT_ROUTES = new Set([
   "GET /v1/sources", "GET /v1/sources/:id", "GET /v1/sources/:id/now", "POST /v1/sources/:id/ask",
@@ -157,6 +162,8 @@ const AGENT_ROUTES = new Set([
   "GET /v1/devices", "GET /v1/devices/:id", "POST /v1/devices/:id/commands", "GET /v1/device-commands/:id",
   // Talk-back (ADR 0069): speaking needs a speak grant on the camera, checked (and audited) by the route.
   "POST /v1/sources/:id/speak", "GET /v1/speak-messages", "GET /v1/speak-messages/:id",
+  // Stories and object following (ADR 0070): video on every camera they use, checked by the routes.
+  ...STORY_ROUTES,
 ]);
 
 /** Agent routes that need the `watch` ability on a grant (ADR 0048). */
@@ -168,6 +175,7 @@ const HISTORY_ROUTES = new Set([
   "GET /v1/clips", "POST /v1/clips", "GET /v1/clips/:id",
   "POST /v1/conversations", "GET /v1/conversations", "GET /v1/conversations/:id", "POST /v1/conversations/:id/messages",
   "POST /v1/activity/query", "GET /v1/activities", "POST /v1/activity/check",
+  ...STORY_ROUTES,
 ]);
 
 /**

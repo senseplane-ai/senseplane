@@ -134,8 +134,31 @@ export async function reencryptKeys(deps: RotationDeps, budgetMs = 45_000, now =
       }
     }
 
+    // Story segments (ADR 0070): each names the id its key comes from (its camera, or the story).
+    let storiesLeft = true;
+    while (!segmentsLeft && !clipsLeft && now() < until) {
+      const batch = await deps.data.withAccount(acc, (s) => s.db.selectFrom("story_segments")
+        .select(["story_id", "seq", "key", "key_source", "enc_version", "enc_iv"]).where("enc_version", "<", cur.version).limit(BATCH).execute());
+      for (const r of batch) {
+        try {
+          const iv = await reseal(r.key, r.key_source, r.enc_version!, r.enc_iv!);
+          await deps.data.withAccount(acc, (s) => s.db.updateTable("story_segments").set({ enc_version: cur.version, enc_iv: iv })
+            .where("story_id", "=", r.story_id).where("seq", "=", r.seq).where("enc_version", "=", r.enc_version).execute());
+        } catch (err) {
+          if (!gone(err)) throw err;
+          // Its story was deleted meanwhile; the row goes with it.
+          await deps.data.withAccount(acc, (s) => s.db.deleteFrom("story_segments").where("story_id", "=", r.story_id).where("seq", "=", r.seq).execute());
+        }
+        out.clipSegments++;
+      }
+      if (batch.length < BATCH) {
+        storiesLeft = false;
+        break;
+      }
+    }
+
     // Snapshots and exports: their version is in their header.
-    let objectsDone = !segmentsLeft && !clipsLeft && Boolean(deps.storage.list);
+    let objectsDone = !segmentsLeft && !clipsLeft && !storiesLeft && Boolean(deps.storage.list);
     for (const prefix of [`snapshots/${acc}/`, `exports/${acc}/`, `speak/${acc}/`]) {
       if (!objectsDone || !deps.storage.list) break;
       for await (const key of deps.storage.list(prefix)) {

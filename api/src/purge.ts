@@ -18,7 +18,7 @@ export async function deleteAccountData(deps: Deps, accountId: string): Promise<
   }));
   for (const w of watches) await deps.bus?.putWatch(accountId, w.id, null).catch(() => undefined);
   for (const s of sources) await deps.bus?.putSourceConfig(accountId, s.id, {}).catch(() => undefined);
-  for (const prefix of ["raw", "clips", "snapshots", "exports", "speak"]) await deps.storage?.deletePrefix(`${prefix}/${accountId}/`);
+  for (const prefix of ["raw", "clips", "stories", "snapshots", "exports", "speak"]) await deps.storage?.deletePrefix(`${prefix}/${accountId}/`);
   return deps.data.withAccount(accountId, async (a) => {
     const r = await a.db.selectFrom("usage_records").select(sql<string>`coalesce(sum(quantity), 0)`.as("n")).where("kind", "=", "vlm_calls").executeTakeFirst();
     await a.db.deleteFrom("usage_records").execute(); // no FK to accounts

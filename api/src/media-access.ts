@@ -32,6 +32,22 @@ export function mediaClaims(req: Pick<FastifyRequest, "access">, sealer: KeyRefS
   };
 }
 
+type StoryPiece = { source_id: string; from_at: Date; to_at: Date; audio: boolean };
+
+/** Claims for a story's link (ADR 0070); null when the caller lacks video on one of its cameras. The guard re-checks every piece. */
+export function storyClaims(req: Pick<FastifyRequest, "access">, sealer: KeyRefSealer, pieces: StoryPiece[]): MediaClaims | null {
+  const access = req.access;
+  if (!access) return {};
+  let na = false;
+  for (const p of pieces) {
+    const senses = sensesForRange(access.grants, p.source_id, new Date(p.from_at), new Date(p.to_at));
+    if (senses !== "all" && !senses.has("video")) return null;
+    if (blurredOnly(access.grants, p.source_id)) return null;
+    if (p.audio && senses !== "all" && !senses.has("audio")) na = true;
+  }
+  return { ...(access.keyHash ? { kr: sealer.seal(access.keyHash) } : {}), ...(na ? { na: 1 as const } : {}) };
+}
+
 export interface MediaDecision {
   /** Serve video without its audio track. */
   stripAudio: boolean;
@@ -60,6 +76,27 @@ export function createMediaGuard(data: DataAccess, sealer: KeyRefSealer, cacheMs
     return value;
   };
 
+  const piecesCache = new Map<string, { at: number; value: StoryPiece[] }>();
+  /** A story's cameras and ranges (ADR 0070): its link needs video on every one, and audio on each piece that has sound. */
+  const checkStory = async (accountId: string, storyId: string, grants: Grant[], claimed: boolean): Promise<MediaDecision> => {
+    let hit = piecesCache.get(storyId);
+    if (!hit || !fresh(hit.at)) {
+      const value = await data.withAccount(accountId, (s) => s.db.selectFrom("story_pieces").select(["source_id", "from_at", "to_at", "audio"]).where("story_id", "=", storyId).execute());
+      hit = { at: Date.now(), value };
+      piecesCache.set(storyId, hit);
+      if (piecesCache.size > 2000) piecesCache.delete(piecesCache.keys().next().value!);
+    }
+    let stripAudio = claimed;
+    let bo = false;
+    for (const p of hit.value) {
+      const senses = sensesForRange(grants, p.source_id, new Date(p.from_at), new Date(p.to_at));
+      if (senses !== "all" && !senses.has("video")) throw new ApiError(403, "forbidden_sense", "this agent no longer has a video grant for every camera in this story");
+      if (p.audio && senses !== "all" && !senses.has("audio")) stripAudio = true;
+      if (blurredOnly(grants, p.source_id)) bo = true;
+    }
+    return { stripAudio, blurredOnly: bo };
+  };
+
   /** Throws when the link's key or grants no longer allow it; otherwise says whether to strip audio or blur. */
   return async function check(scope: PlaybackScope): Promise<MediaDecision> {
     const bo = Boolean(scope.bo);
@@ -68,6 +105,7 @@ export function createMediaGuard(data: DataAccess, sealer: KeyRefSealer, cacheMs
     const who = keyHash ? await principal(keyHash) : undefined;
     if (!who || who.accountId !== scope.accountId) throw new ApiError(401, "unauthorized", "this media link's access was revoked");
     if (!who.agentId) return { stripAudio: Boolean(scope.na), blurredOnly: bo };
+    if (scope.kind === "story") return checkStory(scope.accountId, scope.storyId, await grantsOf(scope.accountId, who.agentId), Boolean(scope.na) || bo);
     if (!scope.sid) throw new ApiError(403, "forbidden_sense", "this media link has no source scope");
     const now = Date.now();
     const grants = await grantsOf(scope.accountId, who.agentId);

@@ -434,6 +434,122 @@
         "sense": "contact",
         "value": true
       }
+    },
+    {
+      "entity_id": "cover.garage",
+      "state": "open",
+      "attributes": {
+        "device_class": "garage",
+        "friendly_name": "Garage door"
+      },
+      "want": {
+        "sense": "cover",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "cover.blind",
+      "state": "closed",
+      "attributes": {
+        "device_class": "blind",
+        "current_position": 0
+      },
+      "want": {
+        "sense": "cover",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "cover.garage",
+      "state": "opening",
+      "attributes": {
+        "device_class": "garage"
+      },
+      "want": null
+    },
+    {
+      "entity_id": "alarm_control_panel.house",
+      "state": "armed_away",
+      "attributes": {
+        "friendly_name": "House alarm"
+      },
+      "want": {
+        "sense": "alarm",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "alarm_control_panel.house",
+      "state": "armed_night",
+      "attributes": {},
+      "want": {
+        "sense": "alarm",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "alarm_control_panel.house",
+      "state": "triggered",
+      "attributes": {},
+      "want": {
+        "sense": "alarm",
+        "value": true
+      }
+    },
+    {
+      "entity_id": "alarm_control_panel.house",
+      "state": "disarmed",
+      "attributes": {},
+      "want": {
+        "sense": "alarm",
+        "value": false
+      }
+    },
+    {
+      "entity_id": "alarm_control_panel.house",
+      "state": "arming",
+      "attributes": {},
+      "want": null
+    },
+    {
+      "entity_id": "climate.hall",
+      "state": "heat",
+      "attributes": {
+        "temperature": 21.5,
+        "current_temperature": 19.8,
+        "hvac_modes": [
+          "off",
+          "heat"
+        ],
+        "friendly_name": "Hall thermostat"
+      },
+      "want": {
+        "sense": "setpoint",
+        "value": 21.5,
+        "unit": "celsius"
+      }
+    },
+    {
+      "entity_id": "climate.hall",
+      "state": "off",
+      "attributes": {
+        "temperature": 18
+      },
+      "want": {
+        "sense": "setpoint",
+        "value": 18.0,
+        "unit": "celsius"
+      }
+    },
+    {
+      "entity_id": "climate.living",
+      "state": "heat_cool",
+      "attributes": {
+        "temperature": null,
+        "target_temp_low": 19,
+        "target_temp_high": 24
+      },
+      "want": null
     }
   ]
 }

@@ -40,3 +40,8 @@ def test_names_the_entity_as_the_device():
 def test_skips_an_event_entitys_last_event_at_start_up():
     assert to_reading("event.doorbell", "2026-10-16T09:00:00+00:00", attrs("doorbell"), AT, initial=True) is None
     assert to_reading("binary_sensor.fridge", "on", attrs("door"), AT, initial=True) == {"sense": "contact", "value": True, "device": {"id": "binary_sensor.fridge"}, "at": AT.isoformat()}
+
+
+def test_a_fahrenheit_thermostat_setting_is_sent_in_celsius():
+    got = to_reading("climate.hall", "heat", {"temperature": 71.6}, AT, temperature_unit="°F")
+    assert got == {"sense": "setpoint", "value": 22.0, "unit": "celsius", "device": {"id": "climate.hall"}, "at": AT.isoformat()}

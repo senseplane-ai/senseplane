@@ -1,7 +1,8 @@
 # Copyright 2026 The Senseplane Authors
 # SPDX-License-Identifier: Apache-2.0
 """Senseplane: forward Home Assistant sensors as readings: temperatures and other
-numbers, doors, motion, leaks, smoke, plugs, lights and locks, doorbells and buttons.
+numbers, doors, motion, leaks, smoke, plugs, lights and locks, covers, alarm
+panels, thermostat settings, doorbells and buttons.
 
 Each config entry is one Senseplane sensor source (one integration token).
 State changes of the chosen entities are queued and sent in batches; see
@@ -27,10 +28,11 @@ _LOGGER = logging.getLogger(__name__)
 type SenseplaneConfigEntry = ConfigEntry[Forwarder]
 
 
-def _reading(state: State | None, initial: bool = False):
+def _reading(hass: HomeAssistant, state: State | None, initial: bool = False):
     if state is None:
         return None
-    return to_reading(state.entity_id, state.state, dict(state.attributes), state.last_updated, initial=initial)
+    unit = hass.config.units.temperature_unit  # a thermostat's setting is in it
+    return to_reading(state.entity_id, state.state, dict(state.attributes), state.last_updated, initial=initial, temperature_unit=unit)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SenseplaneConfigEntry) -> bool:
@@ -44,12 +46,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SenseplaneConfigEntry) -
 
     # The current value first, so the source has a reading straight away.
     for entity_id in entities:
-        if (reading := _reading(hass.states.get(entity_id), initial=True)) is not None:
+        if (reading := _reading(hass, hass.states.get(entity_id), initial=True)) is not None:
             forwarder.add(reading)
 
     @callback
     def _changed(event: Event[EventStateChangedData]) -> None:
-        if (reading := _reading(event.data["new_state"])) is not None:
+        if (reading := _reading(hass, event.data["new_state"])) is not None:
             forwarder.add(reading)
 
     entry.async_on_unload(async_track_state_change_event(hass, entities, _changed))

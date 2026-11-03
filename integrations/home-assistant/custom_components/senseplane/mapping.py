@@ -25,6 +25,8 @@ BINARY: dict[str, str] = {
 }
 # Entity domains that are switched on and off.
 SWITCHES = ("switch", "light", "fan", "input_boolean", "siren")
+# Alarm panel states that count as armed (a triggered alarm is armed).
+ARMED = ("armed_away", "armed_home", "armed_night", "armed_vacation", "armed_custom_bypass", "triggered")
 # event entity device class → Senseplane event sense.
 EVENTS: dict[str, str] = {"doorbell": "doorbell", "button": "button"}
 
@@ -66,12 +68,13 @@ def _number(state: str | None) -> float | None:
     return value
 
 
-def to_reading(entity_id: str, state: str | None, attributes: dict[str, Any], at: datetime, *, initial: bool = False) -> Reading | None:
+def to_reading(entity_id: str, state: str | None, attributes: dict[str, Any], at: datetime, *, initial: bool = False, temperature_unit: str = "°C") -> Reading | None:
     """A reading from an entity's state, or None when it isn't one Senseplane takes.
 
     ``initial`` is the state found at start-up: numbers and states are sent
     (the source has a value straight away), but an event entity's last event
-    is not, since it happened before we were watching.
+    is not, since it happened before we were watching. ``temperature_unit``
+    is Home Assistant's (a thermostat's setting is in it).
     """
     if state is None or state in ("unknown", "unavailable"):
         return None
@@ -92,6 +95,25 @@ def to_reading(entity_id: str, state: str | None, attributes: dict[str, Any], at
         if state not in ("locked", "unlocked", "open"):
             return None
         return {"sense": "lock", "value": state != "locked", **base}
+    if domain == "cover":
+        if state not in ("open", "closed"):
+            return None
+        return {"sense": "cover", "value": state == "open", **base}
+    if domain == "alarm_control_panel":
+        if state in ARMED:
+            return {"sense": "alarm", "value": True, **base}
+        if state != "disarmed":
+            return None
+        return {"sense": "alarm", "value": False, **base}
+    if domain == "climate":
+        # The thermostat setting, in °C.
+        raw = attributes.get("temperature")
+        value = _number(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+        if value is None:
+            return None
+        if temperature_unit in ("°F", "F"):
+            value = (value - 32) * 5 / 9
+        return {"sense": "setpoint", "value": round(value, 2), "unit": "celsius", **base}
     if domain == "event":
         sense = EVENTS.get(device_class or "")
         if not sense or initial:

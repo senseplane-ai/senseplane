@@ -10,7 +10,7 @@ CONF_SOURCE_ID = "source_id"
 CONF_ENTITIES = "entities"
 
 # Entity domains whose states can be forwarded (mapping.py says which device classes).
-DOMAINS = ["sensor", "binary_sensor", "switch", "light", "fan", "input_boolean", "siren", "lock", "event"]
+DOMAINS = ["sensor", "binary_sensor", "switch", "light", "fan", "input_boolean", "siren", "lock", "cover", "alarm_control_panel", "climate", "event"]
 
 # How often queued readings are sent, and how many at most per request.
 BATCH_SECONDS = 10.0

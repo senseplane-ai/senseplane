@@ -18,8 +18,13 @@ import { MediaError, type Participant, type RoomManager } from "./rooms.js";
 import { type JoinDeps, admit } from "./signalling.js";
 
 const MAX_OFFER_BYTES = 64 * 1024;
-/** A listener's ICE consent lapses after this long without checks (Pion sends one every 2 s). */
-export const CONSENT_TIMEOUT_S = 4;
+/** A listener's ICE consent lapses after this long without checks (mediasoup's shortest). */
+export const CONSENT_TIMEOUT_S = 10;
+/**
+ * A listener that sends nothing at all for this long (no consent checks, no RTCP; a box sends a check
+ * every second, any ICE agent at least every 2.5 s) has vanished: unplugged, its network gone.
+ */
+export const LISTENER_IDLE_MS = 4000;
 const fingerprint = (bearer: string) => createHash("sha256").update(bearer).digest();
 
 interface WhepSession {
@@ -29,6 +34,7 @@ interface WhepSession {
   producerId?: string;
   participant?: Participant;
   timer?: NodeJS.Timeout;
+  idle?: NodeJS.Timeout;
   ended: boolean;
 }
 
@@ -134,6 +140,7 @@ export function registerWhep(app: FastifyInstance, deps: WhepDeps) {
     if (s.ended) return;
     s.ended = true;
     clearTimeout(s.timer);
+    clearInterval(s.idle);
     const p = s.participant;
     if (p) {
       const t = p.room.talkback;
@@ -180,13 +187,28 @@ export function registerWhep(app: FastifyInstance, deps: WhepDeps) {
       s.producerId = g.listenTo;
       const router = await room.acquireRouter();
       const offer = parseListenOffer(sdp, router.rtpCapabilities);
-      // A box that vanishes (unplugged, its network gone) stops answering consent checks: ended within seconds.
+      // A box that vanishes (unplugged, its network gone) stops its consent checks: ICE gives up after 10 s, the idle watch sooner.
       const t = (await deps.rooms.createTransport(participant, "recv", false, { iceConsentTimeout: CONSENT_TIMEOUT_S })) as { transportId: string; iceParameters: types.IceParameters; iceCandidates: types.IceCandidate[]; dtlsParameters: types.DtlsParameters };
       await deps.rooms.connectTransport(participant, t.transportId, { dtlsParameters: offer.dtls });
       const c = await deps.rooms.consume(participant, t.transportId, found.producer.id, offer.caps);
       const transport = participant.transports.get(t.transportId)!.transport as types.WebRtcTransport;
+      // Faster than ICE consent: once connected, a listener whose bytes stop coming is gone, and its press is ended.
+      let seen = -1;
+      let since = Date.now();
+      const watch = () => s.ended || s.idle || (s.idle = setInterval(() => {
+        void transport.getStats().then((stats) => {
+          const got = stats.reduce((n, x) => n + (x.bytesReceived ?? 0), 0);
+          if (got !== seen) {
+            seen = got;
+            since = Date.now();
+          } else if (Date.now() - since > LISTENER_IDLE_MS) void end(s, "listener_left");
+        }).catch(() => undefined);
+      }, 500).unref());
       // Audio flows once DTLS is up; the talker learns then that the camera hears it.
-      const resume = () => void deps.rooms.resumeConsumer(participant, c.consumerId).catch(() => undefined);
+      const resume = () => {
+        void deps.rooms.resumeConsumer(participant, c.consumerId).catch(() => undefined);
+        watch();
+      };
       if (transport.dtlsState === "connected") resume();
       else transport.on("dtlsstatechange", (st) => st === "connected" && resume());
       transport.on("icestatechange", (st) => {

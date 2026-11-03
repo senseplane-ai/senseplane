@@ -75,9 +75,12 @@ clips at the next sweep, and an account's go with it.
 
 **Limits.**
 - 30 seconds a message, chime included (400 `message_too_long`), and at
-  most 500 characters of text.
+  most 500 characters of text. Text that plainly can't be said in 30 s even
+  quickly (20 characters a second, digits and symbols read as words) is
+  refused before the speech service is called.
 - 6 messages a minute per camera, agents and watches together, counted
-  under a lock on the camera's row (429 `rate_limited`).
+  under a lock on the camera's row (429 `rate_limited`). Every message that
+  cost a speech call counts, including one refused afterwards as too long.
 - One speaker at a time: a message is refused (409 `speaker_busy`) while a
   person is talking through the camera or another message is still playing.
   A person's push-to-talk always wins: when it starts, the API tells the phone

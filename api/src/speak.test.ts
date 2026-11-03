@@ -14,7 +14,7 @@ import { coversSense } from "./access.js";
 import { type ApiBus, createApi, handleBrainEvent, type SenseplaneApi } from "./index.js";
 import { createPasswordUser } from "./routes/auth.js";
 import { requiredRole } from "./roles.js";
-import { MAX_SPEAK_MS, SPEAK_PER_MINUTE, chime, durationMs, encodeWav, parseWav, sweepSpeechClips, withChime } from "./speak.js";
+import { MAX_SPEAK_MS, SPEAK_PER_MINUTE, chime, durationMs, encodeWav, parseWav, spokenMsEstimate, sweepSpeechClips, withChime } from "./speak.js";
 import type { ObjectStorage } from "./storage.js";
 import { createTestDatabase } from "./testdb.js";
 import { fakeMediaPlane } from "./testkit.js";
@@ -243,6 +243,24 @@ describe("talk-back", () => {
     const r = await speak(owner, phone, "One too many");
     expect(r.statusCode).toBe(429);
     expect(r.json().error.code).toBe("rate_limited");
+    await clear();
+  });
+
+  it("counts every message that cost a speech call against the rate, and refuses plainly long text before calling it", async () => {
+    await clear();
+    expect(spokenMsEstimate("Hello there")).toBeLessThan(2000);
+    expect(spokenMsEstimate("1".repeat(200))).toBeGreaterThan(MAX_SPEAK_MS);
+    const asked = tts.asked.length;
+    const digits = await speak(owner, phone, "7".repeat(200));
+    expect(digits.statusCode).toBe(400);
+    expect(digits.json().error.code).toBe("message_too_long");
+    expect(tts.asked.length).toBe(asked); // never paid for
+    // Too long only once spoken: refused, but the speech was made, so it counts.
+    for (let i = 0; i < SPEAK_PER_MINUTE; i++) expect((await speak(owner, phone, `LONG story number ${i}`)).json().error.code).toBe("message_too_long");
+    expect(tts.asked.length).toBe(asked + SPEAK_PER_MINUTE);
+    const next = await speak(owner, phone, "Short");
+    expect(next.statusCode).toBe(429);
+    expect(tts.asked.length).toBe(asked + SPEAK_PER_MINUTE);
     await clear();
   });
 

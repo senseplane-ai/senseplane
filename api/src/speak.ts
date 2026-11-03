@@ -40,6 +40,15 @@ export const PERSON_MAX_MS = 10 * 60_000;
 /** A box that hasn't taken a message by then never gets it, and it refuses one later than run_by (as for device commands, ADR 0067). */
 export const TAKE_MS = 10_000;
 const RUN_BY_GRACE_MS = 5_000;
+/**
+ * The least time a text can take to say, generously fast (20 characters a second, digits and symbols
+ * read as words), with the chime. Above 30 s it is refused without calling the speech service.
+ */
+export function spokenMsEstimate(text: string): number {
+  let chars = 0;
+  for (const ch of text) chars += /[0-9]/.test(ch) ? 4 : /[%&@#$€£+=*/\\<>^~|]/.test(ch) ? 6 : 1;
+  return Math.round((chars / 20) * 1000) + 600;
+}
 /** How long the camera's link to fetch the clip lasts. */
 const CLIP_LINK_S = 120;
 
@@ -318,12 +327,19 @@ export function createSpeech(deps: SpeakDeps) {
     }
     if (!deps.tts) return refuse(503, "service_unavailable", "Text to speech isn't set up on this server (TTS_BASE_URL).");
     if (!deps.storage) return refuse(503, "service_unavailable", "Speaking needs object storage, to keep what was said.");
+    // Plainly too long for 30 seconds: refused before paying for speech.
+    const guess = spokenMsEstimate(text);
+    if (guess > MAX_SPEAK_MS) {
+      return refuse(400, "message_too_long", `That message would take about ${Math.ceil(guess / 1000)} seconds even said quickly; the most is ${MAX_SPEAK_MS / 1000}. Say less.`);
+    }
 
     // The rate and the speaker are counted and taken under a lock on the camera, so two requests can't both slip in.
     const admitted = await data.withAccount(accountId, async (s) => {
       await s.db.selectFrom("sources").select("id").where("id", "=", source.id).forUpdate().executeTakeFirst();
       const recent = Number((await s.db.selectFrom("speak_messages").select((e) => e.fn.countAll().as("n")).where("source_id", "=", source.id)
-        .where("kind", "!=", "person").where("status", "not in", ["refused", "queued"]).where("created_at", ">", new Date(Date.now() - 60_000))
+        // Every message that cost a speech call counts, even one refused afterwards (too long).
+        .where("kind", "!=", "person").where((eb) => eb.or([eb("status", "not in", ["refused", "queued"]), eb("tts_used", "=", true)]))
+        .where("created_at", ">", new Date(Date.now() - 60_000))
         .executeTakeFirstOrThrow()).n);
       if (recent >= SPEAK_PER_MINUTE) return { error: [429, "rate_limited", `${cap(name)} has had ${SPEAK_PER_MINUTE} messages in the last minute, the most allowed. Try again shortly.`] as const };
       const other = await busy(s, source.id, id);
@@ -333,7 +349,7 @@ export function createSpeech(deps: SpeakDeps) {
           : `${cap(name)} is already playing a message. Try again when it has finished.`] as const };
       }
       // Holds the speaker while the speech is made.
-      const hold = { status: "sent" as const, message: "Making the speech.", ends_at: new Date(Date.now() + 45_000) };
+      const hold = { status: "sent" as const, message: "Making the speech.", ends_at: new Date(Date.now() + 45_000), tts_used: true };
       if (id) await s.db.updateTable("speak_messages").set({ ...hold, claimed_until: null }).where("id", "=", id).execute();
       else {
         id = newId("spk");

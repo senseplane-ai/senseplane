@@ -213,6 +213,8 @@ export interface SpeakMessagesTable {
   duration_ms: number | null;
   clip_key: string | null;
   clip_bytes: number | null;
+  /** The speech service was called for it (it counts against the rate whatever happened next). */
+  tts_used: ColumnType<boolean, boolean | undefined, boolean>;
   bridge_command_id: string | null;
   ends_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;

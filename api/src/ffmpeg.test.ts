@@ -66,7 +66,8 @@ describe("ffmpeg children", () => {
     for (let i = 0; i < 100 && ffmpegPids().length < 2; i++) await new Promise((r) => setTimeout(r, 20));
     const pids = ffmpegPids();
     killAllFfmpeg();
-    for (const r of runs) await expect(r).rejects.toThrow();
+    // Both at once: the second may fail before the first is awaited.
+    await Promise.all(runs.map((r) => expect(r).rejects.toThrow()));
     await gone(pids);
   });
 

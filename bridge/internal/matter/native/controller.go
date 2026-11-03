@@ -464,7 +464,14 @@ func (c *Controller) provision(ctx context.Context, s *Session, f *fabric, node 
 	if err != nil {
 		return Attestation{}, err
 	}
-	if err := c.checkRevocation(ctx, &att, trust); err != nil {
+	rctx, rcancel := ctx, context.CancelFunc(func() {})
+	if nw != nil {
+		// Over Bluetooth the link waits meanwhile: two short lookups, 20 s at most.
+		rctx, rcancel = context.WithTimeout(ctx, 20*time.Second)
+	}
+	err = c.checkRevocation(rctx, &att, trust)
+	rcancel()
+	if err != nil {
 		return Attestation{}, err
 	}
 	nonce := random(32)

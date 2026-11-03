@@ -14,6 +14,7 @@ This product depends on third-party software, including:
   prometheus_client (Apache License 2.0)
 - Prometheus client_golang (Apache License 2.0)
 - Pion WebRTC (MIT License), Copyright (c) 2018 Pion LLC (the bridge's WHIP client)
+- Pion Opus (MIT License), Copyright (c) 2018 The Pion community (the bridge's Opus decoder for push-to-talk)
 - Gorilla WebSocket (BSD 2-Clause License), Copyright (c) 2013 The Gorilla WebSocket Authors (the bridge's Home Assistant client)
 - mqtt-go (Apache License 2.0), Copyright 2019 The mqtt-go authors (the bridge's MQTT client);
   the bridge's tests run Mochi MQTT (MIT License) as an in-process broker

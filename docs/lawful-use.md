@@ -120,7 +120,8 @@ of a camera can surprise, frighten or mislead people, so:
   rights below apply.
 - **Push-to-talk is live, not recorded by Senseplane**, but the audit log
   says who talked through which camera and for how long. People near the
-  phone see "Someone is speaking through this phone" while it plays.
+  phone see "Someone is speaking through this phone" while it plays; an IP
+  camera has no screen, so say who you are when you start talking.
 - **Speak** is off by default for every agent and is never included in "Read
   sensors". Give it only for the cameras where an agent should talk, and only
   to agents you trust with that.

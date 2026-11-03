@@ -1,6 +1,6 @@
 # 69. Talk-back: speaking through a camera
 
-Date: 2026-11-03 · Status: accepted
+Date: 2026-11-03 · Status: accepted; push-to-talk to IP cameras is ADR 0074
 
 ## Context
 
@@ -163,8 +163,8 @@ said, newest first; an agent sees only its own.
   camera that records sound includes what was said through it.
 - Browsers may refuse to play sound on the capture page until someone has
   tapped it; the page then shows "Tap to let this phone play sound".
-- Not yet: push-to-talk to IP cameras and to the Android app's camera (the
-  box would need to receive WebRTC audio and convert Opus to G.711), vendor
+- Not yet: push-to-talk to the Android app's camera (push-to-talk to IP
+  cameras came with ADR 0074), vendor
   two-way audio APIs for cameras without an ONVIF backchannel, AAC
   backchannels, `rtsps` cameras, talking to several cameras at once, and
   choosing among a few synthetic voices.

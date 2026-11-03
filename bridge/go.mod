@@ -7,6 +7,7 @@ require (
 	github.com/at-wat/mqtt-go v0.19.6
 	github.com/gorilla/websocket v1.5.3
 	github.com/mochi-mqtt/server/v2 v2.7.9
+	github.com/pion/opus v0.1.0
 	github.com/pion/rtp v1.10.0
 	github.com/pion/webrtc/v4 v4.2.3
 	github.com/prometheus/client_golang v1.23.2
@@ -25,7 +26,6 @@ require (
 	github.com/pion/interceptor v0.1.43 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
-	github.com/pion/opus v0.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/sctp v1.9.2 // indirect

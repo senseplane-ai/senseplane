@@ -132,8 +132,9 @@ class Transport:
         body: Any = None,
         idempotency_key: str | None = None,
         token: str | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> Any:
-        p = self._prepare(operation, token, None, path=path, query=query, body=body, idempotency_key=idempotency_key)
+        p = self._prepare(operation, token, headers, path=path, query=query, body=body, idempotency_key=idempotency_key)
         return decode(self.send(p))
 
     def sse(
@@ -168,7 +169,7 @@ class Transport:
             result: Any = parse(page, self.request(operation, path=path, query={**query, "cursor": cursor}))
             for item in result.data:
                 yield item
-            cursor = result.next_cursor
+            cursor = getattr(result, "next_cursor", None)  # some lists are one page, with no cursor
             if not cursor:
                 return
 
@@ -281,7 +282,7 @@ class Live(_Resource):
 
 
 class Bridge(_Resource):
-    """For a bridge, with its bridge token as the client's key."""
+    """For a bridge (the box itself), with its bridge token as the client's key. `bridges` manages them."""
 
     def config(self) -> m.BridgeConfig:
         return parse(m.BridgeConfig, self._t.request("getBridgeConfig"))
@@ -293,6 +294,161 @@ class Bridge(_Resource):
 
     def health(self, body: Body = None, /, **fields: Any) -> None:
         self._t.request("postBridgeHealth", body=body_of(m.BridgeHealth, body, fields))
+
+    def cameras_found(self, body: Body = None, /, **fields: Any) -> None:
+        """Reports the cameras it found on the network (`cameras=[...]`), replacing the last list."""
+        self._t.request("putBridgeCamerasFound", body=body_of(m.BridgeCamerasFoundPutRequest, body, fields))
+
+    def entities(self) -> m.BridgeEntitiesGetResponse:
+        """The Home Assistant entities this bridge reported, and which were chosen."""
+        return parse(m.BridgeEntitiesGetResponse, self._t.request("getOwnBridgeEntities"))
+
+    def put_entities(self, body: Body = None, /, **fields: Any) -> None:
+        """Reports the entities it can see (`entities=[...]`), replacing the last list."""
+        self._t.request("putBridgeEntities", body=body_of(m.BridgeEntitiesPutRequest, body, fields))
+
+    def choose_entities(self, body: Body = None, /, **fields: Any) -> None:
+        """`choose=[...]` and `drop=[...]` entity ids, from the box itself."""
+        self._t.request("chooseOwnBridgeEntities", body=body_of(m.BridgeEntitiesChoosePostRequest, body, fields))
+
+    def push_readings(self, body: Body = None, /, **fields: Any) -> m.BridgeReadingsPostResponse:
+        """Readings of its chosen entities (`readings=[...]`); ones for entities not chosen are ignored."""
+        data = self._t.request("postBridgeReadings", body=body_of(m.ReadingsRequest, body, fields))
+        return parse(m.BridgeReadingsPostResponse, data)
+
+    def take_commands(self, *, wait: int | None = None) -> m.BridgeCommandsGetResponse:
+        """Commands waiting for this bridge; `wait` seconds holds the request open until one arrives."""
+        return parse(m.BridgeCommandsGetResponse, self._t.request("takeBridgeCommands", query={"wait": wait}))
+
+    def finish_command(self, id: str, body: Body = None, /, **fields: Any) -> None:
+        """Reports how a command went: `ok`, and `result` or `error`."""
+        body = body_of(m.BridgeCommandsIdPostRequest, body, fields)
+        self._t.request("finishBridgeCommand", path={"id": id}, body=body)
+
+    def start_pairing(self, *, name: str | None = None) -> m.BridgePairPostResponse:
+        """Starts pairing a new box (no key needed): show `user_code`, then `poll_pairing(device_code)`."""
+        data = self._t.request("startBridgePairing", body={"name": name} if name else {})
+        return parse(m.BridgePairPostResponse, data)
+
+    def poll_pairing(self, device_code: str) -> m.BridgePairTokenPostResponse:
+        """Whether a person approved the pairing yet; once approved, the bridge token (shown once)."""
+        data = self._t.request("pollBridgePairing", body={"device_code": device_code})
+        return parse(m.BridgePairTokenPostResponse, data)
+
+
+class Bridges(_Resource):
+    """Boxes on your network that relay cameras, Home Assistant entities and Matter devices (ADR 0045)."""
+
+    def list(self) -> Iterator[m.Bridge]:
+        return self._t.paginate("listBridges", m.BridgesGetResponse, query={})
+
+    def create(self, name: str) -> m.Bridge:
+        """A new box; its token is in the response, shown once."""
+        return parse(m.Bridge, self._t.request("createBridge", body={"name": name}))
+
+    def remove(self, id: str) -> None:
+        """Removes a box; its cameras and sensors keep their history."""
+        self._t.request("removeBridge", path={"id": id})
+
+    def find_pairing(self, code: str) -> m.BridgesPairGetResponse:
+        """The box waiting to pair with the code it shows."""
+        return parse(m.BridgesPairGetResponse, self._t.request("findBridgePairing", query={"code": code}))
+
+    def approve_pairing(self, code: str, *, name: str | None = None) -> m.Bridge:
+        body = {"code": code, **({"name": name} if name else {})}
+        return parse(m.Bridge, self._t.request("approveBridgePairing", body=body))
+
+    def entities(self, id: str) -> m.BridgesIdEntitiesGetResponse:
+        """The Home Assistant entities the box reported, and which are chosen."""
+        return parse(m.BridgesIdEntitiesGetResponse, self._t.request("listBridgeEntities", path={"id": id}))
+
+    def choose_entities(self, id: str, body: Body = None, /, **fields: Any) -> m.BridgesIdEntitiesPatchResponse:
+        """`choose=[...]` entity ids to read (and control), `drop=[...]` to stop."""
+        body = body_of(m.BridgesIdEntitiesPatchRequest, body, fields)
+        data = self._t.request("chooseBridgeEntities", path={"id": id}, body=body)
+        return parse(m.BridgesIdEntitiesPatchResponse, data)
+
+    def add_matter_device(self, id: str, code: str) -> m.BridgeCommand:
+        """Adds a Matter device with its pairing code; follow the returned command with `command`."""
+        data = self._t.request("addMatterDevice", path={"id": id}, body={"code": code})
+        return parse(m.BridgeCommand, data)
+
+    def cameras_found(self, id: str) -> m.BridgesIdCamerasFoundGetResponse:
+        """Cameras the box found on its network."""
+        data = self._t.request("listBridgeCamerasFound", path={"id": id})
+        return parse(m.BridgesIdCamerasFoundGetResponse, data)
+
+    def search_cameras(self, id: str) -> m.BridgeCommand:
+        """Asks the box to look for cameras again."""
+        return parse(m.BridgeCommand, self._t.request("searchBridgeCameras", path={"id": id}))
+
+    def add_onvif_camera(self, id: str, body: Body = None, /, **fields: Any) -> m.BridgeCommand:
+        """Adds a found ONVIF camera: `camera`, `username`, `password` (and `name`)."""
+        body = body_of(m.BridgesIdOnvifPostRequest, body, fields)
+        return parse(m.BridgeCommand, self._t.request("addOnvifCamera", path={"id": id}, body=body))
+
+    def command(self, id: str, command_id: str) -> m.BridgeCommand:
+        """What happened to a command sent to the box."""
+        data = self._t.request("getBridgeCommand", path={"id": id, "cid": command_id})
+        return parse(m.BridgeCommand, data)
+
+
+class Devices(_Resource):
+    """Devices a person (or an agent they granted Control) can switch (ADR 0067).
+
+    `command` answers with the state the box read back; a lock, garage door, gate or alarm
+    asked for by an agent comes back `awaiting_confirmation` until a person confirms it.
+    Offline boxes and failures raise a SenseplaneError whose `details["command"]` is the request.
+    """
+
+    def list(self) -> Iterator[m.Device]:
+        return self._t.paginate("listDevices", m.DevicesGetResponse, query={})
+
+    def get(self, id: str) -> m.Device:
+        return parse(m.Device, self._t.request("getDevice", path={"id": id}))
+
+    def set_controllable(self, id: str, controllable: bool) -> m.Device:
+        """Admins: show the device's `warning` first."""
+        data = self._t.request("updateDevice", path={"id": id}, body={"controllable": controllable})
+        return parse(m.Device, data)
+
+    def command(
+        self,
+        id: str,
+        action: str,
+        *,
+        value: float | str | None = None,
+        confirm: bool | None = None,
+        via: str | None = None,
+    ) -> m.DeviceCommand:
+        """Switches a device: `command(id, "turn_on")`, `command(id, "set_brightness", value=40)`.
+
+        `confirm=True`: a person confirms their own request for a secure device. `via="app"` is
+        recorded as how the person asked (the Android app sends it).
+        """
+        body: dict[str, Any] = {"action": action}
+        if value is not None:
+            body["value"] = value
+        if confirm is not None:
+            body["confirm"] = confirm
+        headers = {"x-senseplane-via": via} if via else None
+        data = self._t.request("controlDevice", path={"id": id}, body=body, headers=headers)
+        return parse(m.DeviceCommand, data)
+
+    def request(self, id: str) -> m.DeviceCommand:
+        """What happened to a request: poll one that is `sent` or `awaiting_confirmation`."""
+        return parse(m.DeviceCommand, self._t.request("getDeviceCommand", path={"id": id}))
+
+
+class Confirmations(_Resource):
+    """Requests waiting for a person; only people signed in can answer them."""
+
+    def list(self) -> Iterator[m.DeviceCommand]:
+        return self._t.paginate("listConfirmations", m.ConfirmationsGetResponse, query={})
+
+    def decide(self, id: str, approve: bool) -> m.DeviceCommand:
+        data = self._t.request("decideConfirmation", path={"id": id}, body={"approve": approve})
+        return parse(m.DeviceCommand, data)
 
 
 class Integration(_Resource):
@@ -673,6 +829,14 @@ class Account(_Resource):
     def export(self) -> m.ExportResponse:
         return parse(m.ExportResponse, self._t.request("exportAccount"))
 
+    def keys(self) -> m.AccountKeys:
+        """The account's encryption key version, and whether a rotation is under way."""
+        return parse(m.AccountKeys, self._t.request("getAccountKeys"))
+
+    def rotate_keys(self) -> m.AccountKeys:
+        """Starts re-encrypting stored footage under a new account key (owners)."""
+        return parse(m.AccountKeys, self._t.request("rotateAccountKeys"))
+
     def export_status(self, id: str) -> m.ExportResponse:
         return parse(m.ExportResponse, self._t.request("getAccountExport", path={"id": id}))
 
@@ -756,6 +920,9 @@ class Senseplane:
         self.sources = Sources(transport)
         self.live = Live(transport)
         self.bridge = Bridge(transport)
+        self.bridges = Bridges(transport)
+        self.devices = Devices(transport)
+        self.confirmations = Confirmations(transport)
         self.integration = Integration(transport)
         self.capture = Capture(transport)
         self.watches = Watches(transport)

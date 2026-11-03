@@ -517,7 +517,11 @@ export interface WatchesTable {
   claimed_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
-export type Destination = { type: "webhook" | "agent" | "channel" | "speak"; id: string; text?: string };
+export type Destination = {
+  type: "webhook" | "agent" | "channel" | "speak"; id: string; text?: string;
+  /** speak: the agent that added it (set by the API, never by the client); it is said as that agent (ADR 0069). */
+  added_by_agent?: string;
+};
 
 /** A chat in a messaging app that alerts go to and that can ask (ADR 0059). */
 export interface ChannelsTable {

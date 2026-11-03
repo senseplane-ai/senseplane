@@ -388,6 +388,52 @@ describe("talk-back", () => {
     expect(refusedMsg.message).toMatch(/no Speak permission/);
   });
 
+  it("lets an agent make only its own watches speak, records who added the action, and says it as them", async () => {
+    await clear();
+    // Concierge lost its grants in the test before: give it the speak grant back on the phone.
+    expect((await call(owner, "POST", "/v1/grants", { agent_id: agents.Concierge!.id, source_ids: [phone], senses: ["video", "speak"] })).statusCode).toBe(201);
+    const notify = [{ type: "speak", id: phone, text: "Hello, this is an automated message." }];
+    // A person's watch: the agent can't add a speak action to it.
+    const persons = (await call(owner, "POST", "/v1/watches", { instruction: "a person at the porch", sources: [phone] })).json();
+    const patched = await call(agents.Concierge!.api_key, "PATCH", `/v1/watches/${persons.id}`, { notify });
+    expect(patched.statusCode).toBe(403);
+    expect(patched.json().error.message).toMatch(/only add speak actions to watches it made/);
+    // The person adds it themselves: it is said as the watch. Who added it can't be claimed by the client (it is dropped).
+    expect((await call(owner, "PATCH", `/v1/watches/${persons.id}`, { notify: [{ ...notify[0], added_by_agent: agents.Concierge!.id }] })).json().notify).toEqual(notify);
+    const stored = await api.data.withAccount(acc, (s) => s.db.selectFrom("watches").select("notify").where("id", "=", persons.id).executeTakeFirstOrThrow());
+    expect(stored.notify).toEqual(notify);
+    const fire = (watchId: string, key: string) => handleBrainEvent(api.data, undefined, "brain.event", {
+      event_key: key, account_id: acc, source_id: phone, type: "watch.triggered", watch_id: watchId, occurred_at: new Date().toISOString(),
+      labels: [], confidence: 0.9, summary: "Watch triggered.",
+    }, log);
+    await fire(persons.id, "p-1");
+    expect(await api.speech.runQueued()).toBe(1);
+    let said = (await call(owner, "GET", `/v1/speak-messages?source=${phone}`)).json().data[0];
+    expect(said).toMatchObject({ kind: "watch", status: "playing", requested_by: { kind: "watch", id: persons.id } });
+    await finishAll();
+
+    // The agent's own watch: the action is recorded as added by it, and said as it.
+    const own = (await call(agents.Concierge!.api_key, "POST", "/v1/watches", { instruction: "a person at the porch", sources: [phone], notify })).json();
+    const row = await api.data.withAccount(acc, (s) => s.db.selectFrom("watches").select("notify").where("id", "=", own.id).executeTakeFirstOrThrow());
+    expect(row.notify).toEqual([{ ...notify[0], added_by_agent: agents.Concierge!.id }]);
+    expect(own.notify).toEqual(notify); // not shown to clients
+    await fire(own.id, "o-1");
+    expect(await api.speech.runQueued()).toBe(1);
+    said = (await call(owner, "GET", `/v1/speak-messages?source=${phone}`)).json().data[0];
+    expect(said).toMatchObject({ kind: "watch", status: "playing", requested_by: { kind: "agent", id: agents.Concierge!.id } });
+    await finishAll();
+    // Its grant revoked, the agent's action says nothing.
+    for (const g of (await call(owner, "GET", "/v1/grants")).json().data as { id: string; agent_id: string }[]) {
+      if (g.agent_id === agents.Concierge!.id) await call(owner, "DELETE", `/v1/grants/${g.id}`);
+    }
+    const before = plane.spoken.length;
+    await fire(own.id, "o-2");
+    expect(await api.speech.runQueued()).toBe(1);
+    expect(plane.spoken.length).toBe(before);
+    said = (await call(owner, "GET", `/v1/speak-messages?source=${phone}`)).json().data[0];
+    expect(said).toMatchObject({ status: "refused", requested_by: { kind: "agent", id: agents.Concierge!.id } });
+  });
+
   it("puts every use in the audit log: who, the camera, how long, and the text", async () => {
     const log = await audit();
     const speakLog = log.filter((e) => e.action.startsWith("speak."));

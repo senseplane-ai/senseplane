@@ -111,11 +111,15 @@ after the camera's retention days (in days mode) and with the account, and linke
 camera is what a watch is for ("say the shop is closed when someone comes in
 after 8"). A watch destination can be `{type: "speak", id: <camera>, text}`.
 It needs a camera with a speaker the caller can see, and an agent that sets
-it needs a speak grant on that camera, as it would to speak itself. When the
+it needs a speak grant on that camera, as it would to speak itself. An agent
+may add speak actions only to watches it made, never to a person's. The API
+records which agent added each speak action (`added_by_agent`, set by the
+server, never taken from the client, and not shown in answers). When the
 watch fires (`watch.triggered`, never `watch.unchecked`), the message is
-queued and said by one API process (ADR 0058), as whoever made the watch: an
-agent must still have its speak grant then, or nothing is said and the
-refusal is audited. A watch's message not said within a minute is dropped.
+queued and said by one API process (ADR 0058), as whoever added the action:
+that agent must still exist and have its speak grant then, or nothing is
+said and the refusal is audited. An action a person added is said as the
+watch. A watch's message not said within a minute is dropped.
 Workflows will reuse the same action.
 
 **Every use is audited.** `speak.<outcome>` entries (playing, played, sent,

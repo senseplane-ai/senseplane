@@ -495,11 +495,18 @@ export async function queueWatchSpeech(s: AccountScope, ev: { id: string; watch_
   if (!ev.watch_id || !dests.length) return;
   const watch = await s.db.selectFrom("watches").select(["id", "instruction", "created_by_agent"]).where("id", "=", ev.watch_id).executeTakeFirst();
   if (!watch) return;
-  await s.db.insertInto("speak_messages").values(dests.filter((d) => d.text).map((d) => ({
-    id: newId("spk"), account_id: s.accountId, source_id: d.id, kind: "watch" as const, actor: watch.created_by_agent ? `agent:${watch.created_by_agent}` : `watch:${watch.id}`,
-    actor_kind: watch.created_by_agent ? "agent" : "watch", actor_name: `Watch: ${watch.instruction.slice(0, 80)}`, via: "watch",
-    agent_id: watch.created_by_agent, watch_id: watch.id, event_id: ev.id, text: d.text!, status: "queued" as const,
-  }))).execute();
+  const rows = dests.filter((d) => d.text).map((d) => {
+    // Said as whoever added the action: the agent that added it (its grant is checked again when said),
+    // else the agent that made the watch (actions saved before this was recorded), else the watch.
+    const agent = d.added_by_agent ?? watch.created_by_agent ?? null;
+    return {
+      id: newId("spk"), account_id: s.accountId, source_id: d.id, kind: "watch" as const, actor: agent ? `agent:${agent}` : `watch:${watch.id}`,
+      actor_kind: agent ? "agent" : "watch", actor_name: `Watch: ${watch.instruction.slice(0, 80)}`, via: "watch",
+      agent_id: agent, watch_id: watch.id, event_id: ev.id, text: d.text!, status: "queued" as const,
+    };
+  });
+  if (!rows.length) return;
+  await s.db.insertInto("speak_messages").values(rows).execute();
   setTimeout(() => speakKick.dispatchEvent(new Event("kick")), 20);
 }
 

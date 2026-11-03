@@ -51,9 +51,12 @@ const MAX_MATCHES = 100;
 export const toWatch = (w: WatchRow) => ({
   id: w.id, instruction: w.instruction, sources: w.sources, mode: w.mode, compiled: w.compiled, estimate: w.estimate,
   status: w.status, warnings: w.warnings, expires_at: w.expires_at ? new Date(w.expires_at).toISOString() : null,
-  notify: w.notify ?? [], active_hours: w.active_hours ?? null,
+  notify: publicNotify(w.notify), active_hours: w.active_hours ?? null,
   created_at: new Date(w.created_at).toISOString(),
 });
+
+/** Destinations as the spec shows them: who added a speak action stays on the server. */
+const publicNotify = (n: Destination[] | null | undefined) => (n ?? []).map(({ added_by_agent: _, ...d }) => d);
 
 // Watch destinations and schedule (ADR 0043, 0059).
 const destinationSchema = {
@@ -81,9 +84,18 @@ function checkSchedule(s: WatchSchedule | null | undefined) {
  * aren't revoked, channels that are linked (ADR 0059). An agent key may route a watch only to itself (it can't see
  * the account's webhooks or other agents).
  */
-export async function checkNotify(data: DataAccess, req: FastifyRequest, notify: Destination[]): Promise<Destination[]> {
-  const unique = [...new Map(notify.map((d) => [`${d.type}:${d.id}`, { type: d.type, id: d.id, ...(d.type === "speak" ? { text: d.text?.trim() ?? "" } : {}) }])).values()];
-  await checkSpeak(data, req, unique.filter((d) => d.type === "speak"));
+export async function checkNotify(data: DataAccess, req: FastifyRequest, notify: Destination[], watch?: { created_by_agent: string | null }): Promise<Destination[]> {
+  // Who added a speak action is recorded here, never taken from the client: the message is said as them (ADR 0069).
+  const agent = req.access?.agentId;
+  const unique = [...new Map(notify.map((d) => [`${d.type}:${d.id}`, {
+    type: d.type, id: d.id, ...(d.type === "speak" ? { text: d.text?.trim() ?? "", ...(agent ? { added_by_agent: agent } : {}) } : {}),
+  }])).values()];
+  const speaks = unique.filter((d) => d.type === "speak");
+  // An agent may make only its own watches speak; a person's watch speaks only as people set it.
+  if (agent && speaks.length && watch && watch.created_by_agent !== agent) {
+    throw new ApiError(403, "forbidden", "an agent can only add speak actions to watches it made");
+  }
+  await checkSpeak(data, req, speaks);
   if (req.access?.agentId) {
     if (unique.some((d) => d.type !== "speak" && (d.type !== "agent" || d.id !== req.access!.agentId))) {
       throw new ApiError(403, "forbidden", "an agent key can only send a watch's events to itself");
@@ -297,7 +309,7 @@ export function registerWatchRoutes(app: FastifyInstance, deps: {
         const schedule = checkSchedule(req.body.active_hours);
         set.active_hours = schedule ? JSON.stringify(schedule) : null;
       }
-      if (req.body.notify) set.notify = JSON.stringify(await checkNotify(deps.data, req, req.body.notify));
+      if (req.body.notify) set.notify = JSON.stringify(await checkNotify(deps.data, req, req.body.notify, current));
       const row = await deps.data.withAccount(accountId, (s) =>
         s.db.updateTable("watches").set(set).where("id", "=", req.params.id).returningAll().executeTakeFirstOrThrow(),
       );

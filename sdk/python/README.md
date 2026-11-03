@@ -49,6 +49,7 @@ API's own field names (sent as written). `from` is `from_` in Python.
 import asyncio
 from senseplane import AsyncSenseplane
 
+
 async def main() -> None:
     async with AsyncSenseplane() as sp:
         async for src in sp.sources.list():
@@ -56,6 +57,7 @@ async def main() -> None:
         async for e in sp.conversations.stream(conversation.id, "When did someone come to the door?"):
             if e.event == "delta":
                 print(e.data.text, end="")
+
 
 asyncio.run(main())
 ```
@@ -104,11 +106,15 @@ from senseplane.tools import Toolkit
 claude, toolkit = anthropic.Anthropic(), Toolkit(Senseplane(api_key=AGENT_KEY))
 messages = [{"role": "user", "content": "Is anyone at the front door?"}]
 while True:
-    response = claude.messages.create(model="claude-opus-5-5", max_tokens=16000, tools=toolkit.anthropic(), messages=messages)
+    response = claude.messages.create(
+        model="claude-opus-5-5", max_tokens=16000, tools=toolkit.anthropic(), messages=messages
+    )
     if response.stop_reason != "tool_use":
         break
     messages.append({"role": "assistant", "content": response.content})
-    messages.append({"role": "user", "content": [toolkit.call_anthropic(b) for b in response.content if b.type == "tool_use"]})
+    messages.append(
+        {"role": "user", "content": [toolkit.call_anthropic(b) for b in response.content if b.type == "tool_use"]}
+    )
 ```
 
 `look` returns the picture itself, so Claude sees it. `toolkit.openai()` gives

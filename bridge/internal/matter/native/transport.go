@@ -216,7 +216,15 @@ func Listen(port int, log *slog.Logger) (*Transport, error) {
 
 // OverLink runs a transport over a reliable link (a BTP session): no MRP.
 func OverLink(l packetLink, log *slog.Logger) *Transport {
+	return ServeLink(l, log, nil)
+}
+
+// ServeLink is OverLink for a responder: onUnsecured (as OnUnsecured) is
+// set before the first message is read. Nothing is retransmitted over a
+// link, so a message that came before its handler would be lost for good.
+func ServeLink(l packetLink, log *slog.Logger, onUnsecured func(*Session)) *Transport {
 	t := newTransport(l, false, log)
+	t.onUnsecur = onUnsecured
 	go t.read()
 	return t
 }

@@ -365,7 +365,9 @@ func (c *Controller) CommissionBLE(ctx context.Context, code string, conn BLECon
 	bt := OverLink(btp, c.log())
 	defer bt.Close()
 	j.step(StepSecuring)
-	pase, err := PASE(ctx, bt, linkPeer, pc.Passcode)
+	pctx, pcancel := context.WithTimeout(ctx, 60*time.Second) // nothing is retransmitted over BTP: don't wait for ever
+	pase, err := PASE(pctx, bt, linkPeer, pc.Passcode)
+	pcancel()
 	if errors.Is(err, errSpake) {
 		return nil, errors.New("the code doesn't match the device; check it (it is on the device, its box or its manual)")
 	}

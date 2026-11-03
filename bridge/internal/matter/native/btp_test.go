@@ -125,11 +125,9 @@ func TestBTPSegmentsAndReassemblesBothWays(t *testing.T) {
 func TestBTPMessagesThroughATransport(t *testing.T) {
 	// The message layer over BTP: no MRP flags, nothing retransmitted.
 	c, s, pt, _ := btpPair(t, 100, fastBTP(), fastBTP())
-	ct, st := OverLink(c, nil), OverLink(s, nil)
-	defer ct.Close()
-	defer st.Close()
 	got := make(chan Message, 1)
-	st.OnUnsecured(func(sess *Session) {
+	ct := OverLink(c, nil)
+	st := ServeLink(s, nil, func(sess *Session) {
 		sess.OnExchange(func(ex *Exchange) {
 			m, err := ex.Receive(context.Background())
 			if err == nil {
@@ -137,6 +135,8 @@ func TestBTPMessagesThroughATransport(t *testing.T) {
 			}
 		})
 	})
+	defer ct.Close()
+	defer st.Close()
 	u := ct.Unsecured(linkPeer)
 	ex := u.NewExchange()
 	payload := bytes.Repeat([]byte("matter"), 50)

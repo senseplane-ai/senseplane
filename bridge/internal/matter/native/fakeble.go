@@ -123,8 +123,7 @@ func (d *FakeDevice) ConnectBLE(mtu int, timing BTPOptions) BLEConn {
 			_ = dev.Close()
 			return
 		}
-		tr := OverLink(btp, nil)
-		tr.OnUnsecured(func(s *Session) { s.OnExchange(d.handshake) })
+		tr := ServeLink(btp, nil, func(s *Session) { s.OnExchange(d.handshake) })
 		d.mu.Lock()
 		d.ble = append(d.ble, tr)
 		d.mu.Unlock()

@@ -314,14 +314,20 @@ func (c *Controller) Commission(ctx context.Context, code string) (map[string]an
 	if err != nil {
 		found, ferr := c.resolver().Operational(ctx, f.instance(node))
 		if ferr != nil || len(found) == 0 {
+			disarm(pase)
 			return nil, fmt.Errorf("the device took the certificate but can't be reached on the fabric: %w", err)
 		}
 		if sess, err = CASE(ctx, t, udpAddr(found[0]), f.creds, node); err != nil {
+			disarm(pase)
 			return nil, err
 		}
 		addr = found[0]
 	}
-	return c.complete(ctx, sess, f, node, addr, att)
+	res, err := c.complete(ctx, sess, f, node, addr, att)
+	if err != nil {
+		disarm(pase)
+	}
+	return res, err
 }
 
 // complete finishes adding a device over CASE (CommissioningComplete, which
@@ -419,9 +425,37 @@ func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, nod
 		}
 		return Attestation{}, fmt.Errorf("the device didn't start adding (error %d)", code)
 	}
+	// From here a failure disarms the fail-safe, so the device undoes what it took at once.
+	att, err := c.provision(ctx, s, f, node, nw)
+	if err != nil {
+		disarm(s)
+	}
+	return att, err
+}
+
+// disarm ends the device's fail-safe (ArmFailSafe with 0 s): it drops what
+// this attempt gave it. Best effort: the device may be gone.
+func disarm(s *Session) {
+	if s == nil || s.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = Invoke(ctx, s, 0, clusterGeneralCommissioning, cmdArmFailSafe, func(w *TLV) {
+		w.Uint(0, 0)
+		w.Uint(1, 0)
+	})
+}
+
+// provision is addToFabric once the fail-safe is armed.
+func (c *Controller) provision(ctx context.Context, s *Session, f *fabric, node uint64, nw *joining) (Attestation, error) {
 	if nw != nil {
 		nw.step(StepChecking)
 		if err := setRegulatory(ctx, s); err != nil {
+			return Attestation{}, err
+		}
+		// Which network it joins, before it gets any credentials.
+		if err := nw.prepare(ctx, s); err != nil {
 			return Attestation{}, err
 		}
 	}
@@ -434,7 +468,7 @@ func (c *Controller) addToFabric(ctx context.Context, s *Session, f *fabric, nod
 		return Attestation{}, err
 	}
 	nonce := random(32)
-	res, err = Invoke(ctx, s, 0, clusterOperationalCreds, cmdCSRRequest, func(w *TLV) { w.Bytes8(0, nonce) })
+	res, err := Invoke(ctx, s, 0, clusterOperationalCreds, cmdCSRRequest, func(w *TLV) { w.Bytes8(0, nonce) })
 	if err != nil {
 		return Attestation{}, fmt.Errorf("the device didn't make a key: %w", err)
 	}

@@ -304,6 +304,9 @@ func (d *FakeDevice) pase(ctx context.Context, ex *Exchange, req Message) {
 	}
 	s.challenge = keys.chal
 	s.OnExchange(func(e *Exchange) { d.serve(e, false) })
+	// As connectedhomeip's CommissioningWindowManager: the PASE session ending
+	// before CommissioningComplete expires the fail-safe.
+	s.OnEnd(func(error) { d.paseEnded() })
 	_ = ex.Send(protoSecureChannel, opStatus, statusReport(0, protoSecureChannel, 0))
 }
 
@@ -663,8 +666,19 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 	}
 	switch {
 	case cl == clusterGeneralCommissioning && cmd == cmdArmFailSafe:
+		seconds, _ := fields.FieldU(0)
 		d.mu.Lock()
-		d.armed = true
+		if seconds == 0 {
+			// Disarming: the fail-safe expires now, undoing what it covered.
+			if d.armed {
+				d.expireLocked()
+			}
+		} else {
+			if !d.armed {
+				d.done, d.leftBLE = false, false
+			}
+			d.armed = true
+		}
 		d.mu.Unlock()
 		_ = invokeResult(ex, path, 1, func(w *TLV) { w.Uint(0, 0); w.String(1, "") }, -1)
 	case cl == clusterOperationalCreds && cmd == cmdCertChainRequest:
@@ -722,6 +736,7 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 		}
 		d.mu.Lock()
 		d.rootTLV, d.rootPub = fields.FieldBytes(0), root.spec.pub
+		d.rootsGiven++
 		d.mu.Unlock()
 		_ = invokeResult(ex, path, 0, nil, 0)
 	case cl == clusterOperationalCreds && cmd == cmdAddNOC:
@@ -755,8 +770,15 @@ func (d *FakeDevice) invoke(ex *Exchange, req Elem, operational, timed bool) {
 			return
 		}
 		d.mu.Lock()
-		d.armed, d.done = false, true
+		stillArmed := d.armed
+		if stillArmed || lenient {
+			d.armed, d.done = false, true
+		}
 		d.mu.Unlock()
+		if !stillArmed && !lenient {
+			_ = invokeResult(ex, path, 5, func(w *TLV) { w.Uint(0, 3) }, -1) // NoFailSafe: it expired, and with it the certificate
+			return
+		}
 		_ = invokeResult(ex, path, 5, func(w *TLV) { w.Uint(0, 0) }, -1)
 	case cl == clusterGeneralCommissioning && cmd == cmdSetRegulatoryConfig,
 		cl == clusterNetworkCommissioning && (cmd == cmdAddOrUpdateWiFi || cmd == cmdAddOrUpdateThread || cmd == cmdConnectNetwork):

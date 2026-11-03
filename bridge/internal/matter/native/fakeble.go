@@ -28,6 +28,39 @@ type fakeNetwork struct {
 	gotDataset []byte
 	regulatory bool // it was given its regulatory setting
 	joined     bool
+	leftBLE    bool // it closed Bluetooth itself, to join (no rollback for that)
+	rollbacks  int  // fail-safes that expired, undoing what they covered
+	rootsGiven int  // AddTrustedRoot commands taken
+}
+
+// paseEnded: a PASE session ended. Before CommissioningComplete that
+// expires the fail-safe, unless the device itself left Bluetooth to join.
+func (d *FakeDevice) paseEnded() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.armed && !d.done && !d.leftBLE && !d.Lenient {
+		d.expireLocked()
+	}
+}
+
+// expireLocked ends the fail-safe: the root, the certificate and the network it covered are gone (spec 11.10.7.2.2).
+func (d *FakeDevice) expireLocked() {
+	d.armed = false
+	d.rollbacks++
+	d.opKey, d.rootTLV, d.rootPub, d.noc, d.ipk = nil, nil, nil, nil, nil
+	d.nodeID, d.fabricID, d.adminNode = 0, 0, 0
+	d.gotSSID, d.gotPass, d.gotDataset, d.regulatory = nil, nil, nil, false
+	if d.joined {
+		d.joined = false
+		d.offline = d.wantSSID != "" || d.wantPANID != nil
+	}
+}
+
+// Rollbacks is how many times its fail-safe expired with something to undo.
+func (d *FakeDevice) Rollbacks() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.rollbacks
 }
 
 // features is its Network Commissioning feature map (under d.mu).
@@ -158,6 +191,7 @@ func (d *FakeDevice) network(ex *Exchange, path Elem, cl, cmd uint64, fields Ele
 		d.joined, d.offline = true, false
 		if d.NoConcurrent {
 			// One radio: it leaves Bluetooth for the network, unanswered.
+			d.leftBLE = true
 			t := ex.Session().t
 			go t.Close()
 			return

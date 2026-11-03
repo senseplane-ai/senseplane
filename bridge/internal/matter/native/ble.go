@@ -184,6 +184,10 @@ type joining struct {
 	progress func(step string)
 	// concurrent: the device keeps Bluetooth while it joins (else ConnectNetwork may go unanswered).
 	concurrent bool
+	// From prepare: the Network Commissioning endpoint (-1: none), its features, and Wi-Fi (else Thread).
+	endpoint int
+	features uint64
+	wifi     bool
 }
 
 func (j *joining) step(s string) {
@@ -222,34 +226,54 @@ func setRegulatory(ctx context.Context, s *Session) error {
 	return nil
 }
 
-// join gives the device its network over the PASE session and tells it to connect.
-func (j *joining) join(ctx context.Context, s *Session) error {
-	j.step(StepNetwork)
+// prepare reads which network the device joins (Network Commissioning's
+// feature map) and whether it keeps Bluetooth while it joins, and checks
+// the person gave that network: before the device gets any credentials.
+func (j *joining) prepare(ctx context.Context, s *Session) error {
 	attrs, _, err := Read(ctx, s, []Path{{-1, clusterNetworkCommissioning, attrFeatureMap}, {0, clusterGeneralCommissioning, 4}}, nil)
 	if err != nil {
 		return fmt.Errorf("couldn't read which networks the device joins: %w", err)
 	}
-	endpoint, features := -1, uint64(0)
-	j.concurrent = true
+	j.endpoint, j.features, j.concurrent = -1, 0, true
 	for _, a := range attrs {
 		switch {
 		case a.Path.Cluster == clusterNetworkCommissioning:
 			v, _ := a.Value.U()
-			if v&(featureWiFi|featureThread) != 0 && (endpoint < 0 || a.Path.Endpoint < endpoint) {
-				endpoint, features = a.Path.Endpoint, v
+			if v&(featureWiFi|featureThread) != 0 && (j.endpoint < 0 || a.Path.Endpoint < j.endpoint) {
+				j.endpoint, j.features = a.Path.Endpoint, v
 			}
 		case a.Path.Cluster == clusterGeneralCommissioning && a.Value.Kind == KindBool:
 			j.concurrent = a.Value.Bool
 		}
 	}
-	if endpoint < 0 {
+	if j.endpoint < 0 {
 		return nil // Ethernet, or already on the network: nothing to give it
 	}
-	nw := j.nw
+	switch {
+	case j.features&featureWiFi != 0 && j.nw.WiFiSSID != "":
+		j.wifi = true
+	case j.features&featureThread != 0 && len(j.nw.ThreadDataset) > 0:
+		if _, err := threadExtPANID(j.nw.ThreadDataset); err != nil {
+			return err
+		}
+	case j.features&featureWiFi != 0:
+		return ErrNeedsWiFi
+	default:
+		return ErrNeedsThread
+	}
+	return nil
+}
+
+// join gives the device its network over the PASE session and tells it to connect.
+func (j *joining) join(ctx context.Context, s *Session) error {
+	j.step(StepNetwork)
+	if j.endpoint < 0 {
+		return nil
+	}
+	nw, endpoint := j.nw, j.endpoint
 	var networkID []byte
 	var ssid string
-	switch {
-	case features&featureWiFi != 0 && nw.WiFiSSID != "":
+	if j.wifi {
 		ssid, networkID = nw.WiFiSSID, []byte(nw.WiFiSSID)
 		res, err := Invoke(ctx, s, endpoint, clusterNetworkCommissioning, cmdAddOrUpdateWiFi, func(w *TLV) {
 			w.Bytes8(0, []byte(nw.WiFiSSID))
@@ -262,12 +286,8 @@ func (j *joining) join(ctx context.Context, s *Session) error {
 		if code, _ := res.FieldU(0); code != 0 {
 			return networkStatus(code, ssid)
 		}
-	case features&featureThread != 0 && len(nw.ThreadDataset) > 0:
-		id, err := threadExtPANID(nw.ThreadDataset)
-		if err != nil {
-			return err
-		}
-		networkID = id
+	} else {
+		networkID, _ = threadExtPANID(nw.ThreadDataset)
 		res, err := Invoke(ctx, s, endpoint, clusterNetworkCommissioning, cmdAddOrUpdateThread, func(w *TLV) {
 			w.Bytes8(0, nw.ThreadDataset)
 			w.Uint(1, 0)
@@ -278,10 +298,6 @@ func (j *joining) join(ctx context.Context, s *Session) error {
 		if code, _ := res.FieldU(0); code != 0 {
 			return networkStatus(code, "")
 		}
-	case features&featureWiFi != 0:
-		return ErrNeedsWiFi
-	default:
-		return ErrNeedsThread
 	}
 	connect := func(ctx context.Context) (Elem, error) {
 		return Invoke(ctx, s, endpoint, clusterNetworkCommissioning, cmdConnectNetwork, func(w *TLV) {
@@ -316,6 +332,11 @@ func (j *joining) join(ctx context.Context, s *Session) error {
 // CommissionBLE adds a new device over Bluetooth: conn is a GATT connection
 // to the device that advertised for this code (see Code.Matches); nw is the
 // network it joins. progress hears each step (nil: nobody listens).
+//
+// The PASE session and the Bluetooth link stay open until the device has
+// finished over the network: a device expires its fail-safe when its PASE
+// session ends early (connectedhomeip's CommissioningWindowManager), which
+// would undo its certificate and the network.
 func (c *Controller) CommissionBLE(ctx context.Context, code string, conn BLEConn, nw Network, progress func(step string)) (map[string]any, error) {
 	defer conn.Close()
 	pc, err := ParseCode(code)
@@ -351,12 +372,18 @@ func (c *Controller) CommissionBLE(ctx context.Context, code string, conn BLECon
 	if err != nil {
 		return nil, fmt.Errorf("couldn't start a secure session with the device over Bluetooth: %w", err)
 	}
+	// Closed (CloseSession) only once the device has finished, or failed and
+	// been disarmed; dropped here without a word when the device left
+	// Bluetooth itself to join.
+	defer func() {
+		if pase.Err() == nil {
+			pase.Close()
+		}
+	}()
 	node := randomNodeID()
 	att, err := c.addToFabric(ctx, pase, f, node, j)
-	pase.Close()
-	bt.Close()
 	if err != nil {
-		return nil, err
+		return nil, err // addToFabric disarmed it
 	}
 
 	// It is joining: find it on the network as a node of our fabric.
@@ -376,12 +403,17 @@ func (c *Controller) CommissionBLE(ctx context.Context, code string, conn BLECon
 			ccancel()
 			if err == nil {
 				j.step(StepFinishing)
-				return c.complete(ctx, sess, f, node, a, att)
+				res, err := c.complete(ctx, sess, f, node, a, att)
+				if err != nil {
+					disarm(pase)
+				}
+				return res, err
 			}
 			lastErr = err
 		}
 		select {
 		case <-jctx.Done():
+			disarm(pase)
 			if lastErr != nil {
 				return nil, fmt.Errorf("the device took the network but didn't answer on it: %w", lastErr)
 			}

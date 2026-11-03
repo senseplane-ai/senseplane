@@ -308,6 +308,7 @@ type Session struct {
 	exchanges  map[exKey]*Exchange
 	lastHeard  time.Time
 	onExchange func(*Exchange) // a peer started an exchange
+	onEnd      func(error)     // the session ended (the fake device's fail-safe)
 	err        error
 	done       chan struct{}
 }
@@ -375,6 +376,19 @@ func (s *Session) Err() error {
 	return s.err
 }
 
+// OnEnd is called once when the session ends, however it ends.
+func (s *Session) OnEnd(f func(error)) {
+	s.mu.Lock()
+	s.onEnd = f
+	s.mu.Unlock()
+}
+
+// errPeerClosed is a session the peer closed (CloseSession).
+var errPeerClosed = errors.New("matter: the peer closed the session")
+
+// Drop ends the session here without telling the peer (it is gone already).
+func (s *Session) Drop() { s.fail(errors.New("matter: session dropped")) }
+
 // Close ends the session (a secure one tells the peer).
 func (s *Session) Close() {
 	if s.secure {
@@ -395,10 +409,14 @@ func (s *Session) fail(err error) {
 	for _, e := range s.exchanges {
 		exs = append(exs, e)
 	}
+	onEnd := s.onEnd
 	s.mu.Unlock()
 	close(s.done)
 	for _, e := range exs {
 		e.fail(err)
+	}
+	if onEnd != nil {
+		defer onEnd(err)
 	}
 	t := s.t
 	t.mu.Lock()
@@ -793,6 +811,15 @@ func (s *Session) receive(h msgHeader, p protoHeader, payload []byte, from *net.
 	}
 	if p.protocol == protoSecureChannel && p.opcode == opAck {
 		return
+	}
+	if s.secure && p.protocol == protoSecureChannel && p.opcode == opStatus {
+		if _, _, code, err := parseStatus(payload); err == nil && code == 3 { // CloseSession
+			if p.flags&exReliable != 0 {
+				s.sendAck(p.exchange, !peerStarted, h.counter)
+			}
+			s.fail(errPeerClosed)
+			return
+		}
 	}
 	if e == nil {
 		if !peerStarted {

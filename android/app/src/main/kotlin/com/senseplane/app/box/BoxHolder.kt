@@ -10,6 +10,7 @@ import com.senseplane.app.Prefs
 import com.senseplane.go.mobile.Box
 import com.senseplane.go.mobile.LineWriter
 import com.senseplane.go.mobile.Listener
+import com.senseplane.go.mobile.MatterSteps
 import com.senseplane.go.mobile.Mobile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,4 +87,25 @@ object BoxHolder {
 
     /** Adds a Matter device with its pairing code; this can take a minute. */
     suspend fun addMatter(context: Context, code: String): String = withContext(Dispatchers.IO) { get(context).addMatterDevice(code) }
+
+    /**
+     * Adds a new Matter device over Bluetooth (ADR 0073): finds it by its
+     * advertisement, then the bridge runs the rest over this phone's GATT
+     * connection. onStep hears each step; this can take two minutes.
+     */
+    suspend fun addMatterOverBluetooth(
+        context: Context, code: String, ssid: String, password: String, dataset: String, onStep: (BleStep) -> Unit,
+    ): String {
+        onStep(BleStep.Find)
+        val address = MatterGatt.find(context, code)
+            ?: throw java.io.IOException("No device in pairing mode answered over Bluetooth. Keep it close to the phone and make sure it's in pairing mode (new devices are, for a while after they're plugged in).")
+        return withContext(Dispatchers.IO) {
+            get(context).addMatterDeviceOverBluetooth(code, address, ssid, password, dataset, MatterGatt(context.applicationContext),
+                object : MatterSteps {
+                    override fun onStep(step: String) {
+                        BleStep.of(step)?.let(onStep)
+                    }
+                })
+        }
+    }
 }

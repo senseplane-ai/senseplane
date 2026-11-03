@@ -45,6 +45,8 @@ const NEVER_CLASSES = new Set([
   "water_heater", "heater", "space_heater", "oven", "microwave_oven", "cooktop", "cook_surface", "extractor_hood", "heat_pump",
   "laundry_washer", "laundry_dryer", "dishwasher", "robot_vacuum_cleaner", "evse", "pump", "pump_controller", "irrigation", "medical",
 ]);
+/** The same by part of a device class, as the bridge checks it (heat_pump, robotic_vacuum_cleaner, laundry_washer). */
+const NEVER_CLASS_WORDS = /heater|heating|heat_pump|boiler|oven|cook|stove|hob|kettle|fryer|grill|microwave|extractor|washer|dryer|dishwasher|vacuum|mower|pump|valve|evse|charger|medical|oxygen|machine|sauna/;
 /** Names that say heater, oven or machine: not offered, even on a plain plug. The controllable switch's warning covers the rest. */
 const NEVER_WORDS = /\b(heaters?|heating|radiators?|ovens?|stoves?|cooktops?|hobs?|kettles?|irons?|boilers?|furnaces?|saunas?|grills?|fryers?|toasters?|blankets?|medical|oxygen|ventilators?|insulin|pumps?|saws?|drills?|lathes?|welders?|compressors?|heat lamps?)\b/i;
 
@@ -61,7 +63,7 @@ export function classify(e: DeviceEntity): { type: DeviceType; tier: Tier } {
   const [domain = ""] = e.entity_id.split(".");
   const dc = (e.device_class ?? "").toLowerCase();
   const type = typeOf(domain, e.sense, dc);
-  if (!type || NEVER_DOMAINS.has(domain) || NEVER_CLASSES.has(dc) || NEVER_WORDS.test(e.name) || NEVER_WORDS.test(e.entity_id.replace(/[._]/g, " "))) {
+  if (!type || NEVER_DOMAINS.has(domain) || NEVER_CLASSES.has(dc) || NEVER_CLASS_WORDS.test(dc) || NEVER_WORDS.test(e.name) || NEVER_WORDS.test(e.entity_id.replace(/[._]/g, " "))) {
     return { type: type ?? "switch", tier: "never" };
   }
   return { type, tier: SECURE.has(type) ? "secure" : "switch" };

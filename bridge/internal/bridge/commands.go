@@ -43,8 +43,22 @@ func (b *Bridge) runCommands(ctx context.Context) {
 }
 
 // RunByGrace is how far past its run_by a command still runs, for clocks that disagree (the API's Date
-// header has whole seconds).
-const RunByGrace = 5 * time.Second
+// header has whole seconds). A variable only so tests can shorten it.
+var RunByGrace = 5 * time.Second
+
+type skewKey struct{}
+
+// onTime says whether a command may still start now, on the API's clock, for a handler that checks
+// again just before it acts (a message about to play, ADR 0069).
+func onTime(ctx context.Context, args map[string]any) error {
+	skew, _ := ctx.Value(skewKey{}).(time.Duration)
+	if late(api.Command{Args: args, Skew: skew}, time.Now()) {
+		return errTooLate
+	}
+	return nil
+}
+
+var errTooLate = errors.New("it reached the box too late to run safely, so it wasn't run; ask again")
 
 // late says whether a command arrived after its run_by deadline, on the API's clock: a device command the
 // API already answered "the box is offline" for must never run (ADR 0067).
@@ -67,10 +81,10 @@ func (b *Bridge) runCommand(ctx context.Context, c api.Command) {
 	if h == nil {
 		err = fmt.Errorf("this box can't do %s", c.Kind)
 	} else if late(c, time.Now()) {
-		err = errors.New("it reached the box too late to run safely, so it wasn't run; ask again")
+		err = errTooLate
 	} else {
 		b.o.Log.Info("running a command", "kind", c.Kind, "id", c.ID)
-		result, err = h(ctx, c.Args)
+		result, err = h(context.WithValue(ctx, skewKey{}, c.Skew), c.Args)
 	}
 	if err != nil {
 		b.o.Log.Warn("command failed", "kind", c.Kind, "id", c.ID, "err", err)

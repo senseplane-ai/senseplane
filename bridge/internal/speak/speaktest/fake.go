@@ -34,6 +34,8 @@ type Camera struct {
 	Codec   string
 	// Digest: the camera asks for its password with an RTSP Digest challenge, as most do.
 	Digest bool
+	// Slow: how long it takes to answer DESCRIBE (a camera on a slow network).
+	Slow time.Duration
 
 	ln       net.Listener
 	mu       sync.Mutex
@@ -185,6 +187,7 @@ func (c *Camera) handle(conn net.Conn) {
 		case "OPTIONS":
 			reply("Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN\r\n", "")
 		case "DESCRIBE":
+			time.Sleep(c.Slow)
 			backchannel := strings.Contains(h.Get("Require"), "www.onvif.org/ver20/backchannel")
 			reply("Content-Base: "+strings.Replace(c.URL, "admin:secret@", "", 1)+"/\r\n", c.sdp(backchannel))
 		case "SETUP":

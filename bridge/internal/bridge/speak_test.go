@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -52,6 +53,9 @@ type speakAPI struct {
 	ahead   time.Duration // the API's clock against the box's
 	served  bool
 	report  map[string]any
+	runBy   time.Duration // from now; default 15 s
+	count   int           // speak commands handed out at once; default 1
+	reports map[string]map[string]any
 	fetches int
 	authed  []string
 }
@@ -67,15 +71,31 @@ func (f *speakAPI) handler(w http.ResponseWriter, r *http.Request) {
 		data := []map[string]any{}
 		if !f.served {
 			f.served = true
-			data = append(data, map[string]any{"id": "bcm_s", "kind": "speak", "args": map[string]any{
-				"message_id": "spk_1", "source_id": "src_gate", "url": "/media/tok/speak.wav", "duration_ms": 700.0,
-				"run_by": time.Now().Add(15 * time.Second).UTC().Format(time.RFC3339Nano),
-			}})
+			runBy := f.runBy
+			if runBy == 0 {
+				runBy = 15 * time.Second
+			}
+			for i := range max(f.count, 1) {
+				id := "bcm_s"
+				if i > 0 {
+					id = fmt.Sprintf("bcm_s%d", i)
+				}
+				data = append(data, map[string]any{"id": id, "kind": "speak", "args": map[string]any{
+					"message_id": "spk_" + id, "source_id": "src_gate", "url": "/media/tok/speak.wav", "duration_ms": 700.0,
+					"run_by": time.Now().Add(runBy).UTC().Format(time.RFC3339Nano),
+				}})
+			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
-	case r.URL.Path == "/v1/bridge/commands/bcm_s":
+	case strings.HasPrefix(r.URL.Path, "/v1/bridge/commands/bcm_s"):
 		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &f.report)
+		var rep map[string]any
+		_ = json.Unmarshal(raw, &rep)
+		f.report = rep
+		if f.reports == nil {
+			f.reports = map[string]map[string]any{}
+		}
+		f.reports[strings.TrimPrefix(r.URL.Path, "/v1/bridge/commands/")] = rep
 		w.WriteHeader(http.StatusNoContent)
 	case r.URL.Path == "/media/tok/speak.wav":
 		f.fetches++
@@ -194,7 +214,7 @@ func TestThePhonePlaysMessagesForItsOwnCamera(t *testing.T) {
 			got = p
 			return true, nil
 		},
-		PlaySpeaker: func(context.Context, string, speak.PCM) (time.Duration, error) {
+		PlaySpeaker: func(context.Context, string, speak.PCM, func() error) (time.Duration, error) {
 			t.Error("the backchannel was used for the phone's own camera")
 			return 0, nil
 		},
@@ -203,5 +223,73 @@ func TestThePhonePlaysMessagesForItsOwnCamera(t *testing.T) {
 	b.runCommand(context.Background(), f.take(t, b))
 	if f.report["ok"] != true || got.Rate != 24000 || len(got.Samples) != 12000 {
 		t.Fatalf("report %v, played %d Hz %d samples", f.report, got.Rate, len(got.Samples))
+	}
+}
+
+// A message that became late while it waited (here for a slow camera) is checked again just before the
+// first packet, on the API's clock, and never played.
+func TestAMessageThatBecameLateIsNotPlayed(t *testing.T) {
+	grace := RunByGrace
+	RunByGrace = 0
+	defer func() { RunByGrace = grace }()
+	cam := speaktest.Start(t, true)
+	cam.Slow = 700 * time.Millisecond
+	f := &speakAPI{rtsp: cam.URL, clip: message(300 * time.Millisecond), runBy: 300 * time.Millisecond}
+	b, stop := speakBox(t, f, Options{})
+	defer stop()
+	b.runCommand(context.Background(), f.take(t, b))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.report["ok"] != false || !strings.Contains(f.report["error"].(string), "too late") {
+		t.Fatalf("report %v", f.report)
+	}
+	if cam.Connections() == 0 {
+		t.Fatal("the camera wasn't reached: this tests the check before the first packet")
+	}
+	if len(cam.Audio()) != 0 {
+		t.Fatalf("a late message played %d bytes", len(cam.Audio()))
+	}
+}
+
+// Two messages for one camera play one after the other, never at once.
+func TestTwoMessagesNeverPlayAtOnce(t *testing.T) {
+	cam := speaktest.Start(t, true)
+	f := &speakAPI{rtsp: cam.URL, clip: message(400 * time.Millisecond), count: 2}
+	b, stop := speakBox(t, f, Options{})
+	defer stop()
+	cmds, err := b.o.Client.Commands(context.Background(), 0)
+	if err != nil || len(cmds) != 2 {
+		t.Fatalf("commands %v %v", cmds, err)
+	}
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, c := range cmds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.runCommand(context.Background(), c)
+		}()
+	}
+	wg.Wait()
+	if d := time.Since(start); d < 800*time.Millisecond {
+		t.Fatalf("both played in %v: at the same time", d)
+	}
+	f.mu.Lock()
+	for id, r := range f.reports {
+		if r["ok"] != true {
+			t.Errorf("%s: %v", id, r)
+		}
+	}
+	f.mu.Unlock()
+	// The camera got one message's packets, then the other's.
+	pk := cam.Packets()
+	switches := 0
+	for i := 1; i < len(pk); i++ {
+		if pk[i].SSRC != pk[i-1].SSRC {
+			switches++
+		}
+	}
+	if len(pk) != 40 || switches != 1 {
+		t.Fatalf("%d packets, %d switches between messages", len(pk), switches)
 	}
 }

@@ -60,7 +60,8 @@ type Options struct {
 	// and when the box starts relaying it, and the box reports it (ADR 0069).
 	ProbeSpeaker func(ctx context.Context, rtspURL string) (bool, error)
 	// PlaySpeaker plays a message on a camera's speaker (default: the ONVIF backchannel).
-	PlaySpeaker func(ctx context.Context, rtspURL string, p speak.PCM) (time.Duration, error)
+	// ready is asked just before the first packet (the message may have become too late).
+	PlaySpeaker func(ctx context.Context, rtspURL string, p speak.PCM, ready func() error) (time.Duration, error)
 	// LocalSpeaker, when set, plays messages for cameras that are this device itself (the phone in the
 	// Android app); it returns false for a camera it isn't.
 	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, error)
@@ -108,6 +109,8 @@ type Bridge struct {
 	controls map[string]Controllable
 	// speakers is what the box found about each camera's two-way audio (ADR 0069).
 	speakers map[string]bool
+	// speaking holds one lock per camera: two messages never play on it at once.
+	speaking map[string]*sync.Mutex
 	settle   time.Duration // how long device_control waits for the state
 	// emptyWait is the pause after an outputs answer without a cursor.
 	emptyWait time.Duration
@@ -119,7 +122,7 @@ func New(o Options) *Bridge {
 		o.Log = slog.Default()
 	}
 	b := &Bridge{workers: map[string]*worker{}, states: map[string]api.CameraHealth{}, changed: make(chan struct{}, 1), resync: make(chan struct{}, 1),
-		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait, speakers: map[string]bool{}}
+		controls: map[string]Controllable{}, settle: settleFor, emptyWait: emptyCursorWait, speakers: map[string]bool{}, speaking: map[string]*sync.Mutex{}}
 	if o.PlaySpeaker == nil {
 		o.PlaySpeaker = speak.Play
 	}

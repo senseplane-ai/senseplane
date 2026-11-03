@@ -72,7 +72,7 @@ func TestFindsWhetherACameraHasASpeaker(t *testing.T) {
 	if ok, err := Probe(ctx, without.URL); err != nil || ok {
 		t.Fatalf("a camera without one: %v %v", ok, err)
 	}
-	if _, err := Play(ctx, without.URL, PCM{Rate: 8000, Samples: make([]int16, 800)}); !errors.Is(err, ErrNoBackchannel) {
+	if _, err := Play(ctx, without.URL, PCM{Rate: 8000, Samples: make([]int16, 800)}, nil); !errors.Is(err, ErrNoBackchannel) {
 		t.Fatalf("played to a camera without a speaker: %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestPlaysAMessageThroughTheBackchannel(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			start := time.Now()
-			played, err := Play(ctx, cam.URL, p)
+			played, err := Play(ctx, cam.URL, p, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

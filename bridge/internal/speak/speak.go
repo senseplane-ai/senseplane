@@ -148,7 +148,9 @@ func Probe(ctx context.Context, url string) (bool, error) {
 }
 
 // Play sends the message to the camera's speaker and returns once it has been heard (or ctx ends).
-func Play(ctx context.Context, url string, p PCM) (time.Duration, error) {
+// ready, when set, is asked once the camera is ready to play and before the first packet: an error
+// there (the message is now too late) stops it with nothing played.
+func Play(ctx context.Context, url string, p PCM, ready func() error) (time.Duration, error) {
 	s, err := open(ctx, url)
 	if err != nil {
 		return 0, err
@@ -163,6 +165,11 @@ func Play(ctx context.Context, url string, p PCM) (time.Duration, error) {
 	}
 	if err := s.play(ctx); err != nil {
 		return 0, fmt.Errorf("camera speaker: %w", err)
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			return 0, err
+		}
 	}
 	gone := s.drain() // the camera's RTCP and anything else it sends, read and dropped
 	payload := Encode(s.track.codec, To8k(p).Samples)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
@@ -43,6 +44,20 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 	if clip.Duration() > 31*time.Second {
 		return nil, errors.New("the message is longer than 30 seconds")
 	}
+	// One message at a time on a camera; one that waited too long for its turn isn't played.
+	b.mu.Lock()
+	lock := b.speaking[sourceID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		b.speaking[sourceID] = lock
+	}
+	b.mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+	ready := func() error { return onTime(ctx, args) }
+	if err := ready(); err != nil {
+		return nil, err
+	}
 	if b.o.LocalSpeaker != nil {
 		if ok, err := b.o.LocalSpeaker(ctx, sourceID, clip); ok || err != nil {
 			if err != nil {
@@ -52,7 +67,10 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 			return map[string]any{"played_ms": clip.Duration().Milliseconds()}, nil
 		}
 	}
-	played, err := b.o.PlaySpeaker(ctx, w.cam.RTSPURL, clip)
+	played, err := b.o.PlaySpeaker(ctx, w.cam.RTSPURL, clip, ready)
+	if errors.Is(err, errTooLate) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, errors.New(relay.Redact(err.Error()))
 	}

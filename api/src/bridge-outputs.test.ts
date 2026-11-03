@@ -46,7 +46,7 @@ describe("bridge outputs (MQTT out)", () => {
     await event("detection.person");
     const r = await outputs(box.token);
     expect(r.statusCode).toBe(200);
-    expect(r.json()).toEqual({ mqtt_publish: false, cursor: null, cameras: [], watches: [], events: [] });
+    expect(r.json()).toEqual({ mqtt_publish: false, bridge_id: box.id, cursor: null, cameras: [], watches: [], events: [] });
     expect((await outputs("brg_nope")).statusCode).toBe(401);
   });
 
@@ -74,6 +74,18 @@ describe("bridge outputs (MQTT out)", () => {
     await event("watch.triggered", { summary: "Someone at the door", watch_id: "wch_1" });
     const got = (await waiting).json();
     expect(got.events).toMatchObject([{ type: "watch.triggered", watch_id: "wch_1", summary: "Someone at the door" }]);
+  });
+
+  it("off, a poll waits like one for events, and ends when publishing is turned on", async () => {
+    const started = Date.now();
+    const waiting = outputs(other.token, "?wait=5");
+    await new Promise((r) => setTimeout(r, 1200));
+    await asOwner("PATCH", `/v1/bridges/${other.id}`, { mqtt_publish: true });
+    const got = (await waiting).json();
+    expect(got).toMatchObject({ mqtt_publish: true, bridge_id: other.id });
+    expect(Date.now() - started).toBeGreaterThan(1000);
+    expect(Date.now() - started).toBeLessThan(4500);
+    await asOwner("PATCH", `/v1/bridges/${other.id}`, { mqtt_publish: false });
   });
 
   it("turned off, the box is told so", async () => {

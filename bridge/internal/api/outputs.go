@@ -16,6 +16,7 @@ import (
 // the account turns publishing on for this box.
 type Outputs struct {
 	MQTTPublish bool           `json:"mqtt_publish"`
+	BridgeID    string         `json:"bridge_id"`
 	Cursor      string         `json:"cursor"`
 	Cameras     []OutputCamera `json:"cameras"`
 	Watches     []OutputWatch  `json:"watches"`

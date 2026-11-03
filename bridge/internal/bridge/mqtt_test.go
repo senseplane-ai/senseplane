@@ -53,7 +53,7 @@ func TestMQTTSensorsInAndEventsOut(t *testing.T) {
 	defer srv.Close()
 	var mu sync.Mutex
 	person := ""
-	_ = srv.Subscribe("senseplane/camera/+/person", 1, func(_ *mochi.Client, _ packets.Subscription, pk packets.Packet) {
+	_ = srv.Subscribe("senseplane/+/camera/+/person", 1, func(_ *mochi.Client, _ packets.Subscription, pk packets.Packet) {
 		mu.Lock()
 		person = string(pk.Payload)
 		mu.Unlock()
@@ -72,7 +72,7 @@ func TestMQTTSensorsInAndEventsOut(t *testing.T) {
 		polls++
 		n := polls
 		mu.Unlock()
-		out := api.Outputs{MQTTPublish: true, Cursor: "evt_1", Cameras: []api.OutputCamera{{ID: "src_1", Name: "Front door", Online: true}}}
+		out := api.Outputs{MQTTPublish: true, BridgeID: "brg_1", Cursor: "evt_1", Cameras: []api.OutputCamera{{ID: "src_1", Name: "Front door", Online: true}}}
 		switch {
 		case n == 1 && r.URL.Query().Get("after") != "":
 			t.Errorf("the first poll had a cursor")

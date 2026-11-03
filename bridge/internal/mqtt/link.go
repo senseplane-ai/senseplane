@@ -73,6 +73,9 @@ type Link struct {
 	cli *mq.BaseClient
 	// announced is whether the box said it is online (it publishes); then it says goodbye too.
 	announced atomic.Bool
+	// will is the status topic to set as the will on the next connection ("" while the box doesn't publish);
+	// connWill is the one the current connection has.
+	will, connWill string
 
 	// Owned by the worker (run).
 	entities map[string]*entity   // by discovery config topic (or plain topic)
@@ -166,7 +169,7 @@ func (l *Link) Run(ctx context.Context, sink Sink) {
 func (l *Link) connectLoop(ctx context.Context, sink Sink) {
 	wait := l.o.MinBackoff
 	for ctx.Err() == nil {
-		cli, err := l.connect(ctx)
+		cli, will, err := l.connect(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -184,6 +187,7 @@ func (l *Link) connectLoop(ctx context.Context, sink Sink) {
 		l.o.Log.Info("connected to the MQTT broker", "broker", Redact(l.o.URL))
 		l.mu.Lock()
 		l.cli = cli
+		l.connWill = will
 		l.mu.Unlock()
 		// The worker subscribes and publishes on the newest connection (an older one not yet taken is dropped).
 		select {
@@ -207,8 +211,11 @@ func (l *Link) connectLoop(ctx context.Context, sink Sink) {
 			cancel()
 			// A clean goodbye: the box's entities show unavailable (the will isn't sent on a disconnect).
 			bye, stop := context.WithTimeout(context.Background(), 3*time.Second)
-			if l.announced.Load() {
-				_ = cli.Publish(bye, &mq.Message{Topic: l.o.Prefix + "/status", Payload: []byte("offline"), Retain: true, QoS: mq.QoS1})
+			l.mu.Lock()
+			will := l.connWill
+			l.mu.Unlock()
+			if l.announced.Load() && will != "" {
+				_ = cli.Publish(bye, &mq.Message{Topic: will, Payload: []byte("offline"), Retain: true, QoS: mq.QoS1})
 			}
 			_ = cli.Disconnect(bye)
 			stop()
@@ -220,12 +227,12 @@ func (l *Link) connectLoop(ctx context.Context, sink Sink) {
 	}
 }
 
-func (l *Link) connect(ctx context.Context) (*mq.BaseClient, error) {
+func (l *Link) connect(ctx context.Context) (*mq.BaseClient, string, error) {
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cli, err := mq.DialContext(dctx, l.o.URL)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Messages are handed to the worker: the client reads the next packet only after this returns.
 	cli.Handle(mq.HandlerFunc(func(m *mq.Message) {
@@ -235,9 +242,13 @@ func (l *Link) connect(ctx context.Context) (*mq.BaseClient, error) {
 			l.o.Log.Warn("MQTT messages arrive faster than they are read; one dropped", "topic", m.Topic)
 		}
 	}))
-	opts := []mq.ConnectOption{
-		mq.WithKeepAlive(uint16(l.o.KeepAlive / time.Second)), mq.WithCleanSession(true),
-		mq.WithWill(&mq.Message{Topic: l.o.Prefix + "/status", Payload: []byte("offline"), Retain: true, QoS: mq.QoS1}),
+	opts := []mq.ConnectOption{mq.WithKeepAlive(uint16(l.o.KeepAlive / time.Second)), mq.WithCleanSession(true)}
+	// The will marks the box's entities unavailable if it drops off; only once it publishes.
+	l.mu.Lock()
+	will := l.will
+	l.mu.Unlock()
+	if will != "" {
+		opts = append(opts, mq.WithWill(&mq.Message{Topic: will, Payload: []byte("offline"), Retain: true, QoS: mq.QoS1}))
 	}
 	user, pass := l.o.Username, l.o.Password
 	if u, err := url.Parse(l.o.URL); err == nil && u.User != nil && user == "" {
@@ -249,9 +260,33 @@ func (l *Link) connect(ctx context.Context) (*mq.BaseClient, error) {
 	}
 	if _, err := cli.Connect(dctx, l.o.ClientID, opts...); err != nil {
 		_ = cli.Close()
-		return nil, err
+		return nil, "", err
 	}
-	return cli, nil
+	return cli, will, nil
+}
+
+// setWill sets the will for the box's status topic (when it publishes) and, when the current connection
+// was made with another, drops it to connect again with this one; true when it does.
+func (l *Link) setWill(on bool, status string) bool {
+	want := ""
+	if on {
+		want = status
+	}
+	l.mu.Lock()
+	l.will = want
+	cli := l.cli
+	differs := cli != nil && l.connWill != want
+	l.mu.Unlock()
+	if differs {
+		l.o.Log.Info("connecting to the MQTT broker again, to set the box's status", "status", want)
+		// A clean goodbye, so the broker doesn't send the old will.
+		bye, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		if cli.Disconnect(bye) != nil {
+			_ = cli.Close()
+		}
+		stop()
+	}
+	return differs
 }
 
 // work owns the entities and the outputs: messages, outputs and connections arrive here, one at a time.

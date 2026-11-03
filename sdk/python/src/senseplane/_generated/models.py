@@ -1830,6 +1830,10 @@ class BridgeOutputs(BaseModel):
         populate_by_name=True,
     )
     mqtt_publish: bool
+    bridge_id: str
+    """
+    This box; it names what it publishes, so boxes can share a broker
+    """
     cursor: str | None
     """
     Pass as `after` next time

@@ -467,7 +467,7 @@ export interface paths {
         };
         /**
          * What this box may publish to its MQTT broker, long-polled
-         * @description MQTT out (ADR 0071). Only when the account turned `mqtt_publish` on for this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and the lists are empty. The cameras with their online state, the watches that alert, and the person, vehicle and animal detections and watch firings after `after`, in order. Without `after` it answers at once with no events and a `cursor` at the newest event (old events are not replayed); with it, it waits up to `wait` seconds (at most 25) for one, or for publishing to be turned on or off.
+         * @description MQTT out (ADR 0071). Only when the account turned `mqtt_publish` on for this box (PATCH /bridges/{id}); otherwise `mqtt_publish` is false and the lists are empty. The cameras with their online state, the watches that alert, and the person, vehicle and animal detections and watch firings after `after`, in order. On and without `after`, it answers at once with no events and a `cursor` at the newest event (old events are not replayed); otherwise it waits up to `wait` seconds (at most 25) for one, or for publishing to be turned on or off.
          */
         get: operations["takeBridgeOutputs"];
         put?: never;
@@ -2264,6 +2264,8 @@ export interface components {
         };
         BridgeOutputs: {
             mqtt_publish: boolean;
+            /** @description This box; it names what it publishes, so boxes can share a broker */
+            bridge_id: string;
             /** @description Pass as `after` next time */
             cursor: string | null;
             cameras: {

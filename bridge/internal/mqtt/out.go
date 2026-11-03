@@ -13,19 +13,21 @@ import (
 )
 
 // MQTT out (ADR 0071). What the box publishes, only once the API says this box
-// may (the account turned it on), all as Home Assistant discovery entities:
+// may (the account turned it on), all as Home Assistant discovery entities,
+// named after the box (<box>: its bridge id) so boxes can share a broker:
 //
-//	<discovery>/binary_sensor/senseplane_<camera>/person/config    "Person", on for Hold after a person is seen
-//	<discovery>/binary_sensor/senseplane_<camera>/vehicle/config   "Vehicle", the same
-//	<discovery>/binary_sensor/senseplane_<camera>/animal/config    "Animal", the same
-//	<discovery>/binary_sensor/senseplane_<camera>/online/config    the camera's connectivity
-//	<discovery>/event/senseplane_<watch>/fired/config              an event each time the watch fires
+//	<discovery>/binary_sensor/senseplane_<box>_<camera>/person/config    "Person", on for Hold after a person is seen
+//	<discovery>/binary_sensor/senseplane_<box>_<camera>/vehicle/config   "Vehicle", the same
+//	<discovery>/binary_sensor/senseplane_<box>_<camera>/animal/config    "Animal", the same
+//	<discovery>/binary_sensor/senseplane_<box>_<camera>/online/config    the camera's connectivity
+//	<discovery>/event/senseplane_<box>_<watch>/fired/config              an event each time the watch fires
 //
-// States go to <prefix>/camera/<camera>/<person|vehicle|animal|online> (ON or
-// OFF, retained) and <prefix>/watch/<watch> (not retained); <prefix>/status
-// is online or offline (retained, and the will). Configs are retained; ones for
-// cameras and watches that are gone, or every one when publishing is turned
-// off, are removed (an empty retained message), also those a previous run left.
+// States go to <prefix>/<box>/camera/<camera>/<person|vehicle|animal|online>
+// (ON or OFF, retained) and <prefix>/<box>/watch/<watch> (not retained);
+// <prefix>/<box>/status is online or offline (retained, and the will).
+// Configs are retained; ones for cameras and watches that are gone, or every
+// one when publishing is turned off, are removed (an empty retained message),
+// also those an earlier run of this box left.
 
 // detections are the event types that turn a camera's binary sensor on.
 var detections = map[string]string{"detection.person": "person", "detection.vehicle": "vehicle", "detection.animal": "animal"}
@@ -34,34 +36,51 @@ var labelNames = map[string]string{"person": "Person", "vehicle": "Vehicle", "an
 
 type outputs struct {
 	l       *Link
-	known   bool // an answer came from the API
+	known   bool   // an answer came from the API
+	box     string // this box, from the API's answer
 	on      bool
 	cameras map[string]api.OutputCamera
 	watches map[string]api.OutputWatch
 	until   map[string]time.Time // state topic → when it turns off
 	sent    map[string]string    // topic → the retained payload sent on this connection
-	stale   map[string]bool      // Senseplane configs on the broker (retained), from this run or an earlier one
+	seen    map[string]bool      // Senseplane configs on the broker (retained), any box's
 }
 
 func newOutputs(l *Link) outputs {
-	return outputs{l: l, cameras: map[string]api.OutputCamera{}, watches: map[string]api.OutputWatch{}, until: map[string]time.Time{}, sent: map[string]string{}, stale: map[string]bool{}}
+	return outputs{l: l, cameras: map[string]api.OutputCamera{}, watches: map[string]api.OutputWatch{}, until: map[string]time.Time{}, sent: map[string]string{}, seen: map[string]bool{}}
 }
 
-func (o *outputs) node(id string) string { return "senseplane_" + slug(id) }
+// mine is the start of this box's discovery node ids.
+func (o *outputs) mine() string { return "senseplane_" + o.box + "_" }
+
+func (o *outputs) node(id string) string { return o.mine() + slug(id) }
+
+func (o *outputs) root() string { return o.l.o.Prefix + "/" + o.box }
+
+func (o *outputs) status() string { return o.root() + "/status" }
 
 func (o *outputs) camState(id, what string) string {
-	return o.l.o.Prefix + "/camera/" + slug(id) + "/" + what
+	return o.root() + "/camera/" + slug(id) + "/" + what
 }
 
-func (o *outputs) watchState(id string) string { return o.l.o.Prefix + "/watch/" + slug(id) }
+func (o *outputs) watchState(id string) string { return o.root() + "/watch/" + slug(id) }
 
-// stateOf is the state topic a Senseplane config topic publishes to ("" for a watch's event: nothing retained).
+// parts splits a discovery config topic into component, node and object (ok false otherwise).
+func (o *outputs) parts(config string) (component, node, object string, ok bool) {
+	p := strings.Split(strings.TrimPrefix(config, o.l.o.DiscoveryPrefix+"/"), "/")
+	if len(p) != 4 || p[3] != "config" {
+		return "", "", "", false
+	}
+	return p[0], p[1], p[2], true
+}
+
+// stateOf is the state topic one of this box's binary sensor configs publishes to ("" otherwise).
 func (o *outputs) stateOf(config string) string {
-	parts := strings.Split(strings.TrimPrefix(config, o.l.o.DiscoveryPrefix+"/"), "/")
-	if len(parts) != 4 || parts[0] != "binary_sensor" {
+	component, node, object, ok := o.parts(config)
+	if !ok || component != "binary_sensor" || !strings.HasPrefix(node, o.mine()) {
 		return ""
 	}
-	return o.l.o.Prefix + "/camera/" + strings.TrimPrefix(parts[1], "senseplane_") + "/" + parts[2]
+	return o.root() + "/camera/" + strings.TrimPrefix(node, o.mine()) + "/" + object
 }
 
 func marshal(v any) string {
@@ -75,7 +94,7 @@ func (o *outputs) desired() map[string]string {
 	if !o.on {
 		return want
 	}
-	dp, status := o.l.o.DiscoveryPrefix, o.l.o.Prefix+"/status"
+	dp, status := o.l.o.DiscoveryPrefix, o.status()
 	for _, c := range o.cameras {
 		node := o.node(c.ID)
 		dev := map[string]any{"identifiers": []string{node}, "name": c.Name, "manufacturer": "Senseplane", "model": "Camera"}
@@ -98,24 +117,24 @@ func (o *outputs) desired() map[string]string {
 		node := o.node(w.ID)
 		want[dp+"/event/"+node+"/fired/config"] = marshal(map[string]any{
 			"name": w.Name, "unique_id": node, "event_types": []string{"fired"}, "state_topic": o.watchState(w.ID), "availability_topic": status,
-			"device": map[string]any{"identifiers": []string{"senseplane_watches"}, "name": "Senseplane watches", "manufacturer": "Senseplane"},
+			"device": map[string]any{"identifiers": []string{o.mine() + "watches"}, "name": "Senseplane watches", "manufacturer": "Senseplane"},
 		})
 	}
 	return want
 }
 
-// own tells whether a discovery topic is one of Senseplane's (and keeps track of the ones the broker holds).
+// own tells whether a discovery topic is Senseplane's (any box's: never read as a sensor), keeping track of this box's.
 func (o *outputs) own(ctx context.Context, topic string, present bool) bool {
-	parts := strings.Split(strings.TrimPrefix(topic, o.l.o.DiscoveryPrefix+"/"), "/")
-	if len(parts) != 4 || !strings.HasPrefix(parts[1], "senseplane_") {
+	_, node, _, ok := o.parts(topic)
+	if !ok || !strings.HasPrefix(node, "senseplane_") {
 		return false
 	}
 	if !present {
-		delete(o.stale, topic)
+		delete(o.seen, topic)
 		return true
 	}
-	o.stale[topic] = true
-	if o.known {
+	o.seen[topic] = true
+	if o.known && strings.HasPrefix(node, o.mine()) {
 		if _, ok := o.desired()[topic]; !ok {
 			o.remove(ctx, topic)
 		}
@@ -125,7 +144,7 @@ func (o *outputs) own(ctx context.Context, topic string, present bool) bool {
 
 func (o *outputs) remove(ctx context.Context, config string) {
 	if o.l.publish(ctx, config, nil, true) {
-		delete(o.stale, config)
+		delete(o.seen, config)
 		delete(o.sent, config)
 	}
 	if st := o.stateOf(config); st != "" {
@@ -143,7 +162,7 @@ func (o *outputs) retain(ctx context.Context, topic, payload string) {
 	if o.l.publish(ctx, topic, []byte(payload), true) {
 		o.sent[topic] = payload
 		if strings.HasSuffix(topic, "/config") {
-			o.stale[topic] = true
+			o.seen[topic] = true
 		}
 	}
 }
@@ -152,24 +171,24 @@ func (o *outputs) retain(ctx context.Context, topic, payload string) {
 func (o *outputs) reconcile(ctx context.Context) {
 	want := o.desired()
 	cleared := false
-	for topic := range o.stale {
-		if _, ok := want[topic]; !ok {
+	for topic := range o.seen {
+		_, node, _, _ := o.parts(topic)
+		if _, ok := want[topic]; !ok && strings.HasPrefix(node, o.mine()) {
 			o.remove(ctx, topic)
 			cleared = true
 		}
 	}
-	status := o.l.o.Prefix + "/status"
 	if !o.on {
 		// Off: nothing is published; what this box published before is taken away, its status too.
 		if cleared || o.l.announced.Load() {
-			o.l.publish(ctx, status, nil, true)
+			o.l.publish(ctx, o.status(), nil, true)
 			o.l.announced.Store(false)
-			delete(o.sent, status)
+			delete(o.sent, o.status())
 		}
 		return
 	}
-	o.retain(ctx, status, "online")
-	o.l.announced.Store(o.sent[status] == "online")
+	o.retain(ctx, o.status(), "online")
+	o.l.announced.Store(o.sent[o.status()] == "online")
 	for topic, payload := range want {
 		o.retain(ctx, topic, payload)
 	}
@@ -199,6 +218,12 @@ func (o *outputs) connected(ctx context.Context) {
 
 // take is an answer from the API.
 func (o *outputs) take(ctx context.Context, out api.Outputs) {
+	if out.BridgeID != "" {
+		o.box = slug(strings.TrimPrefix(out.BridgeID, "brg_"))
+	}
+	if o.box == "" {
+		o.box = "box"
+	}
 	o.known, o.on = true, out.MQTTPublish
 	o.cameras, o.watches = map[string]api.OutputCamera{}, map[string]api.OutputWatch{}
 	if o.on {
@@ -213,7 +238,7 @@ func (o *outputs) take(ctx context.Context, out api.Outputs) {
 	for st := range o.until {
 		keep := false
 		for _, c := range o.cameras {
-			keep = keep || strings.HasPrefix(st, o.l.o.Prefix+"/camera/"+slug(c.ID)+"/")
+			keep = keep || strings.HasPrefix(st, o.root()+"/camera/"+slug(c.ID)+"/")
 		}
 		if !keep {
 			delete(o.until, st)
@@ -247,6 +272,9 @@ func (o *outputs) take(ctx context.Context, out api.Outputs) {
 		o.l.publish(ctx, o.watchState(w.ID), []byte(marshal(payload)), false)
 	}
 	o.reconcile(ctx)
+	// The will (status offline) is set as the box connects: a connection made without it, while off or
+	// before the box knew its name, is made again with it (and the other way round); the new one gets everything again.
+	o.l.setWill(o.on, o.status())
 }
 
 // expire turns off the binary sensors whose hold ran out.

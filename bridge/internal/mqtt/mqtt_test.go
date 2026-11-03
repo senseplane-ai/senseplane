@@ -317,7 +317,7 @@ func TestReconnectsAfterTheBrokerRestarts(t *testing.T) {
 
 func outputsOn() api.Outputs {
 	return api.Outputs{
-		MQTTPublish: true, Cursor: "evt_1",
+		MQTTPublish: true, BridgeID: "brg_test1", Cursor: "evt_1",
 		Cameras: []api.OutputCamera{{ID: "src_1", Name: "Front door", Online: true}},
 		Watches: []api.OutputWatch{{ID: "wch_1", Name: "Someone at the door"}},
 	}
@@ -352,27 +352,27 @@ func TestPublishesNothingUntilTurnedOn(t *testing.T) {
 func TestPublishesDetectionsAsHomeAssistantEntities(t *testing.T) {
 	b := startBroker(t, freeAddr(t))
 	events := make(chan string, 8)
-	_ = b.Subscribe("senseplane/watch/#", 1, func(_ *mochi.Client, _ packets.Subscription, pk packets.Packet) { events <- string(pk.Payload) })
+	_ = b.Subscribe("senseplane/+/watch/#", 1, func(_ *mochi.Client, _ packets.Subscription, pk packets.Packet) { events <- string(pk.Payload) })
 	l, s := run(t, Options{URL: "mqtt://" + b.addr, Hold: 300 * time.Millisecond})
 	eventually(t, "connected", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return len(s.up) > 0 })
 	l.Outputs(outputsOn())
 
-	cfg := "homeassistant/binary_sensor/senseplane_src_1/person/config"
+	cfg := "homeassistant/binary_sensor/senseplane_test1_src_1/person/config"
 	eventually(t, "the discovery configs", func() bool { return len(b.retained("homeassistant/#")) == 5 })
 	var person map[string]any
 	if err := json.Unmarshal([]byte(b.retained("homeassistant/#")[cfg]), &person); err != nil {
 		t.Fatal(err)
 	}
-	if person["name"] != "Person" || person["device_class"] != "occupancy" || person["state_topic"] != "senseplane/camera/src_1/person" ||
-		person["unique_id"] != "senseplane_src_1_person" || person["device"].(map[string]any)["name"] != "Front door" || person["availability_topic"] != "senseplane/status" {
+	if person["name"] != "Person" || person["device_class"] != "occupancy" || person["state_topic"] != "senseplane/test1/camera/src_1/person" ||
+		person["unique_id"] != "senseplane_test1_src_1_person" || person["device"].(map[string]any)["name"] != "Front door" || person["availability_topic"] != "senseplane/test1/status" {
 		t.Fatalf("person config %v", person)
 	}
-	if _, ok := b.retained("homeassistant/#")["homeassistant/event/senseplane_wch_1/fired/config"]; !ok {
+	if _, ok := b.retained("homeassistant/#")["homeassistant/event/senseplane_test1_wch_1/fired/config"]; !ok {
 		t.Fatal("no event entity for the watch")
 	}
 	eventually(t, "the states", func() bool {
 		st := b.retained("senseplane/#")
-		return st["senseplane/status"] == "online" && st["senseplane/camera/src_1/online"] == "ON" && st["senseplane/camera/src_1/person"] == "OFF"
+		return st["senseplane/test1/status"] == "online" && st["senseplane/test1/camera/src_1/online"] == "ON" && st["senseplane/test1/camera/src_1/person"] == "OFF"
 	})
 	// The box's own entities are never listed as sensors.
 	s.mu.Lock()
@@ -389,8 +389,8 @@ func TestPublishesDetectionsAsHomeAssistantEntities(t *testing.T) {
 		{ID: "evt_4", Type: "watch.triggered", SourceID: "src_1", WatchID: "wch_1", OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), Summary: "Someone at the door"},
 	}
 	l.Outputs(o)
-	eventually(t, "the person on", func() bool { return b.retained("senseplane/#")["senseplane/camera/src_1/person"] == "ON" })
-	if b.retained("senseplane/#")["senseplane/camera/src_1/vehicle"] != "OFF" {
+	eventually(t, "the person on", func() bool { return b.retained("senseplane/#")["senseplane/test1/camera/src_1/person"] == "ON" })
+	if b.retained("senseplane/#")["senseplane/test1/camera/src_1/vehicle"] != "OFF" {
 		t.Fatal("an hour-old vehicle turned on")
 	}
 	select {
@@ -403,35 +403,47 @@ func TestPublishesDetectionsAsHomeAssistantEntities(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("no watch event")
 	}
-	if _, kept := b.retained("senseplane/#")["senseplane/watch/wch_1"]; kept {
+	if _, kept := b.retained("senseplane/#")["senseplane/test1/watch/wch_1"]; kept {
 		t.Fatal("a watch event was retained")
 	}
-	eventually(t, "the person off after the hold", func() bool { return b.retained("senseplane/#")["senseplane/camera/src_1/person"] == "OFF" })
+	eventually(t, "the person off after the hold", func() bool { return b.retained("senseplane/#")["senseplane/test1/camera/src_1/person"] == "OFF" })
 
 	// A watch that's gone loses its entity; turned off, everything goes.
 	o = outputsOn()
 	o.Watches = nil
 	l.Outputs(o)
 	eventually(t, "the watch removed", func() bool {
-		_, ok := b.retained("homeassistant/#")["homeassistant/event/senseplane_wch_1/fired/config"]
+		_, ok := b.retained("homeassistant/#")["homeassistant/event/senseplane_test1_wch_1/fired/config"]
 		return !ok
 	})
-	l.Outputs(api.Outputs{MQTTPublish: false})
+	l.Outputs(api.Outputs{MQTTPublish: false, BridgeID: "brg_test1"})
 	eventually(t, "everything removed", func() bool { return len(b.retained("#")) == 0 })
 }
 
 func TestRemovesWhatAnEarlierRunLeft(t *testing.T) {
 	b := startBroker(t, freeAddr(t))
-	b.publish(t, "homeassistant/binary_sensor/senseplane_src_old/person/config", `{"name":"Person","unique_id":"senseplane_src_old_person"}`, true)
-	b.publish(t, "senseplane/camera/src_old/person", "ON", true)
+	b.publish(t, "homeassistant/binary_sensor/senseplane_test1_src_old/person/config", `{"name":"Person","unique_id":"senseplane_test1_src_old_person"}`, true)
+	b.publish(t, "senseplane/test1/camera/src_old/person", "ON", true)
+	// Another box's entities on the same broker stay.
+	b.publish(t, "homeassistant/binary_sensor/senseplane_other_src_x/person/config", `{"name":"Person","unique_id":"senseplane_other_src_x_person"}`, true)
 	l, s := run(t, Options{URL: "mqtt://" + b.addr})
 	eventually(t, "connected", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return len(s.up) > 0 })
 	l.Outputs(outputsOn())
 	eventually(t, "the old camera removed", func() bool {
 		r := b.retained("#")
-		_, a := r["homeassistant/binary_sensor/senseplane_src_old/person/config"]
-		_, c := r["senseplane/camera/src_old/person"]
-		return !a && !c && len(r) > 0
+		_, a := r["homeassistant/binary_sensor/senseplane_test1_src_old/person/config"]
+		_, c := r["senseplane/test1/camera/src_old/person"]
+		_, mine := r["homeassistant/binary_sensor/senseplane_test1_src_1/person/config"]
+		return !a && !c && mine
+	})
+	if _, ok := b.retained("#")["homeassistant/binary_sensor/senseplane_other_src_x/person/config"]; !ok {
+		t.Fatal("another box's entity was removed")
+	}
+	// Off, this box takes its own away and leaves the other's.
+	l.Outputs(api.Outputs{MQTTPublish: false, BridgeID: "brg_test1"})
+	eventually(t, "this box's removed", func() bool {
+		r := b.retained("#")
+		return len(r) == 1 && r["homeassistant/binary_sensor/senseplane_other_src_x/person/config"] != ""
 	})
 }
 

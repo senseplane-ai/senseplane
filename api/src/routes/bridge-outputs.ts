@@ -60,8 +60,9 @@ export function registerBridgeOutputRoutes(app: FastifyInstance, deps: BridgeOut
         });
         was ??= out.on;
         const changed = out.on !== was;
-        if (!after || out.events.length || changed || Date.now() >= until || req.raw.destroyed) {
-          if (!out.on) return { mqtt_publish: false, cursor: after ?? null, cameras: [], watches: [], events: [] };
+        // On without a cursor: the snapshot at once. Off: it waits too, so a box that is off asks once per `wait`.
+        if ((out.on && !after) || out.events.length || changed || Date.now() >= until || req.raw.destroyed) {
+          if (!out.on) return { mqtt_publish: false, bridge_id: bridgeId, cursor: after ?? null, cameras: [], watches: [], events: [] };
           const { cameras, watches } = await deps.data.withAccount(accountId, async (s) => ({
             cameras: (await s.sources.list()).filter((c) => c.type !== "sensor"),
             watches: await s.db.selectFrom("watches").select(["id", "instruction", "sources"]).where("status", "=", "active").where("mode", "=", "alert").orderBy("created_at").execute(),
@@ -69,6 +70,7 @@ export function registerBridgeOutputRoutes(app: FastifyInstance, deps: BridgeOut
           const cursor = out.events.at(-1)?.id ?? after ?? out.newest ?? null;
           return {
             mqtt_publish: true,
+            bridge_id: bridgeId,
             cursor,
             cameras: cameras.map((c) => ({ id: c.id, name: c.name, online: c.status === "online" })),
             watches: watches.map((w) => ({ id: w.id, name: w.instruction.slice(0, 120) })),

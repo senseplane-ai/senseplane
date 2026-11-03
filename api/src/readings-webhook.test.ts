@@ -4,6 +4,9 @@
 // The readings webhook (ADR 0071): the request shapes the recipes in
 // docs/sensors-webhook.md send (curl, ESPHome, Shelly, Home Assistant,
 // n8n, Zapier, IFTTT), optional signing, replays, and the rate limit.
+import { execFile } from "node:child_process";
+import { createHmac } from "node:crypto";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApi, type SenseplaneApi } from "./index.js";
 import { looseReading, signatureFor, webhookReadings } from "./routes/readings-webhook.js";
@@ -104,6 +107,36 @@ describe("readings webhook over the API", () => {
     expect(await reading("battery")).toMatchObject({ value: 88, unit: "percent" });
   });
 
+  it("Home Assistant rest_command, Zapier and IFTTT: their bodies as the recipes make them", async () => {
+    // rest_command's payload template: every value is text.
+    let r = await push({ body: '{"sense": "power", "value": "1834.2", "device_id": "sensor.heat_pump_power"}', type: "application/json" });
+    expect(r.statusCode).toBe(202);
+    expect(await reading("power", "sensor.heat_pump_power")).toMatchObject({ value: 1834.2, unit: "watt" });
+    // Zapier's POST with payload type json sends its data fields as text.
+    r = await push({ body: JSON.stringify({ sense: "humidity", value: "48", device_id: "zap" }), type: "application/json; charset=utf-8" });
+    expect(r.statusCode).toBe(202);
+    expect(await reading("humidity", "zap")).toMatchObject({ value: 48 });
+    // IFTTT's body with an ingredient.
+    r = await push({ body: '{"sense": "doorbell", "device_id": "front-door"}', type: "application/json" });
+    expect(r.statusCode).toBe(202);
+    expect(await reading("doorbell", "front-door")).toMatchObject({ kind: "event" });
+  });
+
+  it("the curl recipe, as a shell runs it", async () => {
+    const run = promisify(execFile);
+    try {
+      await run("sh", ["-c", "command -v curl"]);
+    } catch {
+      return; // no curl here
+    }
+    const port = 43000 + Math.floor(Math.random() * 1000);
+    await api.public.listen({ port, host: "127.0.0.1" });
+    const out = await run("sh", ["-c", `curl -s -X POST http://127.0.0.1:${port}/v1/integration/readings -H "Authorization: Bearer $SENSEPLANE_TOKEN" -H "Content-Type: application/json" -d '{"sense": "illuminance", "value": 320}'`],
+      { env: { ...process.env, SENSEPLANE_TOKEN: token } });
+    expect(JSON.parse(out.stdout)).toEqual({ accepted: 1, events: [] });
+    expect(await reading("illuminance")).toMatchObject({ value: 320, unit: "lux" });
+  });
+
   it("refuses control and sensors as senses, camera senses, and other tokens", async () => {
     for (const sense of ["control", "sensors"]) {
       const r = await push({ body: JSON.stringify({ sense, value: true }), type: "application/json" });
@@ -154,6 +187,25 @@ describe("readings webhook over the API", () => {
       const tampered = await push({ body: JSON.stringify({ sense: "temperature", value: 99 }), type: "application/json", headers: { "senseplane-signature": `t=${t + 1},v1=${signatureFor(secret, t + 1, body)}` } });
       expect(tampered.statusCode).toBe(401);
       expect(await reading("temperature")).toMatchObject({ value: 18 });
+    });
+
+    it("n8n's Code node and the openssl recipe sign as the API checks", async () => {
+      // The Code node in docs/sensors-webhook.md, run here.
+      const body = JSON.stringify({ sense: "temperature", value: 17.5 });
+      const t = Math.floor(Date.now() / 1000);
+      const v1 = createHmac("sha256", secret).update(`${t}.${body}`).digest("hex");
+      expect((await push({ body, type: "application/json", headers: { "senseplane-signature": `t=${t},v1=${v1}` } })).statusCode).toBe(202);
+      const run = promisify(execFile);
+      try {
+        await run("sh", ["-c", "command -v openssl"]);
+      } catch {
+        return;
+      }
+      const sh = await run("sh", ["-c", `body='{"sense":"temperature","value":21.5}'; t=$(date +%s); sig=$(printf '%s.%s' "$t" "$body" | openssl dgst -sha256 -hmac "$SENSEPLANE_SECRET" | sed 's/^.* //'); printf '%s\n%s\n%s' "$t" "$sig" "$body"`],
+        { env: { ...process.env, SENSEPLANE_SECRET: secret } });
+      const [ts, sig, shBody] = sh.stdout.split("\n");
+      const r = await push({ body: shBody, type: "application/json", headers: { "senseplane-signature": `t=${ts},v1=${sig}` } });
+      expect(r.statusCode).toBe(202);
     });
 
     it("signs the query string of a push without a body", async () => {

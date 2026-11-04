@@ -273,6 +273,11 @@
       "readOnly": true,
       "description": "rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed."
     },
+    "talk_url_set": {
+      "type": "boolean",
+      "readOnly": true,
+      "description": "rtsp sources: the camera's speaker is reached through a talk-back URL instead of its RTSP backchannel (ADR 0075). The URL itself is never shown."
+    },
     "blur_faces": {
       "type": [
         "boolean",

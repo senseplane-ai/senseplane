@@ -85,7 +85,8 @@ export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
     ...(row.type !== "sensor" ? { blur_faces: row.blur_faces ?? null, blur_plates: row.blur_plates ?? null } : {}),
     sensor_thresholds: thresholds,
     status_since: row.status_since ? new Date(row.status_since).toISOString() : null,
-    ...(row.type === "rtsp" ? { bridge_id: row.bridge_id ?? null, status_detail: row.bridge_detail ? redactUrls(row.bridge_detail) : null } : {}),
+    // The talk-back URL itself carries credentials and is never shown: only whether one is set (ADR 0075).
+    ...(row.type === "rtsp" ? { bridge_id: row.bridge_id ?? null, status_detail: row.bridge_detail ? redactUrls(row.bridge_detail) : null, talk_url_set: !!row.talk_url } : {}),
     // A Home Assistant room's sensors, fed by a bridge (ADR 0061).
     ...(row.type === "sensor" && row.bridge_id ? { bridge_id: row.bridge_id } : {}),
     ...(row.type !== "sensor" ? { view_changed_at: row.view_changed_at ? new Date(row.view_changed_at).toISOString() : null } : {}),
@@ -93,6 +94,13 @@ export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
     created_at: new Date(row.created_at).toISOString(),
   };
 }
+
+/**
+ * A bridge camera's talk-back URL (ADR 0075): one of go2rtc's two-way audio sources the bridge
+ * speaks, or another RTSP URL. Never exec: (a command on the box), which only the box's own
+ * flags may set.
+ */
+export const TALK_URL = { type: "string", maxLength: 4096, pattern: "^(tapo|vigi|isapi|dvrip|doorbird|multitrans|ring|roborock|tuya|wyze|rtsps?):" } as const;
 
 const createBody = {
   type: "object",
@@ -107,13 +115,14 @@ const createBody = {
     retention_days: { type: ["integer", "null"], minimum: 1 },
     senses: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", pattern: "^[a-z][a-z0-9_]*$", maxLength: 40, not: { enum: ["video", "audio", "sensors", "control", "speak"] } } },
     rtsp_url: { type: "string", maxLength: 2048, pattern: "^rtsps?://" },
+    talk_url: TALK_URL,
     bridge_id: { type: "string", minLength: 1, maxLength: 64 },
   },
 } as const;
 
 type CreateBody = {
   name: string; location?: string; site?: string | null; type: "browser" | "sensor" | "whip" | "rtsp"; record_audio?: boolean; retention_days?: number | null;
-  senses?: string[]; rtsp_url?: string; bridge_id?: string;
+  senses?: string[]; rtsp_url?: string; talk_url?: string; bridge_id?: string;
 };
 
 export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
@@ -202,7 +211,7 @@ export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
       }
       if ((body.type === "whip" || body.type === "rtsp") && !whipEnabled()) throw new ApiError(400, "validation_failed", "WHIP ingest is not configured on this deployment");
       if (body.senses && body.type !== "sensor") throw new ApiError(400, "validation_failed", "senses can only be chosen for sensor sources");
-      if ((body.rtsp_url || body.bridge_id) && body.type !== "rtsp") throw new ApiError(400, "validation_failed", "rtsp_url and bridge_id are for rtsp sources");
+      if ((body.rtsp_url || body.talk_url || body.bridge_id) && body.type !== "rtsp") throw new ApiError(400, "validation_failed", "rtsp_url, talk_url and bridge_id are for rtsp sources");
       if (body.bridge_id && !body.rtsp_url) throw new ApiError(400, "validation_failed", "adding a camera to an existing bridge needs its rtsp_url");
       // Bridge cameras are video only: camera audio is usually AAC, which WebRTC can't carry without re-encoding (ADR 0045).
       const recordAudio = body.type !== "sensor" && body.type !== "rtsp" && (body.record_audio ?? false);
@@ -239,6 +248,7 @@ export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
         await s.db.updateTable("sources").set({
           ...(body.site ? { site: body.site } : {}),
           ...(bridgeId ? { bridge_id: bridgeId, rtsp_url: body.rtsp_url ? deps.data.box().encrypt(body.rtsp_url) : null } : {}),
+          ...(bridgeId && body.talk_url ? { talk_url: deps.data.box().encrypt(body.talk_url) } : {}),
         }).where("id", "=", created.id).execute();
         return (await s.sources.get(created.id))!;
       });

@@ -173,6 +173,8 @@ export function registerBridgeRoutes(app: FastifyInstance, deps: BridgeDeps) {
       (await deps.data.withAccount(req.bridge!.accountId, (s) => s.db.selectFrom("bridges").select("token_hash").where("id", "=", req.bridge!.bridgeId).executeTakeFirstOrThrow())).token_hash.slice(0, 16);
     const toCamera = async (req: FastifyRequest, src: Source) => ({
       source_id: src.id, name: src.name, rtsp_url: box().decrypt(src.rtsp_url!), whip_url: whipUrl(src.id),
+      // Where its speaker is, when not its RTSP backchannel (ADR 0075): only ever sent to the bridge.
+      ...(src.talk_url ? { talk_url: box().decrypt(src.talk_url) } : {}),
       // A WHIP bearer per camera (spec/media/whip.md); the bridge pushes with it.
       whip_token: await deps.whip!.signer.signWhip({ sourceId: src.id, jti: `bridge:${req.bridge!.bridgeId}:${await tokenPrefix(req)}`, authorizeUrl: deps.whip!.authorizeUrl }),
     });

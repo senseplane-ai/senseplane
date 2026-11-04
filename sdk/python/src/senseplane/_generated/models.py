@@ -230,6 +230,10 @@ class Source(BaseModel):
     """
     rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed.
     """
+    talk_url_set: bool | None = None
+    """
+    rtsp sources: the camera's speaker is reached through a talk-back URL instead of its RTSP backchannel (ADR 0075). The URL itself is never shown.
+    """
     blur_faces: bool | None = None
     """
     Blur faces on this camera (ADR 0068); null follows the account's blur_faces.
@@ -1604,6 +1608,16 @@ class SourceCreate(BaseModel):
     """
     rtsp sources: the camera URL (stored encrypted). Without it the bridge claims the camera with --rtsp.
     """
+    talk_url: Annotated[
+        str | None,
+        Field(
+            max_length=4096,
+            pattern='^(tapo|vigi|isapi|dvrip|doorbird|multitrans|ring|roborock|tuya|wyze|rtsps?):',
+        ),
+    ] = None
+    """
+    rtsp sources: reach the camera's speaker through this URL instead of its RTSP backchannel (ADR 0075): one of go2rtc's two-way audio sources (tapo, vigi, isapi, dvrip, doorbird, multitrans; ring, roborock, tuya and wyze carry a cloud account's tokens). Stored encrypted, only ever sent to the bridge, never shown again. A command (exec:) can only be set on the box itself.
+    """
     bridge_id: str | None = None
     """
     rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued)
@@ -1659,6 +1673,16 @@ class SourceUpdate(BaseModel):
     blur_plates: bool | None = None
     """
     Blur number plates on this camera (ADR 0068); null follows the account
+    """
+    talk_url: Annotated[
+        str | None,
+        Field(
+            max_length=4096,
+            pattern='^(tapo|vigi|isapi|dvrip|doorbird|multitrans|ring|roborock|tuya|wyze|rtsps?):',
+        ),
+    ] = None
+    """
+    rtsp sources: reach the camera's speaker through this URL instead of its RTSP backchannel (ADR 0075), as on create; null goes back to the backchannel. Stored encrypted and never shown again; the bridge checks the speaker anew.
     """
 
 
@@ -1856,6 +1880,10 @@ class BridgeCamera(BaseModel):
     whip_token: str
     """
     This camera's WHIP bearer (spec/media/whip.md): a JWT the media plane verifies
+    """
+    talk_url: str | None = None
+    """
+    Where the camera's speaker is, when not its RTSP backchannel (ADR 0075): one of go2rtc's two-way audio sources, credentials included (only ever sent to the bridge). Absent: the backchannel.
     """
 
 

@@ -13,7 +13,7 @@ import { mediaClaims } from "../media-access.js";
 import type { KeyRefSealer, PlaybackSigner } from "../playback.js";
 import { type CleanReading, cleanReading, deviceMatches, holds, isSensorSense, type ReadingInput, readingInputSchema, readingText, type SensorMatch, senseName, toReading } from "../readings.js";
 import { activeAt } from "../schedule.js";
-import { toSource } from "./sources.js";
+import { TALK_URL, toSource } from "./sources.js";
 
 /** Lifetime of a source's "latest snapshot" link: it is a live view (ADR 0036). */
 export const LATEST_TTL_SECONDS = 60;
@@ -158,6 +158,8 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
             blur_faces: { type: ["boolean", "null"] },
             blur_plates: { type: ["boolean", "null"] },
             sensor_thresholds: { type: ["object", "null"], propertyNames: { pattern: "^[a-z][a-z0-9_]*$" }, additionalProperties: bound },
+            // A bridge camera's talk-back URL (ADR 0075), stored encrypted; null goes back to its RTSP backchannel.
+            talk_url: { ...TALK_URL, type: ["string", "null"] },
           },
         },
       },
@@ -181,6 +183,11 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
         if ("record_audio" in b) {
           const current = await s.sources.get(req.params.id);
           if (current && current.type !== "sensor") set.senses = b.record_audio ? ["video", "audio"] : ["video"];
+        }
+        if ("talk_url" in b) {
+          const current = await s.sources.get(req.params.id);
+          if (current && current.type !== "rtsp") throw new ApiError(400, "validation_failed", "talk_url is for rtsp sources");
+          set.talk_url = typeof b.talk_url === "string" ? deps.data.box().encrypt(b.talk_url) : null;
         }
         if (Object.keys(set).length) await s.db.updateTable("sources").set(set).where("id", "=", req.params.id).execute();
         return s.sources.get(req.params.id);

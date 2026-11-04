@@ -71,6 +71,8 @@ export interface SourcesTable {
   /** Bridge cameras (ADR 0045): the bridge carrying it, its RTSP URL (encrypted) and what the bridge last reported. */
   bridge_id: ColumnType<string | null, string | null | undefined, string | null>;
   rtsp_url: ColumnType<string | null, string | null | undefined, string | null>;
+  /** Where the camera's speaker is reached instead of its RTSP backchannel (ADR 0075), encrypted like rtsp_url. */
+  talk_url: ColumnType<string | null, string | null | undefined, string | null>;
   bridge_state: ColumnType<string | null, string | null | undefined, string | null>;
   bridge_detail: ColumnType<string | null, string | null | undefined, string | null>;
   /** When `status` last changed (set by a trigger). */

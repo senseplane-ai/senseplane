@@ -245,6 +245,12 @@ class Source(BaseModel):
             description='rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed.'
         ),
     ] = None
+    talk_url_set: Annotated[
+        bool | None,
+        Field(
+            description="rtsp sources: the camera's speaker is reached through a talk-back URL instead of its RTSP backchannel (ADR 0075). The URL itself is never shown."
+        ),
+    ] = None
     blur_faces: Annotated[
         bool | None,
         Field(

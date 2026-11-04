@@ -113,6 +113,33 @@ describe("ingest: bridges and sensor integrations", () => {
     expect(audit.some((a) => a.action === "bridge.camera_claimed" && a.actor.startsWith("bridge:"))).toBe(true);
   });
 
+  it("keeps a camera's talk-back URL encrypted, sends it only to its bridge, and never takes a command (ADR 0075)", async () => {
+    const talk = "tapo://cloudpass@192.168.1.40";
+    const set = await call("PATCH", `/v1/sources/${camId}`, { talk_url: talk });
+    expect(set.statusCode).toBe(200);
+    expect(set.json().talk_url_set).toBe(true);
+    expect(JSON.stringify(set.json())).not.toContain("cloudpass");
+    expect((await row(camId))!.talk_url).toMatch(/^enc:v1:/);
+    expect(JSON.stringify((await call("GET", `/v1/sources/${camId}`)).json())).not.toContain("cloudpass");
+    const cams = (await call("GET", "/v1/bridge/config", undefined, bridgeToken)).json().cameras as { source_id: string; talk_url?: string }[];
+    expect(cams.find((c) => c.source_id === camId)!.talk_url).toBe(talk);
+    expect(cams.filter((c) => c.talk_url)).toHaveLength(1);
+    for (const bad of ["exec:ffmpeg -i - #backchannel=1", "EXEC:sh", "http://cam/talk", "xiaomi://u:cn@cam"]) {
+      expect((await call("PATCH", `/v1/sources/${camId}`, { talk_url: bad })).statusCode).toBe(400);
+    }
+    const sensor = (await call("POST", "/v1/sources", { name: "Hall", type: "sensor" })).json().id as string;
+    expect((await call("PATCH", `/v1/sources/${sensor}`, { talk_url: talk })).statusCode).toBe(400);
+    expect((await call("POST", "/v1/sources", { name: "X", type: "whip", talk_url: talk })).statusCode).toBe(400);
+    // Given when the camera is made (on a bridge of its own here).
+    const added = await call("POST", "/v1/sources", { name: "Door", type: "rtsp", rtsp_url: "rtsp://10.0.0.11/live", talk_url: "isapi://admin:pw@10.0.0.11" });
+    expect(added.statusCode).toBe(201);
+    expect(added.json().talk_url_set).toBe(true);
+    expect((await row(added.json().id))!.talk_url).toMatch(/^enc:v1:/);
+    // Back to the RTSP backchannel.
+    expect((await call("PATCH", `/v1/sources/${camId}`, { talk_url: null })).json().talk_url_set).toBe(false);
+    expect((await row(camId))!.talk_url).toBeNull();
+  });
+
   it("lets the bridge push its own cameras over WHIP with its token, and nothing else", async () => {
     expect((await authorize(camId, bridgeToken)).statusCode).toBe(200);
     const whip = (await call("POST", "/v1/sources", { name: "OBS", type: "whip" })).json();

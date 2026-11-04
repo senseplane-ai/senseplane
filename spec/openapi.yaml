@@ -3771,6 +3771,7 @@ components:
           items: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
           description: 'Sensor sources only; default temperature and humidity. A sensor source also gains each new sense its readings bring (spec/senses.json lists the known ones).'
         rtsp_url: {type: string, pattern: '^rtsps?://', maxLength: 2048, description: 'rtsp sources: the camera URL (stored encrypted). Without it the bridge claims the camera with --rtsp.'}
+        talk_url: {type: string, pattern: '^(tapo|vigi|isapi|dvrip|doorbird|multitrans|ring|roborock|tuya|wyze|rtsps?):', maxLength: 4096, description: "rtsp sources: reach the camera's speaker through this URL instead of its RTSP backchannel (ADR 0075): one of go2rtc's two-way audio sources (tapo, vigi, isapi, dvrip, doorbird, multitrans; ring, roborock, tuya and wyze carry a cloud account's tokens). Stored encrypted, only ever sent to the bridge, never shown again. A command (exec:) can only be set on the box itself."}
         bridge_id: {type: string, description: 'rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued)'}
     SourceUpdate:
       type: object
@@ -3808,6 +3809,7 @@ components:
         privacy_masks: {type: array, items: {type: array, items: {type: array, items: {type: number}}}}
         blur_faces: {type: [boolean, 'null'], description: 'Blur faces on this camera (ADR 0068); null follows the account'}
         blur_plates: {type: [boolean, 'null'], description: 'Blur number plates on this camera (ADR 0068); null follows the account'}
+        talk_url: {type: [string, 'null'], pattern: '^(tapo|vigi|isapi|dvrip|doorbird|multitrans|ring|roborock|tuya|wyze|rtsps?):', maxLength: 4096, description: "rtsp sources: reach the camera's speaker through this URL instead of its RTSP backchannel (ADR 0075), as on create; null goes back to the backchannel. Stored encrypted and never shown again; the bridge checks the speaker anew."}
     SourceNow:
       type: object
       required: [source_id, captured_at]
@@ -3948,6 +3950,7 @@ components:
         rtsp_url: {type: string, description: The camera URL, credentials included (only ever sent to the bridge)}
         whip_url: {type: string, format: uri, description: Push here with whip_token}
         whip_token: {type: string, description: "This camera's WHIP bearer (spec/media/whip.md): a JWT the media plane verifies"}
+        talk_url: {type: string, description: "Where the camera's speaker is, when not its RTSP backchannel (ADR 0075): one of go2rtc's two-way audio sources, credentials included (only ever sent to the bridge). Absent: the backchannel."}
     BridgeConfig:
       type: object
       required: [bridge_id, name, heartbeat_seconds, poll_seconds, cameras]

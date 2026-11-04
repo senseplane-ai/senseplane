@@ -2573,6 +2573,8 @@ export interface components {
             senses?: string[];
             /** @description rtsp sources: the camera URL (stored encrypted). Without it the bridge claims the camera with --rtsp. */
             rtsp_url?: string;
+            /** @description rtsp sources: reach the camera's speaker through this URL instead of its RTSP backchannel (ADR 0075): one of go2rtc's two-way audio sources (tapo, vigi, isapi, dvrip, doorbird, multitrans; ring, roborock, tuya and wyze carry a cloud account's tokens). Stored encrypted, only ever sent to the bridge, never shown again. A command (exec:) can only be set on the box itself. */
+            talk_url?: string;
             /** @description rtsp sources: add the camera to this existing bridge (needs rtsp_url; no new token is issued) */
             bridge_id?: string;
         };
@@ -2606,6 +2608,8 @@ export interface components {
             blur_faces?: boolean | null;
             /** @description Blur number plates on this camera (ADR 0068); null follows the account */
             blur_plates?: boolean | null;
+            /** @description rtsp sources: reach the camera's speaker through this URL instead of its RTSP backchannel (ADR 0075), as on create; null goes back to the backchannel. Stored encrypted and never shown again; the bridge checks the speaker anew. */
+            talk_url?: string | null;
         };
         SourceNow: {
             source_id: string;
@@ -2733,6 +2737,8 @@ export interface components {
             whip_url: string;
             /** @description This camera's WHIP bearer (spec/media/whip.md): a JWT the media plane verifies */
             whip_token: string;
+            /** @description Where the camera's speaker is, when not its RTSP backchannel (ADR 0075): one of go2rtc's two-way audio sources, credentials included (only ever sent to the bridge). Absent: the backchannel. */
+            talk_url?: string;
         };
         BridgeConfig: {
             bridge_id: string;
@@ -3604,6 +3610,8 @@ export interface components {
             readonly bridge_id?: string | null;
             /** @description rtsp sources: what the bridge last reported, e.g. why it is reconnecting. Credentials are removed. */
             readonly status_detail?: string | null;
+            /** @description rtsp sources: the camera's speaker is reached through a talk-back URL instead of its RTSP backchannel (ADR 0075). The URL itself is never shown. */
+            readonly talk_url_set?: boolean;
             /** @description Blur faces on this camera (ADR 0068); null follows the account's blur_faces. */
             blur_faces?: boolean | null;
             /** @description Blur number plates on this camera (ADR 0068); null follows the account's blur_plates. */

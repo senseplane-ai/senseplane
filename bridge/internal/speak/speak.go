@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package speak plays a message through an IP camera's speaker (talk-back,
-// ADR 0069) over ONVIF's RTSP backchannel: DESCRIBE with
+// ADR 0069). An rtsp:// camera is spoken to over ONVIF's RTSP backchannel: DESCRIBE with
 // `Require: www.onvif.org/ver20/backchannel`, SETUP the audio track the
 // camera marks sendonly, PLAY, then G.711 (µ-law or A-law, 8 kHz) RTP
 // packets over the RTSP connection, 20 ms each, at the pace they are heard.
@@ -152,8 +152,12 @@ func (s *session) noTrack() error {
 	return ErrNoBackchannel
 }
 
-// Probe says whether the camera has a speaker the box can play to (checked when it is added).
+// Probe says whether the camera has a speaker the box can play messages to (checked when it is added).
 func Probe(ctx context.Context, url string) (bool, error) {
+	if !isRTSP(url) {
+		caps, err := probeSource(ctx, url)
+		return caps.Messages, err
+	}
 	s, err := open(ctx, url)
 	if err != nil {
 		return false, err
@@ -166,6 +170,9 @@ func Probe(ctx context.Context, url string) (bool, error) {
 // ready, when set, is asked once the camera is ready to play and before the first packet: an error
 // there (the message is now too late) stops it with nothing played.
 func Play(ctx context.Context, url string, p PCM, ready func() error) (time.Duration, error) {
+	if !isRTSP(url) {
+		return playSource(ctx, url, p, ready)
+	}
 	s, err := open(ctx, url)
 	if err != nil {
 		return 0, err

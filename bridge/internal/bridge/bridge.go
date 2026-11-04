@@ -60,13 +60,14 @@ type Options struct {
 	// ProbeSpeaker, when set, checks a camera for two-way audio (an ONVIF backchannel) when it is added
 	// and when the box starts relaying it, and the box reports it (ADR 0069).
 	ProbeSpeaker func(ctx context.Context, rtspURL string) (bool, error)
-	// PlaySpeaker plays a message on a camera's speaker (default: the ONVIF backchannel).
+	// PlaySpeaker plays a message on a camera's speaker (default: the ONVIF backchannel, or the talk-back URL).
 	// ready is asked just before the first packet (the message may have become too late).
 	PlaySpeaker func(ctx context.Context, rtspURL string, p speak.PCM, ready func() error) (time.Duration, error)
 	// LocalSpeaker, when set, plays messages for cameras that are this device itself (the phone in the
 	// Android app); it returns false for a camera it isn't, and "muted" when the phone's volume was off.
 	LocalSpeaker func(ctx context.Context, sourceID string, p speak.PCM) (bool, string, error)
-	// OpenSpeaker holds a camera's speaker open for push-to-talk (default: the ONVIF backchannel, ADR 0074).
+	// OpenSpeaker holds a camera's speaker open for push-to-talk (default: the ONVIF backchannel, ADR 0074,
+	// or the camera's talk-back URL, ADR 0075).
 	OpenSpeaker func(ctx context.Context, rtspURL string) (LiveSpeaker, error)
 	// TalkConnect pulls one press from the media plane (default: talk.Connect), before any speaker is opened.
 	TalkConnect func(ctx context.Context, o talk.Options) (TalkSession, error)
@@ -75,6 +76,22 @@ type Options struct {
 	// NoTalk, when set, names cameras that can't take push-to-talk though they have a speaker (the phone's
 	// own camera in the Android app plays messages itself, not live audio yet).
 	NoTalk func(rtspURL string) bool
+	// TalkURLs are talk-back URLs from the box's own flags (--talk), by source ID or by the host of the
+	// camera's RTSP URL: one of go2rtc's two-way audio sources (tapo://, isapi://, dvrip://...) or an
+	// exec: command, used instead of the RTSP backchannel (ADR 0075). Only these may run a command: a
+	// talk_url from the API never does.
+	TalkURLs map[string]string
+	// ProbeTalkBack checks a talk-back URL for what its speaker can carry (default: speak.ProbeCaps).
+	ProbeTalkBack func(ctx context.Context, url string) (speak.Caps, error)
+}
+
+// talkBack is where a camera's speaker is reached when it isn't the RTSP backchannel (ADR 0075).
+type talkBack struct {
+	URL string
+	// Local: from the box's own flags, the only place an exec: command may come from.
+	Local bool
+	// Refused names the scheme of a talk_url from the API the box won't use (exec, or unknown).
+	Refused string
 }
 
 // TalkSession is a press connected from the media plane (talk.Session).
@@ -108,6 +125,8 @@ type MatterLink interface {
 
 type worker struct {
 	cam    relay.Camera
+	talk   talkBack // guarded by Bridge.mu
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -151,7 +170,10 @@ func New(o Options) *Bridge {
 		o.PlaySpeaker = speak.Play
 	}
 	if o.OpenSpeaker == nil {
-		o.OpenSpeaker = func(ctx context.Context, url string) (LiveSpeaker, error) { return speak.Open(ctx, url) }
+		o.OpenSpeaker = func(ctx context.Context, url string) (LiveSpeaker, error) { return speak.OpenLive(ctx, url) }
+	}
+	if o.ProbeTalkBack == nil {
+		o.ProbeTalkBack = speak.ProbeCaps
 	}
 	if o.TalkConnect == nil {
 		o.TalkConnect = func(ctx context.Context, to talk.Options) (TalkSession, error) { return talk.Connect(ctx, to) }
@@ -344,8 +366,10 @@ func (b *Bridge) sync(ctx context.Context) *api.Config {
 		b.home.choose(cfg.Sensors)
 	}
 	want := map[string]relay.Camera{}
+	talks := map[string]talkBack{}
 	for _, c := range cfg.Cameras {
 		want[c.SourceID] = relay.Camera{SourceID: c.SourceID, RTSPURL: c.RTSPURL, WHIPURL: b.rewrite(c.WHIPURL), WHIPToken: c.WHIPToken}
+		talks[c.SourceID] = b.talkBackFor(c)
 	}
 	b.mu.Lock()
 	var stale []*worker
@@ -353,6 +377,13 @@ func (b *Bridge) sync(ctx context.Context) *api.Config {
 		if c, ok := want[id]; !ok || c != w.cam {
 			stale = append(stale, w)
 			delete(b.workers, id)
+		} else if talks[id] != w.talk {
+			// Only the talk-back URL changed: the video keeps going, the speaker is checked again.
+			w.talk = talks[id]
+			b.logTalkBack(id, w.talk)
+			if b.o.ProbeSpeaker != nil {
+				go b.probeSpeaker(w.ctx, w.cam, w.talk)
+			}
 		}
 	}
 	b.mu.Unlock()
@@ -368,16 +399,16 @@ func (b *Bridge) sync(ctx context.Context) *api.Config {
 	b.mu.Lock()
 	for id, c := range want {
 		if _, ok := b.workers[id]; !ok {
-			b.workers[id] = b.start(ctx, c)
+			b.workers[id] = b.start(ctx, c, talks[id])
 		}
 	}
 	b.mu.Unlock()
 	return cfg
 }
 
-func (b *Bridge) start(ctx context.Context, cam relay.Camera) *worker {
+func (b *Bridge) start(ctx context.Context, cam relay.Camera, tb talkBack) *worker {
 	wctx, cancel := context.WithCancel(ctx)
-	w := &worker{cam: cam, cancel: cancel, done: make(chan struct{})}
+	w := &worker{cam: cam, talk: tb, ctx: wctx, cancel: cancel, done: make(chan struct{})}
 	o := b.o.Relay
 	o.Token, o.Pull, o.Dial = b.o.Client.Token, b.o.Pull, b.o.Dial
 	o.OnState = func(s relay.State, detail string) { b.setState(cam.SourceID, s, detail) }
@@ -386,8 +417,9 @@ func (b *Bridge) start(ctx context.Context, cam relay.Camera) *worker {
 		defer close(w.done)
 		relay.Run(wctx, cam, o)
 	}()
+	b.logTalkBack(cam.SourceID, tb)
 	if b.o.ProbeSpeaker != nil {
-		go b.probeSpeaker(wctx, cam)
+		go b.probeSpeaker(wctx, cam, tb)
 	}
 	return w
 }

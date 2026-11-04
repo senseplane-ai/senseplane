@@ -6,8 +6,23 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+// --talk CAMERA=URL, by source ID or camera host; a bad one is refused without echoing its secrets.
+func TestParseTalk(t *testing.T) {
+	got, err := parseTalk([]string{"src_1=tapo://cloudpw@192.168.1.20", " 192.168.1.21 = exec:ffmpeg -f alaw -i - #audio=pcma/8000 ", ""})
+	if err != nil || len(got) != 2 || got["src_1"] != "tapo://cloudpw@192.168.1.20" || got["192.168.1.21"] != "exec:ffmpeg -f alaw -i - #audio=pcma/8000" {
+		t.Fatalf("%v %v", got, err)
+	}
+	for _, bad := range []string{"tapo://pw@cam", "=tapo://pw@cam", "src_1=", "src_1=ftp://user:topsecret@cam"} {
+		_, err := parseTalk([]string{bad})
+		if err == nil || strings.Contains(err.Error(), "pw") || strings.Contains(err.Error(), "topsecret") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+}
 
 func TestTheAddonPanelIsOnlyForTheSupervisor(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

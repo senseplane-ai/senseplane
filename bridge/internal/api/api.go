@@ -26,6 +26,9 @@ type Camera struct {
 	WHIPURL  string `json:"whip_url"`
 	// WHIPToken is this camera's WHIP bearer (ADR 0049).
 	WHIPToken string `json:"whip_token"`
+	// TalkURL, when set, is how to reach the camera's speaker instead of its RTSP backchannel: one of
+	// go2rtc's two-way audio sources (ADR 0075). It carries credentials, as RTSPURL does.
+	TalkURL string `json:"talk_url,omitempty"`
 }
 
 // Config is what GET /v1/bridge/config returns.

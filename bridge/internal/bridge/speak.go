@@ -9,18 +9,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/senseplane-ai/senseplane/bridge/internal/api"
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
 	"github.com/senseplane-ai/senseplane/bridge/internal/speak"
 	"github.com/senseplane-ai/senseplane/bridge/internal/talk"
 )
 
 // speak does `speak` (talk-back, ADR 0069): fetch the message from the API and play it on the camera's
-// speaker, the phone's own when the camera is this device, else over the camera's ONVIF backchannel. A
-// command that arrives after its run_by never gets here (runCommand), so a late message is never played.
+// speaker, the phone's own when the camera is this device, else over the camera's ONVIF backchannel or
+// its talk-back URL (ADR 0075). A command that arrives after its run_by never gets here (runCommand), so
+// a late message is never played.
 func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any, error) {
 	sourceID, _ := args["source_id"].(string)
 	path, _ := args["url"].(string)
@@ -29,9 +32,17 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 	}
 	b.mu.Lock()
 	w := b.workers[sourceID]
+	var tb talkBack
+	if w != nil {
+		tb = w.talk
+	}
 	b.mu.Unlock()
 	if w == nil {
 		return nil, errors.New("this box doesn't relay that camera")
+	}
+	to, err := speakerURL(w.cam, tb)
+	if err != nil {
+		return nil, err
 	}
 	// The message is at most 30 s; give it that and some room, never longer.
 	ms, _ := args["duration_ms"].(float64)
@@ -73,7 +84,7 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 			return out, nil
 		}
 	}
-	played, err := b.o.PlaySpeaker(ctx, w.cam.RTSPURL, clip, ready)
+	played, err := b.o.PlaySpeaker(ctx, to, clip, ready)
 	if errors.Is(err, errTooLate) {
 		return nil, err
 	}
@@ -81,7 +92,7 @@ func (b *Bridge) speak(ctx context.Context, args map[string]any) (map[string]any
 		return map[string]any{"played_ms": played.Milliseconds()}, errCutOff
 	}
 	if err != nil {
-		return nil, errors.New(relay.Redact(err.Error()))
+		return nil, errors.New(speak.Redact(err.Error()))
 	}
 	b.o.Log.Info("played a message on a camera", "source", sourceID, "ms", played.Milliseconds())
 	return map[string]any{"played_ms": played.Milliseconds()}, nil
@@ -173,12 +184,20 @@ func (b *Bridge) talk(ctx context.Context, args map[string]any) (map[string]any,
 	}
 	b.mu.Lock()
 	w := b.workers[sourceID]
+	var tb talkBack
+	if w != nil {
+		tb = w.talk
+	}
 	b.mu.Unlock()
 	if w == nil {
 		return nil, errors.New("this box doesn't relay that camera")
 	}
 	if b.o.NoTalk != nil && b.o.NoTalk(w.cam.RTSPURL) {
 		return nil, errors.New("this camera can't take push-to-talk yet; it can play agents' messages")
+	}
+	to, err := speakerURL(w.cam, tb)
+	if err != nil {
+		return nil, err
 	}
 	until := time.Now().Add(PersonMax)
 	if s, _ := args["until"].(string); s != "" {
@@ -212,12 +231,12 @@ func (b *Bridge) talk(ctx context.Context, args map[string]any) (map[string]any,
 	stopped := func(talked time.Duration) (map[string]any, error) {
 		return map[string]any{"talked_ms": talked.Milliseconds(), "ended": talk.EndStopped}, nil
 	}
-	sp, err := b.o.OpenSpeaker(ctx, w.cam.RTSPURL)
+	sp, err := b.o.OpenSpeaker(ctx, to)
 	if err != nil {
 		if ctx.Err() != nil && parent.Err() == nil {
 			return stopped(0)
 		}
-		return nil, errors.New(relay.Redact(err.Error()))
+		return nil, errors.New(speak.Redact(err.Error()))
 	}
 	defer sp.Close()
 	res, err := sess.Play(ctx, sp)
@@ -225,7 +244,7 @@ func (b *Bridge) talk(ctx context.Context, args map[string]any) (map[string]any,
 		if ctx.Err() != nil && parent.Err() == nil {
 			return stopped(res.Talked)
 		}
-		return nil, errors.New(relay.Redact(err.Error()))
+		return nil, errors.New(speak.Redact(err.Error()))
 	}
 	b.o.Log.Info("carried a person's push-to-talk to a camera", "source", sourceID, "ms", res.Talked.Milliseconds(), "ended", res.Ended)
 	return map[string]any{"talked_ms": res.Talked.Milliseconds(), "ended": res.Ended, "dropped": res.Dropped}, nil
@@ -257,21 +276,78 @@ func tokenExpiry(token string) (time.Time, bool) {
 	return time.Unix(claims.Exp, 0), true
 }
 
-// probeSpeaker checks once whether a camera has two-way audio, and reports it with the camera's state.
-func (b *Bridge) probeSpeaker(ctx context.Context, cam relay.Camera) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+// probeSpeaker checks once whether a camera has two-way audio, and reports it with the camera's state:
+// a talk-back URL says what its speaker carries (a speaker that takes Opus only carries push-to-talk).
+func (b *Bridge) probeSpeaker(ctx context.Context, cam relay.Camera, tb talkBack) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	ok, err := b.o.ProbeSpeaker(ctx, cam.RTSPURL)
+	var caps speak.Caps
+	var err error
+	if to, uerr := speakerURL(cam, tb); uerr != nil {
+		err = uerr
+	} else if tb.URL != "" {
+		caps, err = b.o.ProbeTalkBack(ctx, to)
+	} else {
+		caps.Messages, err = b.o.ProbeSpeaker(ctx, to)
+		caps.Live = caps.Messages
+	}
 	if err != nil {
-		b.o.Log.Debug("couldn't check the camera's speaker", "source", cam.SourceID, "err", relay.Redact(err.Error()))
+		b.o.Log.Debug("couldn't check the camera's speaker", "source", cam.SourceID, "err", speak.Redact(err.Error()))
 		return
 	}
 	b.mu.Lock()
+	if w := b.workers[cam.SourceID]; w != nil && w.talk != tb {
+		b.mu.Unlock()
+		return // the talk-back URL changed meanwhile: its own check reports
+	}
 	prev, had := b.speakers[cam.SourceID]
-	b.speakers[cam.SourceID] = ok
-	b.talks[cam.SourceID] = ok && (b.o.NoTalk == nil || !b.o.NoTalk(cam.RTSPURL))
+	prevTalk := b.talks[cam.SourceID]
+	b.speakers[cam.SourceID] = caps.Messages
+	b.talks[cam.SourceID] = caps.Live && (b.o.NoTalk == nil || !b.o.NoTalk(cam.RTSPURL))
+	talks := b.talks[cam.SourceID]
 	b.mu.Unlock()
-	if !had || prev != ok {
+	if !had || prev != caps.Messages || prevTalk != talks {
 		b.poke()
 	}
+}
+
+// talkBackFor is where the camera's speaker is: the box's own --talk for it (by source ID, or by the
+// host of its RTSP URL), else the API's talk_url, which may never run a command (ADR 0075).
+func (b *Bridge) talkBackFor(c api.Camera) talkBack {
+	if u := b.o.TalkURLs[c.SourceID]; u != "" {
+		return talkBack{URL: u, Local: true}
+	}
+	if u, err := url.Parse(c.RTSPURL); err == nil && u.Hostname() != "" {
+		if t := b.o.TalkURLs[u.Hostname()]; t != "" {
+			return talkBack{URL: t, Local: true}
+		}
+	}
+	if c.TalkURL == "" {
+		return talkBack{}
+	}
+	if speak.IsExec(c.TalkURL) || !speak.Known(c.TalkURL) {
+		return talkBack{Refused: speak.Scheme(c.TalkURL)}
+	}
+	return talkBack{URL: c.TalkURL}
+}
+
+func (b *Bridge) logTalkBack(sourceID string, tb talkBack) {
+	switch {
+	case tb.Refused != "":
+		b.o.Log.Warn("ignoring the camera's talk-back URL from the API: only the box's own --talk may run a command or use another scheme",
+			"source", sourceID, "scheme", tb.Refused)
+	case tb.URL != "":
+		b.o.Log.Info("camera speaker through its talk-back URL", "source", sourceID, "talk", speak.RedactURL(tb.URL), "cloud", speak.IsCloud(tb.URL))
+	}
+}
+
+// speakerURL is how the camera's speaker is reached: its talk-back URL, else its RTSP backchannel.
+func speakerURL(cam relay.Camera, tb talkBack) (string, error) {
+	if tb.URL == "" {
+		return cam.RTSPURL, nil
+	}
+	if speak.IsExec(tb.URL) && !tb.Local {
+		return "", errors.New("a talk-back command may only come from the box's own flags")
+	}
+	return tb.URL, nil
 }

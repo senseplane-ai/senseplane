@@ -58,6 +58,7 @@ type speakAPI struct {
 	reports map[string]map[string]any
 	fetches int
 	authed  []string
+	talk    string // the camera's talk_url in the config
 }
 
 func (f *speakAPI) handler(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +66,7 @@ func (f *speakAPI) handler(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	switch {
 	case r.URL.Path == "/v1/bridge/config":
-		_ = json.NewEncoder(w).Encode(api.Config{BridgeID: "brg_1", Cameras: []api.Camera{{SourceID: "src_gate", RTSPURL: f.rtsp, WHIPURL: "https://media.example/whip/src_gate"}}})
+		_ = json.NewEncoder(w).Encode(api.Config{BridgeID: "brg_1", Cameras: []api.Camera{{SourceID: "src_gate", RTSPURL: f.rtsp, WHIPURL: "https://media.example/whip/src_gate", TalkURL: f.talk}}})
 	case strings.HasPrefix(r.URL.Path, "/v1/bridge/commands") && r.Method == http.MethodGet:
 		w.Header().Set("Date", time.Now().Add(f.ahead).UTC().Format(http.TimeFormat))
 		data := []map[string]any{}

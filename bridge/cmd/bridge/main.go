@@ -13,7 +13,10 @@
 // `--ha-url` and `--ha-token`, or as a Home Assistant add-on, it also lists
 // Home Assistant's sensors and sends the ones a person chose (ADR 0061). It
 // lists the ONVIF cameras on its network to pick from in the console and
-// adds one with the credentials a person enters (ADR 0063).
+// adds one with the credentials a person enters (ADR 0063). `--talk
+// CAMERA=URL` reaches a camera's speaker through one of go2rtc's two-way
+// audio sources (tapo://, isapi://, dvrip://...) or a command (exec:), instead
+// of its RTSP backchannel (ADR 0075).
 package main
 
 import (
@@ -28,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -60,6 +64,8 @@ func main() {
 	addr := flag.String("listen", envOr("BRIDGE_LISTEN", "127.0.0.1:"+envOr("PORT", "8099")), "local address for /healthz and /metrics")
 	var rtsps multi
 	flag.Var(&rtsps, "rtsp", "camera RTSP URL to claim or add (repeatable; env SENSEPLANE_RTSP, comma-separated)")
+	var talks multi
+	flag.Var(&talks, "talk", "reach a camera's speaker through one of go2rtc's two-way audio sources instead of its RTSP backchannel, as CAMERA=URL: CAMERA is its source ID or the host in its RTSP URL, URL e.g. tapo://..., isapi://..., dvrip://... or exec:command (repeatable; env SENSEPLANE_TALK, one per line)")
 	haURL := flag.String("ha-url", os.Getenv("HA_URL"), "read sensors from this Home Assistant, e.g. http://homeassistant.local:8123 (env HA_URL; as an add-on the Supervisor's is used)")
 	haToken := flag.String("ha-token", os.Getenv("HA_TOKEN"), "a Home Assistant long-lived access token (env HA_TOKEN)")
 	matterURL := flag.String("matter-url", os.Getenv("MATTER_URL"), "read Matter devices through this Matter Server, e.g. ws://localhost:5580/ws, or \"builtin\" for the bridge's own controller, which keeps its keys in --state-dir (env MATTER_URL)")
@@ -90,6 +96,14 @@ func main() {
 	}
 	if v := os.Getenv("SENSEPLANE_RTSP"); v != "" && len(rtsps) == 0 {
 		rtsps = strings.Split(v, ",")
+	}
+	if v := os.Getenv("SENSEPLANE_TALK"); v != "" && len(talks) == 0 {
+		talks = strings.Split(v, "\n")
+	}
+	var err error
+	if talkURLs, err = parseTalk(talks); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 	if *matterURL == "builtin" && *stateDir == "" {
 		fmt.Fprintln(os.Stderr, "--matter-url builtin keeps the Matter keys in --state-dir; set one")
@@ -194,6 +208,36 @@ func main() {
 	}
 }
 
+// talkURLs are the --talk URLs by camera (ADR 0075): only these may run a command.
+var talkURLs map[string]string
+
+// parseTalk reads --talk CAMERA=URL; a URL is never echoed, it may carry a password or a token.
+func parseTalk(list []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, t := range list {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		cam, u, ok := strings.Cut(t, "=")
+		cam, u = strings.TrimSpace(cam), strings.TrimSpace(u)
+		if !ok || cam == "" || u == "" {
+			return nil, errors.New("--talk takes CAMERA=URL, CAMERA being the camera's source ID or the host in its RTSP URL")
+		}
+		if !speak.Known(u) {
+			return nil, fmt.Errorf("--talk %s: the box can't talk through %q URLs (rtsp, exec, %s)", cam, speak.Scheme(u), strings.Join(sortedSchemes(), ", "))
+		}
+		out[cam] = u
+	}
+	return out, nil
+}
+
+func sortedSchemes() []string {
+	s := speak.Schemes()
+	slices.Sort(s)
+	return s
+}
+
 // run relays and reads until ctx ends; a paired box also stops when the API refuses its token (true).
 // strictRevocation is --matter-strict-revocation (ADR 0073).
 var strictRevocation bool
@@ -217,7 +261,9 @@ func run(ctx context.Context, apiURL, token string, paired bool, rtsps []string,
 	refused := false
 	o := bridge.Options{Client: client, Pull: camera.Pull, Dial: dialWHIP, Version: health.Version, WHIPBase: whipBase, Log: log, HomeAssistant: ha,
 		// Talk-back (ADR 0069): which cameras have two-way audio, and messages played over it.
-		ProbeSpeaker: speak.Probe}
+		ProbeSpeaker: speak.Probe,
+		// Cameras whose speaker is reached another way: one of go2rtc's sources, or a command (ADR 0075).
+		TalkURLs: talkURLs}
 	if matterURL != "" {
 		// Matter devices are sensors too, and a person can add one with a code shared from its app (ADR 0062).
 		var mc interface {

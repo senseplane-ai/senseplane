@@ -32,7 +32,8 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-// Speaker is where the audio goes: a camera's backchannel (speak.Stream).
+// Speaker is where the audio goes: a camera's backchannel (speak.Stream), or one of go2rtc's sources;
+// one that implements OpusSpeaker may take the person's Opus as it came instead.
 type Speaker interface {
 	// Write sends one packet of 8 kHz samples.
 	Write(samples []int16) error
@@ -244,6 +245,9 @@ func (o Options) withDefaults() Options {
 // silence when the buffer is empty, the oldest audio dropped when the camera falls behind.
 func play(ctx context.Context, o Options, sp Speaker, started time.Time, packets <-chan *rtp.Packet, trackEnded, closed <-chan struct{}) (Result, error) {
 	o = o.withDefaults()
+	if ops, ok := sp.(OpusSpeaker); ok && ops.TakesOpus() {
+		return passOpus(ctx, o, ops, started, packets, trackEnded, closed)
+	}
 	dec, err := opus.NewDecoderWithOutput(rate, 1)
 	if err != nil {
 		return Result{}, err
@@ -349,6 +353,105 @@ func play(ctx context.Context, o Options, sp Speaker, started time.Time, packets
 			}
 		}
 	}
+}
+
+// OpusSpeaker is a speaker that takes the person's Opus as it came (a camera whose speaker takes Opus
+// only, through one of go2rtc's WebRTC sources, ADR 0075).
+type OpusSpeaker interface {
+	Speaker
+	TakesOpus() bool
+	// WriteOpus sends one Opus packet from the person's microphone.
+	WriteOpus(p *rtp.Packet) error
+}
+
+// passOpus hands each packet on as it comes, in order, with no decoding and no jitter buffer of the
+// box's: the camera's WebRTC stack has its own. The press ends as play's does.
+func passOpus(ctx context.Context, o Options, sp OpusSpeaker, started time.Time, packets <-chan *rtp.Packet, trackEnded, closed <-chan struct{}) (Result, error) {
+	var res Result
+	var talked time.Duration
+	var lastSeq uint16
+	haveSeq := false
+	lastAudio := time.Now()
+	firstWait := time.NewTimer(o.FirstAudio)
+	defer firstWait.Stop()
+	check := time.NewTicker(250 * time.Millisecond)
+	defer check.Stop()
+	end := func(why string) (Result, error) {
+		res.Ended, res.Talked = why, talked
+		return res, nil
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return end(EndDeadline)
+			}
+			return end(EndStopped)
+		case <-sp.Gone():
+			return end(EndCamera)
+		case <-closed:
+			return end(EndReleased)
+		case <-trackEnded:
+			return end(EndReleased)
+		case <-firstWait.C:
+			if !haveSeq {
+				return res, errors.New("no audio came from the person talking")
+			}
+		case <-check.C:
+			if haveSeq && time.Since(lastAudio) > o.Silence {
+				return end(EndSilence)
+			}
+		case p := <-packets:
+			if haveSeq && int16(p.SequenceNumber-lastSeq) <= 0 {
+				res.Dropped++
+				continue
+			}
+			first := !haveSeq
+			lastSeq, haveSeq = p.SequenceNumber, true
+			lastAudio = time.Now()
+			d := opusDuration(p.Payload)
+			if d == 0 {
+				res.Dropped++
+				continue
+			}
+			if err := sp.WriteOpus(p); err != nil {
+				return end(EndCamera)
+			}
+			res.Packets++
+			talked += d
+			if first && o.OnFirstAudio != nil {
+				o.OnFirstAudio(time.Since(started))
+			}
+		}
+	}
+}
+
+// opusDuration is how long an Opus packet plays, from its TOC byte (RFC 6716, 3.1); 0 if malformed.
+func opusDuration(b []byte) time.Duration {
+	if len(b) == 0 {
+		return 0
+	}
+	config := b[0] >> 3
+	var frame time.Duration
+	switch {
+	case config < 12: // SILK: 10, 20, 40, 60 ms
+		frame = []time.Duration{10, 20, 40, 60}[config%4] * time.Millisecond
+	case config < 16: // hybrid: 10, 20 ms
+		frame = []time.Duration{10, 20}[config%2] * time.Millisecond
+	default: // CELT: 2.5, 5, 10, 20 ms
+		frame = []time.Duration{2500, 5000, 10000, 20000}[config%4] * time.Microsecond
+	}
+	frames := 1
+	switch b[0] & 3 {
+	case 1, 2:
+		frames = 2
+	case 3:
+		if len(b) < 2 {
+			return 0
+		}
+		frames = int(b[1] & 0x3F)
+	}
+	return frame * time.Duration(frames)
 }
 
 func writeFrame(sp Speaker, pcm *[]int16, silence []int16, written *int) error {

@@ -292,3 +292,49 @@ func TestListenRefusals(t *testing.T) {
 		t.Fatal("an expired press was started")
 	}
 }
+
+// opusSpeaker takes the person's Opus as it came.
+type opusSpeaker struct {
+	*speaker
+	packets []*rtp.Packet
+}
+
+func (s *opusSpeaker) TakesOpus() bool { return true }
+func (s *opusSpeaker) WriteOpus(p *rtp.Packet) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packets = append(s.packets, p)
+	return nil
+}
+
+// A camera that takes Opus gets the person's packets as they came, in order, without decoding; the
+// press ends as any other.
+func TestOpusPassesThrough(t *testing.T) {
+	packets := talktest.Packets(t, "celt")
+	sp := &opusSpeaker{speaker: newSpeaker()}
+	in := make(chan *rtp.Packet, 8)
+	go func() {
+		feed(context.Background(), packets[:10], in)
+		in <- &rtp.Packet{Header: rtp.Header{SequenceNumber: 60003}, Payload: packets[3]} // late: dropped
+	}()
+	res, err := play(context.Background(), opts(), sp, time.Now(), in, nil, nil)
+	if err != nil || res.Ended != EndSilence || res.Packets != 10 || res.Dropped != 1 || res.Talked != 200*time.Millisecond {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if got, _ := sp.heard(); len(got) != 0 {
+		t.Fatal("decoded samples were written too")
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for i, p := range sp.packets {
+		if p.SequenceNumber != uint16(60000+i) || string(p.Payload) != string(packets[i]) {
+			t.Fatalf("packet %d out of turn", i)
+		}
+	}
+	if d := opusDuration([]byte{0x0B << 3}); d != 60*time.Millisecond { // SILK, 60 ms
+		t.Fatal(d)
+	}
+	if d := opusDuration([]byte{31<<3 | 3, 3}); d != 60*time.Millisecond { // CELT 20 ms, three frames
+		t.Fatal(d)
+	}
+}

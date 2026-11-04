@@ -337,7 +337,9 @@ jobs:
           fail-on-severity: high
           allow-licenses: MIT, BSD-2-Clause, BSD-3-Clause, ISC, Apache-2.0, MPL-2.0, 0BSD, BlueOak-1.0.0, CC0-1.0, Python-2.0, Unlicense
           # Fonts the console bundles (SIL Open Font Licence; scripts/check-licenses.mjs has the same exception).
-          allow-dependencies-licenses: pkg:npm/@fontsource/geist-sans, pkg:npm/@fontsource/geist-mono
+          # Eclipse Paho MQTT for Go (go2rtc's tuya source, ADR 0075) is EPL-2.0 or EDL-1.0: the bridge
+          # takes it under EDL-1.0, which is the BSD 3-Clause licence.
+          allow-dependencies-licenses: pkg:npm/@fontsource/geist-sans, pkg:npm/@fontsource/geist-mono, pkg:golang/github.com/eclipse/paho.mqtt.golang
 
   # The one required status check: green when every job above passed (or was
   # skipped because it doesn't apply, like dependency review on main).

@@ -1,6 +1,6 @@
 # 74. Push-to-talk to IP cameras
 
-Date: 2026-11-03 · Status: accepted; extends ADR 0069
+Date: 2026-11-03 · Status: accepted; extends ADR 0069; extended by ADR 0075
 
 ## Context
 
@@ -161,4 +161,6 @@ says so.
   connects (the command, the camera's `PLAY`, ICE and DTLS); the console shows
   "Connecting" until the camera hears it, so people learn to wait for it.
 - Not yet: the Android app's own camera, AAC and G.726 backchannels, `rtsps`
-  cameras, vendor two-way audio APIs, and talking to several cameras at once.
+  cameras, and talking to several cameras at once. Vendor two-way audio
+  (Tapo, Hikvision ISAPI, DVR-IP, DoorBird, cloud cameras) goes through
+  go2rtc's sources: ADR 0075.

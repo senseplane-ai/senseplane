@@ -6,7 +6,10 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 This product depends on third-party software, including:
 
 - mediasoup (ISC License), Copyright © 2015, Iñaki Baz Castillo
-- go2rtc (MIT License), Copyright (c) 2022 Alexey Khit (used by the bridge)
+- go2rtc (MIT License), Copyright (c) 2022 Alexey Khit (used by the bridge; a modified copy of its
+  Hikvision ISAPI client is in bridge/internal/third_party/go2rtc, with its licence)
+- Eclipse Paho MQTT Go client (Eclipse Distribution License 1.0, a BSD 3-Clause licence; it is
+  dual-licensed with EPL-2.0), used through go2rtc's Tuya source in the bridge
 - Fastify (MIT License), Kysely (MIT License), node-postgres (MIT License)
 - pino (MIT License), prom-client (Apache License 2.0)
 - openapi-typescript and openapi-fetch (MIT License)

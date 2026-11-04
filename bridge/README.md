@@ -31,6 +31,7 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--token` | `SENSEPLANE_BRIDGE_TOKEN` | Bridge token (`brg_…`) |
 | `--rtsp` (repeatable) | `SENSEPLANE_RTSP` (comma-separated) | Camera URLs to claim or add |
 | `--name` | | Name for a camera added with `--rtsp` |
+| `--talk` (repeatable) | `SENSEPLANE_TALK` (one per line) | `CAMERA=URL`: reach a camera's speaker through one of go2rtc's two-way audio sources or a command instead of its RTSP backchannel ([Talk-back](#talk-back)) |
 | `--whip-base` | `SENSEPLANE_WHIP_BASE` | Push to the media plane at this base URL instead of the public one |
 | `--listen` | `BRIDGE_LISTEN` | The status page, `/healthz` and `/metrics` (default `127.0.0.1:8099`) |
 | `--ha-url` | `HA_URL` | Read sensors from this Home Assistant (`http://homeassistant.local:8123`); as an add-on the Supervisor's is used |
@@ -46,6 +47,44 @@ sources created with `"bridge_id"`) add cameras to the same bridge.
 | `--mqtt-prefix` | `MQTT_PREFIX` | Where the box publishes its own states (default `senseplane`) |
 
 Passwords in RTSP URLs never appear in logs or in what the bridge reports.
+
+## Talk-back
+
+The bridge plays agents' messages (ADR 0069) and carries a person's
+push-to-talk (ADR 0074) to a camera's speaker. By default that is the
+camera's ONVIF RTSP backchannel (G.711). A camera without one can be given a
+talk-back URL, one of go2rtc's two-way audio sources (ADR 0075):
+
+| URL | Camera | Where | Audio |
+|---|---|---|---|
+| `tapo://CLOUD_PASSWORD@IP`, `tapo://admin:HASH@IP`, `vigi://admin:PASSWORD@IP` | TP-Link Tapo, Vigi | local | A-law 8 kHz |
+| `isapi://USER:PASSWORD@IP` | Hikvision | local | µ-law or A-law 8 kHz |
+| `dvrip://USER:PASSWORD@IP` | XMeye / NetSurveillance recorders and cameras | local | A-law 8 kHz |
+| `doorbird://USER:PASSWORD@IP` | DoorBird | local | µ-law 8 kHz |
+| `multitrans://USER:PASSWORD@IP:554` | TP-Link (China) | local | A-law 8 kHz |
+| `ring:?refresh_token=…&camera_id=…&device_id=…` | Ring | cloud | Opus: push-to-talk only |
+| `roborock://…`, `tuya://…`, `wyze://…` | Roborock, Tuya, Wyze | cloud | G.711 or PCM; Opus for push-to-talk only |
+| `exec:COMMAND#audio=pcma/8000` | anything a command can reach | the box | the format `#audio=` names (default 16-bit little-endian, 16 kHz) on the command's stdin |
+
+The URLs are go2rtc's own (its setup pages for Ring, Roborock, Tuya and Wyze
+produce them); cloud URLs carry the account's tokens and the audio goes
+through the vendor's service. Only talk-back is taken from cloud cameras, no
+video. Give a camera its URL either way:
+
+- on the box: `--talk CAMERA=URL`, CAMERA being the camera's source ID or the
+  host in its RTSP URL, e.g. `--talk 192.168.1.40=tapo://cloudpass@192.168.1.40`;
+- in the API: `talk_url` on the source (`PATCH /v1/sources/{id}`, `null` to
+  go back to the backchannel). It is stored encrypted like the RTSP URL, sent
+  only to the camera's bridge, and never shown again (the source says
+  `talk_url_set`).
+
+A command (`exec:`) can only be set on the box: the API refuses one, and the
+bridge ignores one that comes from it. The box's flag wins over the API's
+URL. The bridge checks each speaker without playing anything and reports
+whether it takes messages (`speaker`) and push-to-talk (`talk`); a speaker
+that takes Opus only (Ring) takes push-to-talk, as the person's Opus is passed
+on, but not typed messages, which the box can't encode to Opus. Talk-back URLs
+are logged without their passwords and query values.
 
 ## Home Assistant
 
@@ -175,7 +214,9 @@ mapping), `internal/sensors` (batched sending with backoff),
 `internal/pairing` (codes and the state file), `internal/matter` (a Matter
 Server client and the attribute → reading mapping), `internal/onvif`
 (WS-Discovery and the device and media calls; `onviftest` is a fake camera
-for tests), `internal/health`.
+for tests), `internal/speak` (talk-back: the RTSP backchannel and go2rtc's
+two-way audio sources; `internal/third_party/go2rtc` is a fixed copy of
+go2rtc's ISAPI client, MIT), `internal/talk` (push-to-talk), `internal/health`.
 
 ## WHIP client
 

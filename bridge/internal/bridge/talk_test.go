@@ -119,7 +119,11 @@ func TestTalkCarriesAPersonsVoiceToTheCamera(t *testing.T) {
 			b := talkBox(t, f, Options{})
 			w.Token = joinToken(time.Now().Add(10 * time.Minute))
 			go func() {
-				time.Sleep(1600 * time.Millisecond)
+				// Released once the camera has heard 1.2 s (G.711: 8 bytes a ms), not after a fixed time: on a
+				// loaded runner connecting can take most of a second.
+				for deadline := time.Now().Add(15 * time.Second); len(cam.Audio()) < 9600 && time.Now().Before(deadline); {
+					time.Sleep(20 * time.Millisecond)
+				}
 				w.Close() // released
 			}()
 			b.runCommand(context.Background(), talkCommand("bcm_t", w.URL, w.Token, 10*time.Second))

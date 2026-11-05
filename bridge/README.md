@@ -166,7 +166,7 @@ added by address):
 
 ```sh
 docker run -d --restart unless-stopped --name senseplane-bridge --network host -v senseplane-bridge:/data \
-  ghcr.io/senseplane-ai/bridge:0.3 --api https://senseplane.example.com --state-dir /data --listen 127.0.0.1:8099
+  ghcr.io/senseplane-ai/bridge:0.2 --api https://senseplane.example.com --state-dir /data --listen 127.0.0.1:8099
 ```
 
 ## Matter
@@ -193,7 +193,7 @@ refused.
 
 ```sh
 docker run -d --restart unless-stopped --name senseplane-bridge -v senseplane-bridge:/data -p 127.0.0.1:8099:8099 \
-  ghcr.io/senseplane-ai/bridge:0.3 --api https://senseplane.example.com --state-dir /data --listen :8099 \
+  ghcr.io/senseplane-ai/bridge:0.2 --api https://senseplane.example.com --state-dir /data --listen :8099 \
   --ha-url http://homeassistant.local:8123 --ha-token "$HA_TOKEN"
 # open http://localhost:8099 for the code
 ```

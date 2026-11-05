@@ -32,7 +32,10 @@ RUN ./configure --prefix=/opt/ffmpeg --enable-shared --disable-static --disable-
 
 # --- Node build ---------------------------------------------------------------
 FROM node:24-bookworm-slim AS build
-RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+# pip: mediasoup builds its worker from source (pip installs invoke, meson and ninja into its own
+# folder) when the prebuilt one for the host's kernel doesn't run on bookworm.
+RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends python3 python3-pip make g++ && rm -rf /var/lib/apt/lists/*
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 WORKDIR /repo
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY media/package.json media/

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5
+
+- Cameras that send 2K or 3 MP (above the server's limit) are no longer
+  reconnected in a loop: the box reads the picture size first, and the
+  camera's page in Senseplane says the size and the limit. Servers can now
+  record up to 1440p.
+
 ## 0.2.4
 
 - Talk-back through more cameras (Tapo, Hikvision, DVR-IP, DoorBird and others), Matter pairing

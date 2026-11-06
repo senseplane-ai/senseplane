@@ -51,7 +51,10 @@ Only the entities you choose, whenever their state changes:
 | Doorbell and button events | each press |
 | Temperature, humidity, power, energy, voltage, current, light level, CO2, PM2.5, pressure, battery, sound level | the value, in metric units |
 
-The add-on reads Home Assistant; it never switches anything.
+The add-on switches a device only when you have marked it **Controllable** in
+Senseplane and a person, or an agent you gave Control, asks. When an agent asks,
+locks and other secure devices also need a person to confirm. Watches and workflows never
+switch anything.
 
 ## MQTT
 

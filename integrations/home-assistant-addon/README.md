@@ -13,7 +13,7 @@ IP cameras, and pairs with a code (ADR 0061). `version` in
 
 ## Try it
 
-- **Home Assistant OS in a VM or on a box:** Settings → Add-ons → Add-on
+- **Home Assistant OS in a VM or on a box:** Settings → Apps → App
   store → ⋮ → Repositories, add the repository URL, install Senseplane.
 - **Before a release:** copy `senseplane/` into the Home Assistant's
   `/addons/` folder (the Samba or SSH add-on gives access); it appears under

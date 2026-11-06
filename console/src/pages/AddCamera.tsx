@@ -223,7 +223,7 @@ export function AddCameraPage() {
             <section className="add-section" aria-labelledby="add-h">
               <h1 id="add-h" ref={heading} tabIndex={-1}>{k.connectTitle}</h1>
               <ol className="box-steps">
-                <li>In Home Assistant, open <strong>Settings → Add-ons → Add-on store</strong>, then <strong>⋮ → Repositories</strong>, and add:
+                <li>In Home Assistant, open <strong>Settings → Apps → App store</strong> (older versions: Add-ons → Add-on store), then <strong>⋮ → Repositories</strong>, and add:
                   <CopyField label="Repository" value={ADDON_REPOSITORY} onCopied={() => toast("Copied.")} /></li>
                 <li>Install <strong>Senseplane</strong>, set its server to:
                   <CopyField label="Server" value={serverUrl(apiUrl)} onCopied={() => toast("Copied.")} />

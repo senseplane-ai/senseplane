@@ -3,7 +3,7 @@
 # The Senseplane add-on (ADR 0061): the bridge, reading this Home Assistant
 # through the Supervisor and relaying IP cameras, paired with a code.
 name: Senseplane
-version: "0.3.0"
+version: "0.2.4"
 slug: senseplane
 description: Eyes and ears for your AI agents. Sends the sensors you choose, and your IP cameras, to Senseplane.
 url: https://github.com/senseplane-ai/senseplane/tree/main/integrations/home-assistant-addon

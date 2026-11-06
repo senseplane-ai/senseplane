@@ -2565,7 +2565,7 @@ export interface components {
              */
             type: "browser" | "sensor" | "whip" | "rtsp";
             /**
-             * @description Ignored for rtsp and sensor sources (bridge cameras are video only)
+             * @description Ignored for sensor sources. A bridge camera (rtsp) sends its sound when it is G.711 (PCMA or PCMU); other camera audio (AAC) is not carried.
              * @default false
              */
             record_audio: boolean;
@@ -2618,6 +2618,8 @@ export interface components {
             /** Format: uri */
             snapshot_url?: string;
             readings?: components["schemas"]["reading"][];
+            /** @description Whether sound is arriving with the live stream right now. Present only while the source is online and the caller may hear it. false: the camera streams no sound (its microphone is off, or it sends audio in a format Senseplane can't carry), so "no sounds detected" would mean nothing. */
+            hearing?: boolean;
         };
         AskRequest: {
             question: string;

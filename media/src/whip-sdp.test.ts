@@ -86,6 +86,19 @@ describe("WHIP SDP negotiation", () => {
     expect(audio.candidates[0]!.encodings).toEqual([{ ssrc: 1111 }]);
   });
 
+  it("accepts G.711 from a camera, behind Opus when both are offered", () => {
+    const pcma = parseOffer(offer({ audioCodec: "PCMA/8000" }), caps, { audio: true });
+    expect(pcma.sections.find((s) => s.plan?.kind === "audio")!.plan!.candidates[0]!.codecs[0]).toMatchObject({ mimeType: "audio/PCMA", payloadType: 111, clockRate: 8000, channels: 1 });
+    const pcmu = parseOffer(offer({ audioCodec: "PCMU/8000" }), caps, { audio: true });
+    expect(pcmu.sections.find((s) => s.plan?.kind === "audio")!.plan!.candidates[0]!.codecs[0]).toMatchObject({ mimeType: "audio/PCMU", clockRate: 8000 });
+    const both = offer().replace("m=audio 9 UDP/TLS/RTP/SAVPF 111", "m=audio 9 UDP/TLS/RTP/SAVPF 8 111").replace("a=rtpmap:111", "a=rtpmap:8 PCMA/8000\r\na=rtpmap:111");
+    const order = parseOffer(both, caps, { audio: true }).sections.find((s) => s.plan?.kind === "audio")!.plan!.candidates.map((c) => c.codecs[0]!.mimeType);
+    expect(order).toEqual(["audio/opus", "audio/PCMA"]);
+    // Other audio is still refused, and the video goes on without it.
+    const g722 = parseOffer(offer({ audioCodec: "G722/8000" }), caps, { audio: true });
+    expect(g722.sections[0]).toMatchObject({ rejected: "no Opus or G.711" });
+  });
+
   it("refuses offers without H.264 with 415 and malformed ones with 400", () => {
     const vp8 = offer({ video: "a=rtpmap:96 VP8/90000" });
     expect(() => parseOffer(vp8, caps, { audio: false })).toThrow(SdpError);

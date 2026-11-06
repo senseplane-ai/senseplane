@@ -13,6 +13,18 @@ export interface RtpLeg {
   rtpParameters: { codecs: { mimeType: string; payloadType: number; clockRate: number; channels?: number; parameters?: Record<string, unknown> }[]; encodings?: { ssrc?: number }[] };
 }
 
+/** The lower-case codec name of a leg (h264, opus, pcma, pcmu). */
+export const codecOf = (leg: RtpLeg): string => (leg.rtpParameters.codecs[0]?.mimeType.split("/")[1] ?? "").toLowerCase();
+
+/** G.711 (PCMA or PCMU), as IP cameras send it. */
+export const isG711 = (leg: RtpLeg): boolean => ["pcma", "pcmu"].includes(codecOf(leg));
+
+/** How a recording writes its audio: Opus is copied; G.711 becomes AAC, which an MP4 that browsers play can hold. */
+export const recordAudioArgs = (legs: RtpLeg[]): string[] => {
+  const audio = legs.find((l) => l.kind === "audio");
+  return audio && isG711(audio) ? ["-c:a", "aac", "-ac", "1", "-ar", "16000", "-b:a", "32k"] : [];
+};
+
 /** Reserves an even UDP port with the next one free too (RTP + RTCP), on `ip`. */
 export async function reservePortPair(ip: string, base = 20000, span = 20000): Promise<number> {
   for (let i = 0; i < 80; i++) {

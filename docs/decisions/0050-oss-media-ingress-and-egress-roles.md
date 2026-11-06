@@ -30,7 +30,7 @@ What changed for Senseplane's camera behaviour, and what did not:
 
 | Kept | How |
 |---|---|
-| H.264 only, nothing transcoded (ADR 0012) | rooms are created with `codecs: ["h264", "opus"]`; VP8 is refused by the Router |
+| H.264 only, nothing transcoded (ADR 0012) | rooms are created with `codecs: ["h264", "opus", "g711"]`; VP8 is refused by the Router |
 | 6 s fMP4 segments, `raw/...` key layout | the `segments` sink, `keyPrefix` from the API |
 | Resolution refusal before storage (ADR 0022) | the init segment is probed before any upload; frames are held back too |
 | Last segment kept when a publisher vanishes | `q`, then a few RTP packets to wake ffmpeg's demuxer, then SIGINT |

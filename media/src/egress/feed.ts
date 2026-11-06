@@ -16,7 +16,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type Log, post } from "../callbacks.js";
 import { FeedCallback } from "./callback.js";
-import { reservePortPair, type RtpLeg } from "./ffmpeg.js";
+import { codecOf, reservePortPair, type RtpLeg } from "./ffmpeg.js";
 import { DEFAULT_BATCH_MS, FramesRun } from "./frames.js";
 import { SegmentsRun, fitsResolution } from "./segments.js";
 import { type EventFrame, SignalClient } from "./signal-client.js";
@@ -230,6 +230,7 @@ export class FeedSession {
     const n = ++this.runs;
     const signal = this.signal!;
     const run: Run = { n, video, ...(audio ? { audio } : {}), consumers: [], timers: [] };
+    const codecs = new Set<string>();
     const legsFor = async (role: Leg["role"], withAudio: boolean): Promise<RtpLeg[]> => {
       const out: RtpLeg[] = [];
       for (const p of [video, ...(withAudio && audio ? [audio] : [])]) {
@@ -238,7 +239,9 @@ export class FeedSession {
           transportId: t.transportId, producerId: p.producerId, rtpCapabilities: this.routerCaps,
         });
         run.consumers.push({ consumerId: c.consumerId, kind: p.kind, role });
-        out.push({ kind: p.kind, port: t.port, rtpParameters: c.rtpParameters });
+        const leg: RtpLeg = { kind: p.kind, port: t.port, rtpParameters: c.rtpParameters };
+        codecs.add(codecOf(leg) || (p.kind === "video" ? "h264" : "opus"));
+        out.push(leg);
       }
       return out;
     };
@@ -295,8 +298,8 @@ export class FeedSession {
     }
     this.status = "recording";
     const at = new Date().toISOString();
-    const codecs = [...new Set([video, ...(audio ? [audio] : [])].map((p) => (p.kind === "video" ? "h264" : "opus")))];
-    this.emit("source.online", { at, codecs, producer_id: video.producerId, identity: video.identity }, `source.online:${this.job.sessionId}:${n}`);
+    // What was really consumed (h264, opus, pcma, pcmu): the API tells from it whether sound is arriving.
+    this.emit("source.online", { at, codecs: [...codecs], producer_id: video.producerId, identity: video.identity }, `source.online:${this.job.sessionId}:${n}`);
     if (this.lastRunEndedAt !== undefined) {
       this.emit("recording.gap", { from: new Date(this.lastRunEndedAt).toISOString(), to: at, reason: "publisher_reconnected" }, `recording.gap:${this.job.sessionId}:${n}`);
     }

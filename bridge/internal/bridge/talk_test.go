@@ -78,7 +78,7 @@ func talkBox(t *testing.T, f *talkAPI, o Options) *Bridge {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	o.Dial = func(context.Context, string, string) (relay.Publisher, error) {
+	o.Dial = func(context.Context, string, string, string) (relay.Publisher, error) {
 		return &pub{done: make(chan error)}, nil
 	}
 	o.TalkLoopback = true // the fake and the real media plane here are on this machine

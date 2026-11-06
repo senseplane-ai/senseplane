@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/pion/rtp"
 
 	"github.com/senseplane-ai/senseplane/bridge/internal/relay"
@@ -48,5 +49,32 @@ func TestEmitterTurnsAVCCIntoTimedAnnexB(t *testing.T) {
 	}
 	if got[4].Duration != time.Second/30 {
 		t.Fatalf("wraparound duration %v", got[4].Duration)
+	}
+}
+
+func TestAudioEmitterTimesG711ByItsLength(t *testing.T) {
+	var got []relay.AccessUnit
+	h := AudioEmitter("PCMA", func(au relay.AccessUnit) { got = append(got, au) })
+	payload := make([]byte, 160)
+	h(&rtp.Packet{Payload: payload})
+	h(&rtp.Packet{}) // empty: ignored
+	if len(got) != 1 || got[0].Audio != "PCMA" || got[0].Duration != 20*time.Millisecond || len(got[0].Data) != 160 {
+		t.Fatalf("got %+v", got)
+	}
+	payload[0] = 9
+	if got[0].Data[0] != 0 {
+		t.Fatal("the unit shares the packet's buffer")
+	}
+}
+
+func TestPickG711TakesTheCamerasSoundNotItsSpeaker(t *testing.T) {
+	speaker := &core.Media{Kind: core.KindAudio, Direction: core.DirectionSendonly, Codecs: []*core.Codec{{Name: core.CodecPCMA, ClockRate: 8000}}}
+	aac := &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecAAC, ClockRate: 16000}}}
+	mic := &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecPCMU, ClockRate: 8000, Channels: 1}}}
+	if m, c := pickG711([]*core.Media{speaker, aac}); m != nil || c != nil {
+		t.Fatal("picked a speaker or AAC")
+	}
+	if m, c := pickG711([]*core.Media{speaker, aac, mic}); m != mic || c.Name != core.CodecPCMU {
+		t.Fatalf("got %v %v", m, c)
 	}
 }

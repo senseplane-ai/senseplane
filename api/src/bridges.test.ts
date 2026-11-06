@@ -64,7 +64,7 @@ describe("ingest: bridges and sensor integrations", () => {
     const r = await call("POST", "/v1/sources", { name: "Driveway", type: "rtsp", record_audio: true });
     expect(r.statusCode).toBe(201);
     const src = r.json();
-    expect(src).toMatchObject({ type: "rtsp", senses: ["video"], record_audio: false, status: "pending", bridge_id: expect.stringMatching(/^brg_/) });
+    expect(src).toMatchObject({ type: "rtsp", senses: ["video", "audio"], record_audio: true, status: "pending", bridge_id: expect.stringMatching(/^brg_/) });
     expect(src.status_since).toEqual(expect.any(String));
     expect(src.ingest.bridge_token).toMatch(/^brg_/);
     expect(src.ingest.token).toBe(src.ingest.bridge_token);

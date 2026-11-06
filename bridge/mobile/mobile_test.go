@@ -146,7 +146,7 @@ func TestAPhoneBoxPairsRelaysItsCameraAndSendsChosenSensors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
 	p := &pub{done: make(chan error)}
-	dial = func(context.Context, string, string) (relay.Publisher, error) { return p, nil }
+	dial = func(context.Context, string, string, string) (relay.Publisher, error) { return p, nil }
 	discover = func(context.Context) ([]onvif.Found, error) { return nil, nil }
 	st := &statuses{}
 	dir := t.TempDir()

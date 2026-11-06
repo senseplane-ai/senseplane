@@ -76,9 +76,13 @@ export class AccountScope {
      * Media plane online/offline. A bridge camera whose bridge is reconnecting shows `reconnecting`, not offline (ADR 0045);
      * a paused camera stays paused (its last session ending must not undo the pause).
      */
-    setStatus: (id: string, status: "online" | "offline", at?: Date) => {
+    setStatus: (id: string, status: "online" | "offline", at?: Date, liveAudio?: boolean) => {
       let q = this.db.updateTable("sources")
-        .set({ status: status === "online" ? "online" : sql<string>`case when bridge_state = 'reconnecting' then 'reconnecting' else 'offline' end` })
+        .set({
+          status: status === "online" ? "online" : sql<string>`case when bridge_state = 'reconnecting' then 'reconnecting' else 'offline' end`,
+          // Whether the live stream carries sound: known only while online.
+          live_audio: status === "online" && liveAudio !== undefined ? liveAudio : null,
+        })
         .where("id", "=", id).where("status", "!=", "paused");
       // An event from before the last change (a late retry) does not undo it.
       if (at) q = q.where((eb) => eb.or([eb("status_since", "is", null), eb("status_since", "<=", at)]));

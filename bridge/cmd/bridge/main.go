@@ -324,8 +324,8 @@ func claim(ctx context.Context, c *api.Client, rtspURL, name string, log *slog.L
 }
 
 // dialWHIP connects a WHIP session and waits for ICE/DTLS.
-func dialWHIP(ctx context.Context, url, token string) (relay.Publisher, error) {
-	s, err := whip.Dial(ctx, url, token)
+func dialWHIP(ctx context.Context, url, token, audio string) (relay.Publisher, error) {
+	s, err := whip.Dial(ctx, url, token, audio)
 	if err != nil {
 		return nil, err
 	}

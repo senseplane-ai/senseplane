@@ -127,7 +127,7 @@ func TestFindsONVIFCamerasNamesThemFromHomeAssistantAndAddsOne(t *testing.T) {
 	}
 	logs := &syncBuffer{}
 	b := New(Options{
-		Client: api.New(srv.URL, "brg_t"), Pull: pull, Dial: func(context.Context, string, string) (relay.Publisher, error) {
+		Client: api.New(srv.URL, "brg_t"), Pull: pull, Dial: func(context.Context, string, string, string) (relay.Publisher, error) {
 			return &pub{done: make(chan error)}, nil
 		},
 		Log:  slog.New(slog.NewTextHandler(logs, nil)),

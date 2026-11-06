@@ -405,8 +405,8 @@ components:
           type: array
           minItems: 1
           uniqueItems: true
-          items: {enum: [opus, vp8, h264]}
-          description: The room's codec families. "h264" brings H.264 Constrained Baseline (42e01f) and Main (4d001f). A produce of a family not listed fails.
+          items: {enum: [opus, vp8, h264, g711]}
+          description: The room's codec families. "h264" brings H.264 Constrained Baseline (42e01f) and Main (4d001f); "g711" brings PCMA and PCMU (8 kHz mono, as IP cameras send them). A produce of a family not listed fails.
         onDuplicateIdentity:
           const: replace
           description: What every room does (signalling.md); accepted so a caller can state it.

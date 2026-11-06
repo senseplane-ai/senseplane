@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package relay keeps one camera flowing: pull its RTSP stream, push the same
-// H.264 access units over WHIP, and start again with backoff when either side
+// H.264 access units (and its G.711 sound, when it has some) over WHIP, and start again with backoff when either side
 // fails. Nothing is decoded or re-encoded. States go to OnState so the bridge
 // can report them (connecting, online, reconnecting, offline).
 package relay
@@ -24,10 +24,16 @@ import (
 
 // AccessUnit is one H.264 access unit in Annex B form, with its exact duration
 // (the RTP timestamp distance to the next one).
+//
+// When Audio is set it is a piece of the camera's sound instead: Audio names the
+// codec ("PCMA" or "PCMU") and Data is that G.711 audio, sent unchanged. A
+// Puller announces the camera's sound with one such unit with no Data, before
+// any video, so the WHIP session is opened with an audio track.
 type AccessUnit struct {
 	Data     []byte
 	Duration time.Duration
 	Keyframe bool
+	Audio    string
 }
 
 // Puller opens a camera and calls onAU for every access unit until the stream
@@ -41,8 +47,14 @@ type Publisher interface {
 	Close() error
 }
 
-// Dialer connects a WHIP session and returns once media can flow.
-type Dialer func(ctx context.Context, whipURL, token string) (Publisher, error)
+// AudioPublisher is a Publisher that can also send the camera's G.711 sound.
+type AudioPublisher interface {
+	WriteAudio(data []byte, duration time.Duration) error
+}
+
+// Dialer connects a WHIP session and returns once media can flow. audio is the
+// camera's sound codec ("PCMA", "PCMU"), or "" for video only.
+type Dialer func(ctx context.Context, whipURL, token, audio string) (Publisher, error)
 
 // State is what the bridge reports for a camera.
 type State string
@@ -177,13 +189,25 @@ func attempt(ctx context.Context, cam Camera, o Options) error {
 	var dialing atomic.Bool // the stall watchdog waits while WHIP negotiates
 	last.Store(time.Now().UnixNano())
 
+	audio := "" // the camera's sound codec, once the puller announced it
 	onAU := func(au AccessUnit) error {
-		last.Store(time.Now().UnixNano())
 		mu.Lock()
 		defer mu.Unlock()
 		if actx.Err() != nil {
 			return actx.Err()
 		}
+		if au.Audio != "" {
+			// Sound never counts as the camera being alive: a stalled picture must still reconnect.
+			if pub == nil {
+				audio = au.Audio // before the first keyframe: the announcement, or sound to drop
+				return nil
+			}
+			if ap, ok := pub.(AudioPublisher); ok && len(au.Data) > 0 {
+				return ap.WriteAudio(au.Data, au.Duration)
+			}
+			return nil
+		}
+		last.Store(time.Now().UnixNano())
 		if pub == nil {
 			if !au.Keyframe {
 				return nil // start the recording on a keyframe
@@ -200,7 +224,7 @@ func attempt(ctx context.Context, cam Camera, o Options) error {
 			if cam.WHIPToken != "" {
 				token = cam.WHIPToken
 			}
-			p, err := o.Dial(dctx, cam.WHIPURL, token)
+			p, err := o.Dial(dctx, cam.WHIPURL, token, audio)
 			last.Store(time.Now().UnixNano())
 			dialing.Store(false)
 			dcancel()

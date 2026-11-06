@@ -48,7 +48,7 @@ versioned routes, and the signalling protocol stays at `protocolVersion: 1`.
 
 1. At token time (capture page join, bridge config, WHIP authorize) the API
    ensures the camera's room (`POST /control/rooms`, idempotent) with
-   `liveness: "any"`, `codecs: ["h264", "opus"]` and room events, and the
+   `liveness: "any"`, `codecs: ["h264", "opus", "g711"]` and room events, and the
    camera's feed (`POST /control/egress` with a `segments` and a `frames` sink,
    idempotent per `sessionId`). Then it mints the join token.
 2. The camera joins and produces (signalling or WHIP). Newest replaces old.

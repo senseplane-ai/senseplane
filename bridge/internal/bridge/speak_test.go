@@ -117,7 +117,7 @@ func speakBox(t *testing.T, f *speakAPI, o Options) (*Bridge, func()) {
 		<-ctx.Done() // the video relay isn't what this tests
 		return ctx.Err()
 	}
-	o.Dial = func(context.Context, string, string) (relay.Publisher, error) {
+	o.Dial = func(context.Context, string, string, string) (relay.Publisher, error) {
 		return &pub{done: make(chan error)}, nil
 	}
 	b := New(o)

@@ -106,7 +106,7 @@ func TestMultiCameraReconcileAndHealth(t *testing.T) {
 		}
 		return ctx.Err()
 	}
-	dial := func(_ context.Context, url, _ string) (relay.Publisher, error) {
+	dial := func(_ context.Context, url, _, _ string) (relay.Publisher, error) {
 		mu.Lock()
 		dialled[url] = true
 		mu.Unlock()

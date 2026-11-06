@@ -123,6 +123,22 @@ describe("media callbacks", () => {
     expect((await call("GET", `/v1/sources/${c.id}`)).json().status).toBe("offline");
   });
 
+  it("says whether sound is arriving with a camera that has sound turned on", async () => {
+    const c = await camera("Nursery");
+    expect((await call("PATCH", `/v1/sources/${c.id}`, { record_audio: true })).statusCode).toBe(200);
+    const now = async () => (await call("GET", `/v1/sources/${c.id}/now`)).json() as { hearing?: boolean };
+    const online = (codecs: string[]) => cb(c.feedToken, feedEvent(c, "source.online", { at: new Date().toISOString(), codecs, producer_id: "p" }));
+    expect(await now()).not.toHaveProperty("hearing"); // not streaming: not known
+    await online(["h264"]);
+    expect((await now()).hearing).toBe(false); // a picture with no sound: "nothing heard" would be a lie
+    await new Promise((r) => setTimeout(r, 20));
+    await online(["h264", "pcma"]);
+    expect((await now()).hearing).toBe(true);
+    await new Promise((r) => setTimeout(r, 20));
+    await cb(c.feedToken, feedEvent(c, "source.offline", { at: new Date().toISOString(), reason: "publisher_left" }));
+    expect(await now()).not.toHaveProperty("hearing");
+  });
+
   it("marks a camera offline when it leaves its room, but not when a newer connection replaced it", async () => {
     const c = await camera("Leaves");
     const room = (event: string, data: Record<string, unknown>) =>

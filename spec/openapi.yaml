@@ -3763,7 +3763,7 @@ components:
         location: {type: string, maxLength: 120}
         site: {type: [string, 'null'], maxLength: 120, description: 'A place the source belongs to, for grouping questions across places'}
         type: {type: string, enum: [browser, sensor, whip, rtsp], description: 'browser sources get a capture link; whip sources get a WHIP URL and bearer token (OBS, encoders); rtsp sources are IP cameras relayed by a bridge and get a bridge token and docker command; sensor sources get an integration token for pushing readings'}
-        record_audio: {type: boolean, default: false, description: Ignored for rtsp and sensor sources (bridge cameras are video only)}
+        record_audio: {type: boolean, default: false, description: 'Ignored for sensor sources. A bridge camera (rtsp) sends its sound when it is G.711 (PCMA or PCMU); other camera audio (AAC) is not carried.'}
         senses:
           type: array
           minItems: 1
@@ -3818,6 +3818,12 @@ components:
         captured_at: {type: string, format: date-time}
         snapshot_url: {type: string, format: uri}
         readings: {type: array, items: {$ref: '#/components/schemas/Reading'}}
+        hearing:
+          type: boolean
+          description: >-
+            Whether sound is arriving with the live stream right now. Present only while the source is
+            online and the caller may hear it. false: the camera streams no sound (its microphone is off,
+            or it sends audio in a format Senseplane can't carry), so "no sounds detected" would mean nothing.
     AskRequest:
       type: object
       required: [question]

@@ -42,8 +42,8 @@ the same value in every case, so existing clients keep working.
   WHIP URL; `/internal/media/whip-authorize` accepts a bridge token for that
   bridge's `rtsp` sources only. The media plane is unchanged, and limits,
   allowances and auditing apply as for any WHIP publisher.
-- Bridge cameras are **video only**: camera audio is usually AAC, which WebRTC
-  can't carry without re-encoding. `record_audio` is ignored for `rtsp`.
+- Bridge cameras send their sound when it is G.711; other camera audio is not
+  carried (see the addendum of 2026-11-06).
 - Only H.264 is relayed (ADR 0012); an H.265 or MJPEG camera reports
   "set its stream to H.264".
 
@@ -156,3 +156,30 @@ to `SEGMENT_SECONDS`) and the playlist were lost on every disconnect. The
 recorder now sends each leg a few harmless RTP packets after "q" (sequence
 numbers spread over the range, so one is "next" for FFmpeg's reorder queue);
 the demuxer returns, FFmpeg ends normally and writes the open segment.
+
+## Addendum (2026-11-06): camera sound
+
+Bridge cameras were video only, and Listen on one answered "no sounds
+detected": silence that read as an all-clear, on a baby monitor. Most IP
+cameras (Galayou, Tapo, most Hikvision and Dahua defaults) send G.711, which
+WebRTC carries as is (RFC 7874), so:
+
+- The bridge sends a camera's G.711 (PCMA or PCMU, 8 kHz mono) on a second
+  WHIP track, unchanged, beside the H.264. Nothing is decoded in the bridge,
+  which stays a static Go binary. AAC sound (some Reolink, Amcrest) would need
+  re-encoding there, so such a camera still streams its picture alone.
+- Sound stays opt-in: `record_audio` now applies to `rtsp` sources as to any
+  other camera, and the WHIP token lets a camera publish audio only when it is
+  on. The media plane refuses the audio section otherwise; the picture goes on.
+- The media plane's rooms take a new codec family, `g711` (control API). Rooms
+  are still forwarded as received (ADR 0012); the recorder copies the video and
+  turns only G.711 into AAC, because an MP4 that browsers play can't hold G.711.
+  The frames path decodes it for the sound detector like Opus. The media
+  image's FFmpeg gains the `pcm_alaw` and `pcm_mulaw` decoders and the native
+  `aac` encoder (still LGPL).
+- `source.online` names the codecs really consumed (`pcma`, `pcmu`). The API
+  keeps whether the live stream carries sound (`sources.live_audio`) and shows
+  it as `hearing` on `GET /sources/{id}/now`; Listen answers "no sound is
+  arriving" when it is false instead of "no sounds detected".
+- A hosted media plane must support `g711` before the API asks for it in a
+  room; TribeNest's media server, WHIP relay and egress gained the same change.

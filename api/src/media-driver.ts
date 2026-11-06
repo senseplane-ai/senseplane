@@ -73,7 +73,7 @@ export function createMediaDriver(deps: {
       maxParticipants: (o.maxViewersPerSource ?? 50) + 3,
       metadata: { account_id: accountId, source_id: sourceId },
       callback: { url: callbackUrl, token },
-      options: { liveness: "any", codecs: ["h264", "opus"], onDuplicateIdentity: "replace", events: ["participant.joined", "participant.left", "producer.added", "producer.removed"] },
+      options: { liveness: "any", codecs: ["h264", "opus", "g711"], onDuplicateIdentity: "replace", events: ["participant.joined", "participant.left", "producer.added", "producer.removed"] },
     });
     return r.signal_url;
   };

@@ -419,8 +419,8 @@ var discover = func(ctx context.Context) ([]onvif.Found, error) { return onvif.D
 // dial connects the WHIP push (a fake in tests).
 var dial = dialWHIP
 
-func dialWHIP(ctx context.Context, url, token string) (relay.Publisher, error) {
-	s, err := whip.Dial(ctx, url, token)
+func dialWHIP(ctx context.Context, url, token, audio string) (relay.Publisher, error) {
+	s, err := whip.Dial(ctx, url, token, audio)
 	if err != nil {
 		return nil, err
 	}

@@ -3,7 +3,7 @@
 
 // SDP ↔ mediasoup for WHIP (RFC 9725, spec/media/whip.md). A WHIP offer is
 // turned into one producer per accepted media section; the answer is ICE-lite
-// with all our candidates, recvonly, BUNDLE'd. H.264 and Opus only, as received.
+// with all our candidates, recvonly, BUNDLE'd. H.264, Opus and G.711 only, as received.
 import { randomInt } from "node:crypto";
 import type { types } from "mediasoup";
 import * as sdpTransform from "sdp-transform";
@@ -95,16 +95,22 @@ function rank(p: types.RtpParameters): number {
   return 2;
 }
 
+/** The audio we take, in preference order: Opus (browsers, phones), then G.711 (IP cameras through the box). */
+const AUDIO = [
+  { name: "opus", mimeType: "audio/opus", clockRate: 48000, channels: 2 },
+  { name: "pcma", mimeType: "audio/PCMA", clockRate: 8000, channels: 1 },
+  { name: "pcmu", mimeType: "audio/PCMU", clockRate: 8000, channels: 1 },
+] as const;
+
 function audioCandidates(section: MediaSection, caps: types.RtpCapabilities, mid: string): types.RtpParameters[] {
-  return (section.rtp ?? [])
-    .filter((r) => r.codec.toLowerCase() === "opus" && r.rate === 48000)
-    .map((r) => ({
-      mid,
-      codecs: [{ mimeType: "audio/opus", payloadType: r.payload, clockRate: 48000, channels: 2, parameters: fmtpOf(section, r.payload), rtcpFeedback: feedbackOf(section, r.payload) }],
-      headerExtensions: headerExtensionsOf(section, caps, "audio"),
-      encodings: encodingsOf(section, false),
-      rtcp: { cname: cnameOf(section), reducedSize: true },
-    }));
+  const rtp = section.rtp ?? [];
+  return AUDIO.flatMap((a) => rtp.filter((r) => r.codec.toLowerCase() === a.name && r.rate === a.clockRate).map((r) => ({
+    mid,
+    codecs: [{ mimeType: a.mimeType, payloadType: r.payload, clockRate: a.clockRate, channels: a.channels, parameters: fmtpOf(section, r.payload), rtcpFeedback: feedbackOf(section, r.payload) }],
+    headerExtensions: headerExtensionsOf(section, caps, "audio"),
+    encodings: encodingsOf(section, false),
+    rtcp: { cname: cnameOf(section), reducedSize: true },
+  })));
 }
 
 /** Parses a WHIP offer; `audio` says whether this source may publish audio. */
@@ -142,7 +148,7 @@ export function parseOffer(sdp: string, caps: types.RtpCapabilities, opts: { aud
     if (m.type === "audio" && opts.audio && !sections.some((s) => s.plan?.kind === "audio")) {
       const candidates = audioCandidates(m, caps, mid);
       if (candidates.length) return sections.push({ plan: { mid, kind: "audio", candidates } });
-      return sections.push({ rejected: "no Opus", mid, kind: m.type });
+      return sections.push({ rejected: "no Opus or G.711", mid, kind: m.type });
     }
     return sections.push({ rejected: m.type === "audio" ? "audio not recorded for this source" : `unsupported section ${m.type}`, mid, kind: m.type });
   });

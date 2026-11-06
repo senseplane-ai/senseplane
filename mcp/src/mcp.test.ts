@@ -14,6 +14,7 @@ import { tools } from "./tools.js";
 const KEY = "sk_test_key";
 const SOURCES = [
   { id: "src_cam", name: "Front door", location: "Door", type: "browser", senses: ["video", "speak"], speaker: true, status: "online", record_audio: false, retention_days: null, zones: [], privacy_masks: [], sensor_thresholds: null, created_at: "2026-10-16T00:00:00Z" },
+  { id: "src_baby", name: "Nursery", location: "Nursery", type: "rtsp", senses: ["video", "audio"], status: "online", record_audio: true, retention_days: null, zones: [], privacy_masks: [], sensor_thresholds: null, created_at: "2026-10-16T00:00:00Z" },
   { id: "src_th", name: "Kitchen sensor", location: "Kitchen", type: "sensor", senses: ["temperature", "humidity"], status: "online", record_audio: false, retention_days: null, zones: [], privacy_masks: [], sensor_thresholds: null, created_at: "2026-10-16T00:00:00Z" },
 ];
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
@@ -44,6 +45,7 @@ const fakeApi: typeof fetch = async (input, init) => {
   if (p.endsWith(".jpg")) return new Response(JPEG, { headers: { "content-type": "image/jpeg" } });
   if (p === "/sources") return json({ data: SOURCES, next_cursor: null });
   if (p === "/sources/src_cam/now") return json({ source_id: "src_cam", captured_at: "2026-10-16T01:00:00Z", snapshot_url: "http://api/media/t/snapshot.jpg" });
+  if (p === "/sources/src_baby/now") return json({ source_id: "src_baby", captured_at: "2026-10-16T01:00:00Z", hearing: false });
   if (p === "/sources/src_cam/ask") return json({ answer: "A parcel is on the step.", confidence: 0.9, snapshot_url: "http://api/media/t2/snapshot.jpg" });
   if (p === "/sources/src_th/now") return json({ source_id: "src_th", captured_at: "2026-10-16T01:00:00Z", readings: [
     { sense: "temperature", kind: "number", value: 22.4, unit: "celsius", measured_at: "2026-10-16T01:00:00Z" },
@@ -148,6 +150,14 @@ describe("mcp tools", () => {
     expect(listed).toEqual(tools.map((t) => t.name));
   });
 
+  it("says no sound is arriving instead of 'no sounds detected' for a camera streaming silence", async () => {
+    const r = (await client.callTool({ name: "listen", arguments: { source: "src_baby", seconds: 1 } })) as { isError?: boolean; content: { text: string }[] };
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(r.content[0]!.text).error;
+    expect(err.code).toBe("no_audio");
+    expect(err.message).toMatch(/Nursery is streaming, but no sound is arriving/);
+  });
+
   it("tells agents that everyday objects can be watched cheaply", async () => {
     const watchFor = (await client.listTools()).tools.find((t) => t.name === "watch_for")!;
     expect(watchFor.description).toMatch(/64 everyday objects/);
@@ -160,7 +170,7 @@ describe("mcp tools", () => {
     const out: Record<string, { isError?: boolean; content: { type: string; text?: string; data?: string }[] }> = {};
     for (const t of tools) out[t.name] = (await client.callTool({ name: t.name, arguments: ARGS[t.name] })) as never;
     const body = (n: string) => JSON.parse(out[n]!.content.find((c) => c.type === "text")!.text!);
-    expect(body("list_senses").sources).toHaveLength(2);
+    expect(body("list_senses").sources).toHaveLength(3);
     expect(out.look!.content[0]).toMatchObject({ type: "image", mimeType: "image/jpeg", data: JPEG.toString("base64") });
     expect(out.listen!.isError).toBe(true); // the camera has no audio sense
     expect(body("listen").error.code).toBe("forbidden_sense");

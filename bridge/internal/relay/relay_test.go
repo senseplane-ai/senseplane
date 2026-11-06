@@ -107,7 +107,7 @@ func TestReconnectsAfterCameraFailuresWithBackoff(t *testing.T) {
 		return stream(ctx, onAU)
 	}
 	var pubs []*fakePub
-	dial := func(_ context.Context, url, token string) (Publisher, error) {
+	dial := func(_ context.Context, url, token, _ string) (Publisher, error) {
 		if url != "https://media/whip/src_1" || token != "camera.whip.jwt" { // the camera's own bearer, not the bridge token
 			t.Errorf("dial %s %s", url, token)
 		}
@@ -162,7 +162,7 @@ func TestStalledCameraIsReconnected(t *testing.T) {
 		<-ctx.Done() // then silence, without an error
 		return ctx.Err()
 	}
-	dial := func(context.Context, string, string) (Publisher, error) { return &fakePub{done: make(chan error)}, nil }
+	dial := func(context.Context, string, string, string) (Publisher, error) { return &fakePub{done: make(chan error)}, nil }
 	rec := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -191,7 +191,7 @@ func TestWaitsForAKeyframeAndReportsMediaErrors(t *testing.T) {
 		}
 		return stream(ctx, onAU)
 	}
-	dial := func(context.Context, string, string) (Publisher, error) {
+	dial := func(context.Context, string, string, string) (Publisher, error) {
 		dials++
 		return nil, errors.New("whip: 409: source_limit_reached")
 	}
@@ -246,7 +246,7 @@ func TestACameraAboveTheLimitIsNeverSentAndRetriedSlowly(t *testing.T) {
 		}
 		return ctx.Err()
 	}
-	dial := func(context.Context, string, string) (Publisher, error) {
+	dial := func(context.Context, string, string, string) (Publisher, error) {
 		dials.Add(1)
 		return &fakePub{done: make(chan error)}, nil
 	}
@@ -284,7 +284,7 @@ func TestACameraWithinTheLimitIsSent(t *testing.T) {
 		}
 		return ctx.Err()
 	}
-	dial := func(context.Context, string, string) (Publisher, error) {
+	dial := func(context.Context, string, string, string) (Publisher, error) {
 		dials.Add(1)
 		return &fakePub{done: make(chan error)}, nil
 	}
@@ -295,5 +295,108 @@ func TestACameraWithinTheLimitIsSent(t *testing.T) {
 	rec.waitFor(t, Online, 1)
 	if dials.Load() != 1 {
 		t.Fatalf("dials %d", dials.Load())
+	}
+}
+
+// audioPub is a publisher that also takes sound.
+type audioPub struct {
+	fakePub
+	audio []int // lengths of the sound written
+}
+
+func (p *audioPub) WriteAudio(data []byte, _ time.Duration) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.audio = append(p.audio, len(data))
+	return nil
+}
+
+func (p *audioPub) sound() []int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]int(nil), p.audio...)
+}
+
+func TestACamerasSoundIsAnnouncedThenSentWithThePicture(t *testing.T) {
+	pull := func(ctx context.Context, _ string, onAU func(AccessUnit) error) error {
+		if err := onAU(AccessUnit{Audio: "PCMA"}); err != nil { // the announcement
+			return err
+		}
+		if err := onAU(AccessUnit{Audio: "PCMA", Data: make([]byte, 7), Duration: time.Millisecond}); err != nil {
+			return err // before the first keyframe: dropped
+		}
+		for ctx.Err() == nil {
+			if err := onAU(AccessUnit{Data: []byte{0, 0, 0, 1, 0x65}, Duration: time.Millisecond, Keyframe: true}); err != nil {
+				return err
+			}
+			if err := onAU(AccessUnit{Audio: "PCMA", Data: make([]byte, 160), Duration: 20 * time.Millisecond}); err != nil {
+				return err
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return ctx.Err()
+	}
+	var mu sync.Mutex
+	var asked []string
+	p := &audioPub{fakePub: fakePub{done: make(chan error)}}
+	dial := func(_ context.Context, _, _, audio string) (Publisher, error) {
+		mu.Lock()
+		asked = append(asked, audio)
+		mu.Unlock()
+		return p, nil
+	}
+	rec := &recorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Run(ctx, Camera{SourceID: "s"}, fast(Options{Pull: pull, Dial: dial, OnState: rec.on}))
+	rec.waitFor(t, Online, 1)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(p.sound()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) == 0 || asked[0] != "PCMA" {
+		t.Fatalf("dialled with audio %q, want PCMA", asked)
+	}
+	for _, n := range p.sound() {
+		if n != 160 {
+			t.Fatalf("sound written %v: the unit from before the keyframe must be dropped", p.sound())
+		}
+	}
+	if len(p.sound()) < 3 {
+		t.Fatalf("sound written %v", p.sound())
+	}
+}
+
+func TestSoundAloneDoesNotKeepAStalledCameraOnline(t *testing.T) {
+	var pulls atomic.Int32
+	pull := func(ctx context.Context, _ string, onAU func(AccessUnit) error) error {
+		pulls.Add(1)
+		if err := onAU(AccessUnit{Data: []byte{0, 0, 0, 1, 0x65}, Duration: time.Millisecond, Keyframe: true}); err != nil {
+			return err
+		}
+		for ctx.Err() == nil { // the picture froze; the sound goes on
+			if err := onAU(AccessUnit{Audio: "PCMU", Data: make([]byte, 160), Duration: 20 * time.Millisecond}); err != nil {
+				return err
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		return ctx.Err()
+	}
+	dial := func(context.Context, string, string, string) (Publisher, error) {
+		return &audioPub{fakePub: fakePub{done: make(chan error)}}, nil
+	}
+	rec := &recorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Run(ctx, Camera{SourceID: "s"}, fast(Options{Pull: pull, Dial: dial, OnState: rec.on}))
+	rec.waitFor(t, Reconnecting, 1)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for i, s := range rec.states {
+		if s == Reconnecting && rec.detail[i] != ErrStalled.Error() {
+			t.Fatalf("reconnected for %q, want the stall", rec.detail[i])
+		}
 	}
 }

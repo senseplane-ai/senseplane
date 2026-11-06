@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Build from the repo root: docker build -f media/Dockerfile .
 
-# --- FFmpeg: LGPL, shared libraries; remux for segments, H.264 decode + MJPEG for frames (ADR 0015) 
+# --- FFmpeg: LGPL, shared libraries; remux for segments (G.711 camera sound to AAC), H.264 decode + MJPEG for frames (ADR 0015)
 FROM debian:bookworm-slim AS ffmpeg
 ARG FFMPEG_VERSION=8.0.3
 ARG FFMPEG_SHA256=6136812ea6d4e68bdba27e33c2a94382711cdf4f8602ffef056ff792bd6f9818
@@ -19,9 +19,9 @@ RUN ./configure --prefix=/opt/ffmpeg --enable-shared --disable-static --disable-
       --enable-protocol=file,pipe,udp,rtp \
       --enable-demuxer=sdp,rtp,mov,h264 \
       --enable-muxer=hls,mp4,mov,rtp,null,rawvideo,pcm_f32le,image2pipe \
-      --enable-encoder=rawvideo,pcm_f32le,mjpeg \
+      --enable-encoder=rawvideo,pcm_f32le,mjpeg,aac \
       --enable-parser=h264,opus,aac \
-      --enable-decoder=h264,opus,aac \
+      --enable-decoder=h264,opus,aac,pcm_alaw,pcm_mulaw \
       --enable-bsf=h264_mp4toannexb,extract_extradata,aac_adtstoasc \
       --enable-filter=null,anull,aresample,aformat,format,scale,fps,pad,setsar \
       --enable-swscale --enable-swresample \

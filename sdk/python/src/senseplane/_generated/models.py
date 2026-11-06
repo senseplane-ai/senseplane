@@ -1598,7 +1598,7 @@ class SourceCreate(BaseModel):
     """
     record_audio: bool | None = False
     """
-    Ignored for rtsp and sensor sources (bridge cameras are video only)
+    Ignored for sensor sources. A bridge camera (rtsp) sends its sound when it is G.711 (PCMA or PCMU); other camera audio (AAC) is not carried.
     """
     senses: Annotated[list[Sense3] | None, Field(min_length=1)] = None
     """
@@ -4316,6 +4316,10 @@ class SourceNow(BaseModel):
     captured_at: AwareDatetime
     snapshot_url: str | None = None
     readings: list[Reading] | None = None
+    hearing: bool | None = None
+    """
+    Whether sound is arriving with the live stream right now. Present only while the source is online and the caller may hear it. false: the camera streams no sound (its microphone is off, or it sends audio in a format Senseplane can't carry), so "no sounds detected" would mean nothing.
+    """
 
 
 class HistoryResponse(BaseModel):

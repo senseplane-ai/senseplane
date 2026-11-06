@@ -69,7 +69,7 @@ describe("sources, ingest tokens, account retention, segment index", () => {
     // At token time the camera's room and its feed (segments into the account's prefix, frames) exist (ADR 0049).
     const room = plane.rooms.get(`sp-${src.id}`)!;
     expect(room.input).toMatchObject({
-      options: { liveness: "any", codecs: ["h264", "opus"] }, callback: { url: "https://api.test/internal/media/callbacks" },
+      options: { liveness: "any", codecs: ["h264", "opus", "g711"] }, callback: { url: "https://api.test/internal/media/callbacks" },
     });
     expect(room.input.options!.events).toContain("participant.joined");
     const [feed] = plane.feeds(src.id);

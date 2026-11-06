@@ -19,7 +19,8 @@ import (
 
 // loopbackServer is a WHIP endpoint whose only candidates are on 127.0.0.1,
 // like a local media plane announcing 127.0.0.1. It records each offer.
-func loopbackServer(t *testing.T) (*httptest.Server, func() []string) {
+// onTrack, when given, sees each track the answerer receives.
+func loopbackServer(t *testing.T, onTrack ...func(*webrtc.TrackRemote)) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var offers []string
@@ -45,6 +46,9 @@ func loopbackServer(t *testing.T) (*httptest.Server, func() []string) {
 		mu.Lock()
 		pcs = append(pcs, pc)
 		mu.Unlock()
+		for _, f := range onTrack {
+			pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) { f(tr) })
+		}
 		if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: string(body)}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -81,7 +85,7 @@ func TestDialReachesLoopbackOnlyMediaPlane(t *testing.T) {
 	srv, offers := loopbackServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	s, err := Dial(ctx, srv.URL+"/whip/src_1", "whp_test")
+	s, err := Dial(ctx, srv.URL+"/whip/src_1", "whp_test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,5 +96,63 @@ func TestDialReachesLoopbackOnlyMediaPlane(t *testing.T) {
 	}
 	if err := s.Connected(ctx); err != nil {
 		t.Fatalf("not connected: %v", err)
+	}
+}
+
+func TestDialSendsTheCamerasG711Sound(t *testing.T) {
+	got := make(chan string, 4)
+	srv, offers := loopbackServer(t, func(tr *webrtc.TrackRemote) {
+		if tr.Kind() == webrtc.RTPCodecTypeAudio {
+			if p, _, err := tr.ReadRTP(); err == nil && len(p.Payload) == 160 {
+				got <- tr.Codec().MimeType
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	s, err := Dial(ctx, srv.URL+"/whip/src_1", "whp_test", "PCMA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.pc.Close()
+	if o := offers(); len(o) != 1 || !strings.Contains(o[0], "PCMA/8000") || !strings.Contains(o[0], "m=audio") {
+		t.Fatalf("offer has no PCMA audio:\n%s", strings.Join(o, "\n"))
+	}
+	if err := s.Connected(ctx); err != nil {
+		t.Fatalf("not connected: %v", err)
+	}
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case mime := <-got:
+			if mime != webrtc.MimeTypePCMA {
+				t.Fatalf("received %s", mime)
+			}
+			return
+		case <-tick.C:
+			if err := s.WriteAudio(make([]byte, 160), 20*time.Millisecond); err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("no sound arrived")
+		}
+	}
+}
+
+func TestDialWithoutSoundOffersVideoOnly(t *testing.T) {
+	srv, offers := loopbackServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	s, err := Dial(ctx, srv.URL+"/whip/src_1", "whp_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.pc.Close()
+	if o := offers(); strings.Contains(o[0], "m=audio") {
+		t.Fatal("offered audio without any")
+	}
+	if err := s.WriteAudio([]byte{1}, time.Millisecond); err != nil {
+		t.Fatal(err)
 	}
 }

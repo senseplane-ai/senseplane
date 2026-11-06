@@ -213,8 +213,9 @@ export function registerSourceRoutes(app: FastifyInstance, deps: SourcesDeps) {
       if (body.senses && body.type !== "sensor") throw new ApiError(400, "validation_failed", "senses can only be chosen for sensor sources");
       if ((body.rtsp_url || body.talk_url || body.bridge_id) && body.type !== "rtsp") throw new ApiError(400, "validation_failed", "rtsp_url, talk_url and bridge_id are for rtsp sources");
       if (body.bridge_id && !body.rtsp_url) throw new ApiError(400, "validation_failed", "adding a camera to an existing bridge needs its rtsp_url");
-      // Bridge cameras are video only: camera audio is usually AAC, which WebRTC can't carry without re-encoding (ADR 0045).
-      const recordAudio = body.type !== "sensor" && body.type !== "rtsp" && (body.record_audio ?? false);
+      // Sound is opt-in for every camera. A bridge camera's sound arrives when it is G.711 (most cameras), which
+      // WebRTC carries as is; AAC would need re-encoding, so such a camera streams its picture alone (ADR 0045).
+      const recordAudio = body.type !== "sensor" && (body.record_audio ?? false);
       let bridgeToken: string | undefined;
       const source = await deps.data.withAccount(accountId, async (s) => {
         const count = (await s.sources.list()).length;

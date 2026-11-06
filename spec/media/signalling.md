@@ -127,8 +127,9 @@ A room is created by `POST /control/rooms`. It ends after
 `emptyTimeoutSeconds` (default 300) with nobody in it who keeps it alive:
 `human` or `sip` participants, or, with `liveness: "any"`, anyone but an
 `egress`. A room's `codecs` decide what may be produced: Senseplane's rooms
-are `["h264", "opus"]` (H.264 Constrained Baseline and Main, packetization
-mode 1; Opus), so a VP8 produce fails.
+are `["h264", "opus", "g711"]` (H.264 Constrained Baseline and Main,
+packetization mode 1; Opus; G.711 PCMA and PCMU from IP cameras), so a VP8
+produce fails.
 
 ## Live view (ADR 0042)
 

@@ -14,7 +14,7 @@ import { SpanKind, currentTraceparent, withSpan } from "@senseplane/telemetry";
 import type { Log } from "../callbacks.js";
 import { parsePlaylist } from "../playlist.js";
 import { ffmpegProcesses, metrics } from "../telemetry.js";
-import { type RtpLeg, ffprobePath, sdpFor, wakeDemuxer } from "./ffmpeg.js";
+import { type RtpLeg, ffprobePath, recordAudioArgs, sdpFor, wakeDemuxer } from "./ffmpeg.js";
 import type { Stored, Uploader } from "./uploader.js";
 import type { MaxResolution } from "./validate.js";
 
@@ -117,7 +117,7 @@ export class SegmentsRun {
       "-analyzeduration", "3000000", "-probesize", "5000000",
       "-i", join(this.o.dir, "in.sdp"),
       "-map", "0:v:0", ...(this.hasAudio ? ["-map", "0:a:0"] : []),
-      "-c", "copy",
+      "-c", "copy", ...recordAudioArgs(this.o.legs),
       "-f", "hls", "-hls_time", String(this.o.segmentSeconds), "-hls_segment_type", "fmp4",
       "-hls_flags", "program_date_time+independent_segments", "-hls_list_size", "20",
       "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", join(this.o.dir, "seg_%06d.m4s"),

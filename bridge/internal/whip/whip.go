@@ -1,8 +1,8 @@
 // Copyright 2026 The Senseplane Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package whip publishes an H.264 stream to a WHIP endpoint (RFC 9725)
-// without re-encoding. The bridge uses it to relay RTSP cameras: go2rtc pulls
+// Package whip publishes an H.264 stream, and a camera's G.711 sound when it
+// has one, to a WHIP endpoint (RFC 9725) without re-encoding. The bridge uses it to relay RTSP cameras: go2rtc pulls
 // the camera, this client pushes the same H.264 access units to Senseplane.
 // go2rtc's own publish module only speaks RTMP (ADR 0034), hence this client.
 package whip
@@ -27,6 +27,7 @@ import (
 type Session struct {
 	pc        *webrtc.PeerConnection
 	track     *webrtc.TrackLocalStaticSample
+	audio     *webrtc.TrackLocalStaticSample
 	resource  string
 	token     string
 	client    *http.Client
@@ -42,9 +43,24 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("whip: %d: %s", e.Status, e.Body) }
 
-// Dial negotiates a sendonly H.264 session with the WHIP endpoint.
-func Dial(ctx context.Context, endpoint, token string) (*Session, error) {
+// G.711 as cameras send it (8 kHz mono), with its static RTP payload types.
+var g711 = map[string]webrtc.RTPCodecParameters{
+	"PCMA": {RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000}, PayloadType: 8},
+	"PCMU": {RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}, PayloadType: 0},
+}
+
+// Dial negotiates a sendonly H.264 session with the WHIP endpoint. audio names
+// the camera's sound ("PCMA" or "PCMU") to send alongside, unchanged; "" sends
+// video only. The media plane may refuse the audio (a source that doesn't
+// record sound): the video goes on and WriteAudio is then a no-op.
+func Dial(ctx context.Context, endpoint, token, audio string) (*Session, error) {
 	m := &webrtc.MediaEngine{}
+	ac, withAudio := g711[audio]
+	if withAudio {
+		if err := m.RegisterCodec(ac, webrtc.RTPCodecTypeAudio); err != nil {
+			return nil, err
+		}
+	}
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:    webrtc.MimeTypeH264,
@@ -84,6 +100,17 @@ func Dial(ctx context.Context, endpoint, token string) (*Session, error) {
 	if _, err = pc.AddTransceiverFromTrack(track, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
 		pc.Close()
 		return nil, err
+	}
+	var audioTrack *webrtc.TrackLocalStaticSample
+	if withAudio {
+		if audioTrack, err = webrtc.NewTrackLocalStaticSample(ac.RTPCodecCapability, "audio", "senseplane-bridge"); err != nil {
+			pc.Close()
+			return nil, err
+		}
+		if _, err = pc.AddTransceiverFromTrack(audioTrack, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
+			pc.Close()
+			return nil, err
+		}
 	}
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
@@ -126,7 +153,7 @@ func Dial(ctx context.Context, endpoint, token string) (*Session, error) {
 		pc.Close()
 		return nil, err
 	}
-	return &Session{pc: pc, track: track, resource: resolve(endpoint, loc), token: token, client: client, connected: connected, done: done}, nil
+	return &Session{pc: pc, track: track, audio: audioTrack, resource: resolve(endpoint, loc), token: token, client: client, connected: connected, done: done}, nil
 }
 
 func resolve(endpoint string, loc *url.URL) string {
@@ -160,6 +187,15 @@ func (s *Session) Done() <-chan error { return s.done }
 // units) unchanged; duration advances the RTP clock.
 func (s *Session) WriteAccessUnit(au []byte, duration time.Duration) error {
 	return s.track.WriteSample(media.Sample{Data: au, Duration: duration})
+}
+
+// WriteAudio sends one packet's worth of the camera's G.711 sound unchanged;
+// duration advances the RTP clock. Without an audio track it does nothing.
+func (s *Session) WriteAudio(data []byte, duration time.Duration) error {
+	if s.audio == nil {
+		return nil
+	}
+	return s.audio.WriteSample(media.Sample{Data: data, Duration: duration})
 }
 
 // PumpAnnexB reads an H.264 Annex B byte stream and sends it, one NAL unit at

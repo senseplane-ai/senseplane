@@ -73,6 +73,8 @@ export interface SourcesTable {
   rtsp_url: ColumnType<string | null, string | null | undefined, string | null>;
   /** Where the camera's speaker is reached instead of its RTSP backchannel (ADR 0075), encrypted like rtsp_url. */
   talk_url: ColumnType<string | null, string | null | undefined, string | null>;
+  /** Whether the live stream carries sound (from source.online); null when offline or not known. */
+  live_audio: ColumnType<boolean | null, boolean | null | undefined, boolean | null>;
   bridge_state: ColumnType<string | null, string | null | undefined, string | null>;
   bridge_detail: ColumnType<string | null, string | null | undefined, string | null>;
   /** When `status` last changed (set by a trigger). */

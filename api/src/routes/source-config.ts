@@ -208,6 +208,7 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
     if (!found) throw new ApiError(404, "not_found", "source not found");
     const now = new Date().toISOString();
     const isVideo = found.src.senses.includes("video") && canSense(req, found.src.id, "video");
+    const hears = found.src.senses.includes("audio") && canSense(req, found.src.id, "audio");
     const readings = found.readings.filter((r) => canSense(req, found.src.id, r.row.sense));
     const newest = readings.reduce<Date | null>((m, r) => (!m || new Date(r.row.measured_at) > m ? new Date(r.row.measured_at) : m), null);
     return {
@@ -218,6 +219,9 @@ export function registerSourceConfigRoutes(app: FastifyInstance, deps: {
         ? { snapshot_url: `${deps.base(req)}/media/${deps.signer.sign({ kind: "latest", accountId, sourceId: found.src.id, ...latestClaims(req, found.src.id) }, LATEST_TTL_SECONDS).token}/snapshot.jpg` }
         : {}),
       ...(readings.length ? { readings: readings.map((r) => toReading(r.row, r.since)) } : {}),
+      // Whether sound is arriving with the live stream, for a caller who may hear it: a camera can be
+      // online with no sound (its audio off, or a codec the box can't carry), and silence is not "nothing heard".
+      ...(hears && found.src.status === "online" && found.src.live_audio !== null ? { hearing: found.src.live_audio } : {}),
     };
   });
 

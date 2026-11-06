@@ -10,7 +10,7 @@ export interface RoomInput {
   maxParticipants?: number;
   metadata?: Record<string, string>;
   callback?: { url: string; token: string };
-  options?: { liveness?: "humans" | "any"; codecs?: ("opus" | "vp8" | "h264")[]; onDuplicateIdentity?: "replace"; events?: string[] };
+  options?: { liveness?: "humans" | "any"; codecs?: ("opus" | "vp8" | "h264" | "g711")[]; onDuplicateIdentity?: "replace"; events?: string[] };
 }
 export interface RoomView {
   roomId: string;

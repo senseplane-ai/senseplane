@@ -7,6 +7,9 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { DataAccess } from "./data/access.js";
 
+/** The audio codecs a run can carry (source.online `codecs`). */
+const AUDIO_CODECS = new Set(["opus", "pcma", "pcmu", "aac"]);
+
 interface SegmentWritten {
   account_id: string;
   source_id: string;
@@ -48,7 +51,10 @@ export async function handleMediaEvent(data: DataAccess, subject: string, payloa
   } else if (subject === "media.source.online" || subject === "media.source.offline") {
     // Retried deliveries can arrive late: an older event never overrides a newer status.
     const at = typeof payload.at === "string" ? new Date(payload.at) : undefined;
-    await data.withAccount(accountId, (s) => s.sources.setStatus(sourceId, subject.endsWith("online") ? "online" : "offline", at));
+    // source.online lists the run's codecs: any audio codec means sound is arriving with the picture.
+    const codecs = Array.isArray(payload.codecs) ? payload.codecs.map(String) : undefined;
+    const liveAudio = codecs ? codecs.some((c) => AUDIO_CODECS.has(c.toLowerCase())) : undefined;
+    await data.withAccount(accountId, (s) => s.sources.setStatus(sourceId, subject.endsWith("online") ? "online" : "offline", at, liveAudio));
   }
 }
 

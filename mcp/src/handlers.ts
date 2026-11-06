@@ -158,6 +158,11 @@ export function createHandlers(client: Senseplane, fetchImpl: typeof fetch = fet
       const src = await resolve(a.source);
       if (!src.senses.includes("audio")) return fail("forbidden_sense", `${src.name} has no audio (or it isn't granted)`);
       const seconds = Math.min(60, Math.max(1, Number(a.seconds ?? 10)));
+      // A stream with no sound would read as "no sounds detected": say what is really going on.
+      const live = await client.sources.now(src.id);
+      if (live.hearing === false) {
+        return fail("no_audio", `${src.name} is streaming, but no sound is arriving from it, so nothing can be heard. Check that the camera's microphone is on and its audio is G.711 or Opus; the box can't carry other formats yet`);
+      }
       const start = Date.now() - 5000;
       await new Promise((r) => setTimeout(r, seconds * 1000));
       // A sound is one episode (one event when it starts), so include episodes still going on.

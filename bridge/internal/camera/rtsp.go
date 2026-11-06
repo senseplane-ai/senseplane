@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package camera pulls RTSP cameras with go2rtc's RTSP client (MIT, used as a
-// library) and hands out H.264 access units unchanged. go2rtc carries the
+// library) and hands out H.264 access units, and G.711 sound, unchanged. go2rtc carries the
 // camera quirks: odd SPS/PPS placement, keepalives, Content-Base, TCP
 // interleaving. ADR 0034 and 0045.
 package camera
@@ -51,8 +51,7 @@ func Pull(ctx context.Context, url string, onAU func(relay.AccessUnit) error) er
 
 	var mu sync.Mutex
 	var cbErr error
-	sender := core.NewSender(media, codec)
-	sender.Handler = h264.RTPDepay(codec, Emitter(codec.ClockRate, func(au relay.AccessUnit) {
+	deliver := func(au relay.AccessUnit) {
 		mu.Lock()
 		failed := cbErr != nil
 		mu.Unlock()
@@ -65,9 +64,23 @@ func Pull(ctx context.Context, url string, onAU func(relay.AccessUnit) error) er
 			mu.Unlock()
 			stop()
 		}
-	}))
+	}
+	sender := core.NewSender(media, codec)
+	sender.Handler = h264.RTPDepay(codec, Emitter(codec.ClockRate, deliver))
 	sender.HandleRTP(recv)
 	defer sender.Close()
+
+	// The camera's sound, when it is G.711 (most cameras): sent on unchanged, as WebRTC carries it.
+	// Other formats (AAC) would need converting, which the box doesn't do: the picture goes on alone.
+	if am, ac := pickG711(conn.Medias); ac != nil {
+		if arecv, err := conn.GetTrack(am, ac); err == nil {
+			asender := core.NewSender(am, ac)
+			asender.Handler = AudioEmitter(ac.Name, deliver)
+			asender.HandleRTP(arecv)
+			defer asender.Close()
+			deliver(relay.AccessUnit{Audio: ac.Name})
+		}
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -100,6 +113,35 @@ func pickH264(medias []*core.Media) (*core.Media, *core.Codec) {
 		}
 	}
 	return nil, nil
+}
+
+func pickG711(medias []*core.Media) (*core.Media, *core.Codec) {
+	for _, m := range medias {
+		if m.Kind != core.KindAudio || m.Direction != core.DirectionRecvonly {
+			continue
+		}
+		for _, c := range m.Codecs {
+			if (c.Name == core.CodecPCMA || c.Name == core.CodecPCMU) && c.ClockRate == 8000 && c.Channels <= 1 {
+				return m, c
+			}
+		}
+	}
+	return nil, nil
+}
+
+// AudioEmitter turns a camera's G.711 RTP packets into audio units. G.711 is
+// one byte per sample at 8 kHz, so a packet's length is its duration.
+func AudioEmitter(codec string, emit func(relay.AccessUnit)) core.HandlerFunc {
+	return func(p *core.Packet) {
+		if len(p.Payload) == 0 {
+			return
+		}
+		emit(relay.AccessUnit{
+			Audio:    codec,
+			Data:     append([]byte(nil), p.Payload...),
+			Duration: time.Duration(len(p.Payload)) * time.Second / 8000,
+		})
+	}
 }
 
 // Emitter turns depacketised AVCC access units (as go2rtc's RTPDepay emits

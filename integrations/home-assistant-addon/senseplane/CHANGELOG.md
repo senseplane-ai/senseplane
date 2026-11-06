@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.6
+
+- Camera sound: the box now sends a camera's sound when it is G.711 (most
+  cameras, such as Galayou and Tapo), so Listen and sound watches work on box
+  cameras. Turn on "Record audio" for the camera in Senseplane. Cameras that
+  send AAC sound still stream their picture only, and Listen now says so
+  instead of reporting "no sounds detected".
+
 ## 0.2.5
 
 - Cameras that send 2K or 3 MP (above the server's limit) are no longer

@@ -162,7 +162,9 @@ func TestStalledCameraIsReconnected(t *testing.T) {
 		<-ctx.Done() // then silence, without an error
 		return ctx.Err()
 	}
-	dial := func(context.Context, string, string, string) (Publisher, error) { return &fakePub{done: make(chan error)}, nil }
+	dial := func(context.Context, string, string, string) (Publisher, error) {
+		return &fakePub{done: make(chan error)}, nil
+	}
 	rec := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

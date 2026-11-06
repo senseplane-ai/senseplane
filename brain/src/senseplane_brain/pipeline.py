@@ -34,6 +34,11 @@ SOUND_TEXT = {"crying": "crying", "glass_break": "glass breaking", "alarm": "an 
 # Animals need more: crouching people and bags score as "dog" around 0.5; small objects need more too.
 EVENT_MIN_SCORE = labels.MIN_SCORE
 SOUND_THRESHOLDS = {"crying": 0.35, "glass_break": 0.4, "alarm": 0.4, "dog": 0.45, "speech_present": 0.6}
+# Heard over time, not in one second (a camera microphone carries telephone-band sound, where YAMNet is less sure):
+# crying also counts once it keeps going at a lower score (3 of the last 5 seconds at 0.15), as a crying baby does;
+# a dog only once it keeps barking (3 of the last 8 seconds at its threshold): a baby's coo can score "dog" 0.7 for a second.
+SOUND_SUSTAINED = {"crying": (0.15, 3, 5.0)}
+SOUND_REPEATED = {"dog": (3, 8.0)}
 # "Announced in the running episode" outlives a brain by this long (refreshed while the label is active).
 EPISODE_MARK_S = 30.0
 
@@ -122,6 +127,7 @@ class SourcePipeline:
         self.last_frame_t = 0.0
         self.loudness = -120.0
         self.last_sound_scores: dict[str, float] = {}
+        self.sound_history: list[tuple[float, dict[str, float]]] = []  # (t, scores) of the last seconds heard
         self.spans = Spans(account_id, source_id)
         # Privacy blurring (ADR 0068): set by the worker when the source asks for it; every snapshot goes through it.
         self.redact: Callable[[np.ndarray], np.ndarray] | None = None
@@ -344,6 +350,21 @@ class SourcePipeline:
             out += [("brain.episode.closed", {"event_key": k, **self._ids(), "ended_at": iso(ep.last_active)}) for k in ep.labels.values()]
         return out
 
+    def _heard(self, cls: str, score: float, t: float) -> bool:
+        """Whether this second's score, with the seconds before it, counts as hearing cls."""
+        if cls not in SOUND_THRESHOLDS:
+            return False
+        recent = lambda within: [sc.get(cls, 0.0) for at, sc in self.sound_history if t - at < within]
+        if cls in SOUND_REPEATED:
+            times, within = SOUND_REPEATED[cls]
+            return score >= SOUND_THRESHOLDS[cls] and sum(x >= SOUND_THRESHOLDS[cls] for x in recent(within)) >= times
+        if score >= SOUND_THRESHOLDS[cls]:
+            return True
+        if cls in SOUND_SUSTAINED:
+            low, times, within = SOUND_SUSTAINED[cls]
+            return score >= low and sum(x >= low for x in recent(within)) >= times
+        return False
+
     def on_audio(self, samples: np.ndarray, t: float) -> list[tuple[str, dict]]:
         self.loudness = loudness_dbfs(samples)
         if not self.sound or self.loudness < -60:
@@ -351,10 +372,12 @@ class SourcePipeline:
             return []
         out = []
         self.last_sound_scores = self.sound.classify(samples)
+        self.sound_history = [(at, sc) for at, sc in self.sound_history if t - at < 10.0] + [(t, self.last_sound_scores)]
         for cls, score in self.last_sound_scores.items():
-            if cls in SOUND_THRESHOLDS and score >= SOUND_THRESHOLDS[cls]:
-                out += self.spans.seen("sound", cls, None, t, SOUND_GAP_S, confidence=score)
-            if cls not in self.cfg.sound_events or score < SOUND_THRESHOLDS[cls]:
+            if not self._heard(cls, score, t):
+                continue
+            out += self.spans.seen("sound", cls, None, t, SOUND_GAP_S, confidence=score)
+            if cls not in self.cfg.sound_events:
                 continue
             if not self.markers.claim(f"sound:{self._key}:{cls}", self.cfg.sound_cooldown_s, t):
                 continue

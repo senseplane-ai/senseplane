@@ -45,7 +45,7 @@ export interface BridgeDeps {
   whip?: { publicUrl: string; authorizeUrl: string; signer: IngestSigner };
   maxSources(accountId: string): Promise<number | null>;
   /** The plan's largest stream, for a box that picks a camera's stream itself (a phone, ADR 0064). */
-  maxResolution?(accountId: string): Promise<"720p" | "1080p">;
+  maxResolution?(accountId: string): Promise<"720p" | "1080p" | "1440p">;
   audit?: AuditLog;
   /** Cuts a camera's live stream off at the media plane (a removed box's cameras). */
   disconnect?(sourceId: string): Promise<void>;
@@ -531,7 +531,7 @@ export interface BridgeAdminDeps {
   data: DataAccess;
   maxSources(accountId: string): Promise<number | null>;
   /** The plan's largest stream; a camera added from the list gets the profile that fits it (ADR 0063). */
-  maxResolution?(accountId: string): Promise<"720p" | "1080p">;
+  maxResolution?(accountId: string): Promise<"720p" | "1080p" | "1440p">;
   audit?: AuditLog;
   /** Cuts a camera's live stream off at the media plane (a removed box's cameras). */
   disconnect?(sourceId: string): Promise<void>;

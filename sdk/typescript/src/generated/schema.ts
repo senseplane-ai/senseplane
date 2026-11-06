@@ -2753,7 +2753,7 @@ export interface components {
              * @description The plan's largest stream: a camera added from the list gets the profile that fits it
              * @enum {string}
              */
-            max_resolution?: "720p" | "1080p";
+            max_resolution?: "720p" | "1080p" | "1440p";
             /** @description What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health), `health_talk` (a camera's `talk`) */
             features?: string[];
         };
@@ -3595,7 +3595,7 @@ export interface components {
              * @description Highest recording resolution allowed for the account (720p by default; set by the quota provider). Enforced at the source: the capture page requests it, and the media plane refuses a stream above it (error resolution_not_in_plan) instead of transcoding. ADR 0022.
              * @enum {string}
              */
-            readonly max_resolution?: "720p" | "1080p";
+            readonly max_resolution?: "720p" | "1080p" | "1440p";
             /**
              * Format: date-time
              * @description Set when the camera's view no longer matches the one the privacy masks were drawn on (moved, zoomed, or a new aspect ratio); cleared when the masks are saved again. Check the masks.
@@ -4841,7 +4841,7 @@ export interface components {
             };
             /** @description Minutes of video ingested (recorded), all sources */
             camera_minutes: number;
-            /** @description Camera-minutes per recorded resolution: `720p` (up to 1280×720), `1080p` (up to 1920×1080), `other` */
+            /** @description Camera-minutes per recorded resolution: `720p` (up to 1280×720), `1080p` (up to 1920×1080), `1440p` (up to 2560×1440), `other` */
             camera_minutes_by_resolution: {
                 [key: string]: number;
             };
@@ -6724,7 +6724,7 @@ export interface operations {
                          * @description The account's maximum recording resolution: request this size from the camera (ADR 0022)
                          * @enum {string}
                          */
-                        max_resolution?: "720p" | "1080p";
+                        max_resolution?: "720p" | "1080p" | "1440p";
                     };
                 };
             };

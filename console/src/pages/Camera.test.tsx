@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { navigate } from "../router";
 import { appData, fakeFetch, renderWithApp, source } from "../test/render";
-import { CameraPage } from "./Camera";
+import { CameraPage, boxSays } from "./Camera";
 import { durationText } from "./camera/ActivityTab";
 import { retentionBody } from "./camera/SettingsTab";
 import { snapToRecorded } from "./camera/time";
@@ -195,4 +195,17 @@ it("snaps a scrub in a gap to the next recording", () => {
   expect(snapToRecorded(150, ranges)).toBe(150);
   expect(snapToRecorded(250, ranges)).toBe(300);
   expect(snapToRecorded(50, ranges)).toBe(100);
+});
+
+it("says why a box camera isn't streaming", () => {
+  const big = source({ type: "rtsp", status: "reconnecting", bridge_id: "brg_1", status_detail: "this camera sends 2304×1296, and this server records up to 720p. Choose a lower-resolution stream in the camera's app or RTSP address, or raise the server's limit (MAX_RESOLUTION)" } as never);
+  renderWithApp(<CameraPage id={big.id} />, appData({ sources: [big], fetch: fakeFetch({ [`GET /sources/${big.id}/timeline`]: { from: iso(at(0)), to: iso(at(15)), recorded: [], gaps: [], retention_days: 7 }, "GET /events": { data: [], next_cursor: null }, "GET /watches": { data: [], next_cursor: null } }) }));
+  expect(screen.getByText(/^The box says:/)).toHaveTextContent("The box says: This camera sends 2304×1296, and this server records up to 720p.");
+  expect(boxSays("camera connect: dial tcp: i/o timeout")).toBe("The box says: Camera connect: dial tcp: i/o timeout.");
+});
+
+it("shows no box report while the camera streams", () => {
+  const ok = source({ type: "rtsp", status: "online", bridge_id: "brg_1", status_detail: "old" } as never);
+  renderWithApp(<CameraPage id={ok.id} />, appData({ sources: [ok], fetch: routes() }));
+  expect(screen.queryByText(/The box says/)).toBeNull();
 });

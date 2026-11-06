@@ -114,6 +114,11 @@ export function CameraPage({ id }: { id: string }) {
         <CameraActions source={source} />
       </header>
 
+      {source.status !== "online" && source.status !== "paused" && source.status_detail && (
+        // Why a box camera isn't streaming, as the box reports it (for example a picture above the server's limit).
+        <p role="status" className="notice notice-warn">{boxSays(source.status_detail)}</p>
+      )}
+
       {(source as Source & { view_changed_at?: string | null }).view_changed_at && (
         <p role="alert" className="notice notice-warn">
           The view has changed since the privacy masks were drawn.{" "}
@@ -141,4 +146,10 @@ export function CameraPage({ id }: { id: string }) {
       </div>
     </div>
   );
+}
+
+/** A box's report as a sentence: "The box says: …", capitalised and ending in a full stop. */
+export function boxSays(detail: string): string {
+  const d = detail.trim();
+  return `The box says: ${d.charAt(0).toUpperCase()}${d.slice(1)}${/[.!?]$/.test(d) ? "" : "."}`;
 }

@@ -33,3 +33,16 @@ want to limit it per account. The media plane never transcodes (ADRs 0012 and
 - A browser that ignores the requested size (rare) is refused instead of
   silently recorded larger.
 - Usage records count camera-minutes per resolution (M6).
+
+## Amendment (2026-11-06): 1440p, and the box checks first
+
+- A third limit, `1440p` (long side 2560, short side 1440), for the many Wi-Fi
+  cameras that only send 2K, 3 MP or 4 MP at 2560×1440 (a Galayou G2 sends
+  2304×1296 on every RTSP path). 720p stays the default. Phones still ask for
+  1080p at most. Usage counts these minutes as `1440p`.
+- The bridge reads the picture size from the SPS of a camera's first keyframe
+  and, when it is above the limit, doesn't connect to the media plane at all.
+  It reports the camera as reconnecting with a sentence saying the size and the
+  limit, which the console shows on the camera's page, and tries again every
+  minute instead of reconnecting in a loop. The media plane still refuses an
+  over-limit stream from any other source as before.

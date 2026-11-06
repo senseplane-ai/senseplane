@@ -74,7 +74,7 @@ x-settings: &settings
 | `AI_BASE_URL`, `AI_API_KEY` | Your model endpoint and key. With no key, questions are off and watches fire without a model check. A local server that needs no key (Ollama) takes any value, such as `none` |
 | `AI_MODEL_VISION`, `AI_MODEL_TEXT` | The models, as your endpoint names them. The vision model must accept images |
 | `RAW_RETENTION_DAYS` | How long raw footage is kept by default |
-| `MAX_RESOLUTION` | The largest video recorded: `720p` (the default) or `1080p`. A camera or encoder sending more is disconnected and nothing is recorded |
+| `MAX_RESOLUTION` | The largest video recorded: `720p` (the default), `1080p`, or `1440p` for 2K, 3 MP and 4 MP cameras (up to 2560×1440). A camera or encoder sending more is disconnected and nothing is recorded |
 | `MEDIA_ANNOUNCED_ADDRESS` | Leave empty. Set it to the VM's public IP only if your domain doesn't resolve to it (see [Troubleshooting](#video-doesnt-connect)) |
 
 ### Secrets
@@ -262,6 +262,16 @@ The stream is larger than `MAX_RESOLUTION`: the media log says
 Resolution** to 1280x720 (or raise `MAX_RESOLUTION` to `1080p`), and check
 that the x264 lines in OBS's log show the new size. The camera page's
 "Records up to 720p" is the limit, not what is arriving.
+
+### A box camera never shows a picture
+
+Many Wi-Fi cameras only send 2K or 3 MP (for example 2304×1296), which is
+above 720p and 1080p. The box reads the size before sending anything and the
+camera's page says so: "The box says: This camera sends 2304×1296, and this
+server records up to 720p." Choose the camera's lower-resolution stream (its
+substream, often a different RTSP path, or a lower quality in its app), or
+set `MAX_RESOLUTION` to `1440p`. Senseplane never re-encodes video, so it
+can't shrink the picture itself.
 
 ### Watches and questions don't work
 

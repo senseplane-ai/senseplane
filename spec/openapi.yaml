@@ -1529,7 +1529,7 @@ paths:
                   token: {type: string, description: Join token for the media signalling `join` frame}
                   url: {type: string, format: uri, description: WebSocket signalling URL}
                   expires_at: {type: string, format: date-time}
-                  max_resolution: {type: string, enum: [720p, 1080p], description: "The account's maximum recording resolution: request this size from the camera (ADR 0022)"}
+                  max_resolution: {type: string, enum: [720p, 1080p, 1440p], description: "The account's maximum recording resolution: request this size from the camera (ADR 0022)"}
         default: {$ref: '#/components/responses/Error'}
   /demo/sessions:
     post:
@@ -3961,7 +3961,7 @@ components:
         poll_seconds: {type: integer}
         cameras: {type: array, items: {$ref: '#/components/schemas/BridgeCamera'}, description: 'Empty when this deployment has no WHIP ingest'}
         sensors: {type: array, items: {type: string}, description: 'The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only'}
-        max_resolution: {type: string, enum: ['720p', '1080p'], description: "The plan's largest stream: a camera added from the list gets the profile that fits it"}
+        max_resolution: {type: string, enum: ['720p', '1080p', '1440p'], description: "The plan's largest stream: a camera added from the list gets the profile that fits it"}
         features: {type: array, items: {type: string}, description: 'What this API takes that older ones may not, so a box sends it only when listed: `health_mqtt` (the `mqtt` field of POST /bridge/health), `health_talk` (a camera''s `talk`)'}
     BridgeHealth:
       type: object

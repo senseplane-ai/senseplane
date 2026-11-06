@@ -51,7 +51,7 @@ export function deviceKey(storage: Pick<Storage, "getItem" | "setItem"> | undefi
 }
 
 /** Exchanges the capture ticket for a join token and the signalling URL. */
-async function getJoinToken(): Promise<{ token: string; url: string; max_resolution?: "720p" | "1080p" }> {
+async function getJoinToken(): Promise<{ token: string; url: string; max_resolution?: "720p" | "1080p" | "1440p" }> {
   const res = await fetch(`${apiUrl}/v1/capture/join`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -63,11 +63,12 @@ async function getJoinToken(): Promise<{ token: string; url: string; max_resolut
 }
 
 /** The account's maximum size (ADR 0022): the media plane refuses anything larger rather than transcoding. */
-export function captureSize(plan: "720p" | "1080p") {
-  const [w, h] = plan === "1080p" ? [1920, 1080] : [1280, 720];
+export function captureSize(plan: "720p" | "1080p" | "1440p") {
+  // A phone asks for 1080p at most: 1440p is there for IP cameras that only send 2K or 3 MP.
+  const [w, h] = plan === "720p" ? [1280, 720] : [1920, 1080];
   return { width: { ideal: w, max: w }, height: { ideal: h, max: w } };
 }
-let plan: "720p" | "1080p" = "720p";
+let plan: "720p" | "1080p" | "1440p" = "720p";
 
 let stream: MediaStream | undefined;
 let transport: Transport | undefined;
@@ -212,7 +213,7 @@ async function start() {
   video.contentHint = "detail"; // keep resolution, drop frame rate under load (ADR 0014)
   const h264 = device.rtpCapabilities.codecs?.find((c) => c.mimeType.toLowerCase() === "video/h264");
   if (!h264) throw new Error("This browser cannot send H.264 video.");
-  producers = [await transport.produce({ track: video, codec: h264, encodings: [{ maxBitrate: plan === "1080p" ? 3_000_000 : 1_500_000 }], appData: { source: "camera" } })];
+  producers = [await transport.produce({ track: video, codec: h264, encodings: [{ maxBitrate: plan === "720p" ? 1_500_000 : 3_000_000 }], appData: { source: "camera" } })];
   const audio = stream.getAudioTracks()[0];
   if (audio) producers.push(await transport.produce({ track: audio, appData: { source: "microphone" } }));
 

@@ -81,7 +81,7 @@ export interface BrainStreamHandlers {
 export async function meterSegment(data: DataAccess, accountId: string, sourceId: string, e: { key: string; start: string; duration_ms: number; width?: number; height?: number }) {
   const long = Math.max(e.width ?? 0, e.height ?? 0);
   const short = Math.min(e.width ?? 0, e.height ?? 0);
-  const detail = !long ? "other" : long <= 1280 && short <= 720 ? "720p" : long <= 1920 && short <= 1080 ? "1080p" : "other";
+  const detail = !long ? "other" : long <= 1280 && short <= 720 ? "720p" : long <= 1920 && short <= 1080 ? "1080p" : long <= 2560 && short <= 1440 ? "1440p" : "other";
   await data.withAccount(accountId, (s) =>
     s.db.insertInto("usage_records").values({
       account_id: accountId, source_id: sourceId, kind: "camera_ms", detail, quantity: e.duration_ms, at: new Date(e.start), dedupe_key: `seg:${e.key}`,

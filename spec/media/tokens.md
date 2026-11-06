@@ -65,7 +65,7 @@ Grants (no other keys):
 | `subscribeExempt` | boolean | non-human only, and only with `maxSubscriptions` |
 | `maxSubscriptions` | integer 1–5000 | consumer ceiling |
 | `subscribeKinds` | `audio`/`video` list, 1–2 | what may be received; enforced by the node on `joined`, `producerAppeared` and `consume` |
-| `maxResolution` | `720p`, `1080p` | carried for the egress; the node does not act on it |
+| `maxResolution` | `720p`, `1080p`, `1440p` | carried for the egress; the node does not act on it |
 | `idleTimeoutSeconds` | integer 1–86400 | carried and echoed; the API runs the timer |
 | `maxLiveViewers`, `maxActiveSources` | integer 1–100000 | carried; the API enforces them at mint time |
 | `listenTo` | string, 1–100 | the one `talkback` producer a box's listener may receive over WHEP (ADR 0074) |

@@ -141,6 +141,7 @@ class SensorThresholds(BaseModel):
 class MaxResolution(StrEnum):
     field_720p = '720p'
     field_1080p = '1080p'
+    field_1440p = '1440p'
 
 
 class Source(BaseModel):

@@ -429,7 +429,7 @@ components:
           description: 'Used verbatim: raw/{account_id}/{source_id}/. No leading "/" and no ".." segment.'
         segmentSeconds: {type: integer, minimum: 1, maximum: 30, default: 6}
         maxResolution:
-          enum: [720p, 1080p]
+          enum: [720p, 1080p, 1440p]
           description: Checked on the init segment before anything is stored. Above it, the run is cut, nothing is uploaded and resolution_rejected is sent.
         destination: {$ref: '#/components/schemas/Destination'}
         audio: {type: boolean, default: true, description: Mux the publisher's audio producer when there is one}
@@ -512,4 +512,4 @@ components:
               properties:
                 width: {type: integer}
                 height: {type: integer}
-                maxResolution: {enum: [720p, 1080p]}
+                maxResolution: {enum: [720p, 1080p, 1440p]}

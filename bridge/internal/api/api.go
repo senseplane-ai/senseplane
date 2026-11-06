@@ -40,7 +40,7 @@ type Config struct {
 	Cameras          []Camera `json:"cameras"`
 	// Sensors are the Home Assistant entities a person chose to send (ADR 0061); nothing else is sent.
 	Sensors []string `json:"sensors"`
-	// MaxResolution is the plan's largest stream ("720p", "1080p").
+	// MaxResolution is the plan's largest stream ("720p", "1080p", "1440p").
 	MaxResolution string `json:"max_resolution"`
 	// Features are what this API takes that an older one may not (`health_mqtt`).
 	Features []string `json:"features"`

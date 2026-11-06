@@ -736,7 +736,8 @@
         "maxResolution": {
           "enum": [
             "720p",
-            "1080p"
+            "1080p",
+            "1440p"
           ],
           "description": "The highest resolution a recording of this publisher may be made at. Carried for the egress, which checks the stream before storing anything; the node does not refuse a produce on it."
         },

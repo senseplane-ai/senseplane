@@ -158,7 +158,7 @@ too (`senseplane`/`senseplane_app`, and `senseplane`/`senseplane-secret`).
 | `FFMPEG_THREADS`, `FFMPEG_NICE` | `2`, `10` | Threads per ffmpeg and its `nice` level, so renders don't starve requests. Larger deployments render on dedicated worker processes (`API_WORKERS`) |
 | `QUOTA_MAX_SOURCES` | unlimited | Registered sources per account |
 | `QUOTA_MAX_ACTIVE_SOURCES` | unlimited | Sources streaming at once per account |
-| `QUOTA_MAX_RESOLUTION` | `720p` | Largest recording resolution (`720p` or `1080p`) |
+| `QUOTA_MAX_RESOLUTION` | `720p` | Largest recording resolution (`720p`, `1080p` or `1440p`) |
 | `QUOTA_MAX_AI_CHECKS_PER_DAY` | unset (no cap) | AI checks (model calls) per account per UTC day. Over it, `ask`, chat and new watches answer 429 `allowance_exhausted` and watches pause until the next day |
 | `QUOTA_LIVE_VIEW` | `1` | `0` turns live view off for every account (ADR 0042) |
 | `QUOTA_MAX_LIVE_VIEWERS` | unlimited | People watching live at once per account |

@@ -27,7 +27,7 @@ export interface MediaOptions {
 
 export interface MediaControl {
   /** At token time: the camera's room and feed exist and run. Returns where clients signal. */
-  prepareCamera(accountId: string, source: { id: string; record_audio: boolean }, opts?: { maxResolution?: "720p" | "1080p" }): Promise<{ signalUrl: string }>;
+  prepareCamera(accountId: string, source: { id: string; record_audio: boolean }, opts?: { maxResolution?: "720p" | "1080p" | "1440p" }): Promise<{ signalUrl: string }>;
   /** Ends the camera's publisher session; the client gets roomClosed with `reason` (default expired). */
   disconnect?(sourceId: string, reason?: string): Promise<void>;
   /** Stops the camera's feed egress (paused, deleted, offline, out of allowance). */
@@ -79,7 +79,7 @@ export function createMediaDriver(deps: {
   };
 
   /** The feed for this camera, started if it is not running (idempotent per sessionId). */
-  const ensureFeed = async (accountId: string, source: { id: string; record_audio: boolean }, maxResolution?: "720p" | "1080p") => {
+  const ensureFeed = async (accountId: string, source: { id: string; record_audio: boolean }, maxResolution?: "720p" | "1080p" | "1440p") => {
     const row = await deps.data.withAccount(accountId, (s) => s.db.selectFrom("media_feeds").selectAll().where("source_id", "=", source.id).executeTakeFirst());
     if (row && !row.stopped_at) {
       const snap = await deps.control.getEgress(row.session_id).catch(() => undefined);

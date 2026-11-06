@@ -5,7 +5,7 @@
 // runs camera feeds: one `segments` and/or one `frames` sink, and a callback.
 import type { Callback } from "../callbacks.js";
 
-export type MaxResolution = "720p" | "1080p";
+export type MaxResolution = "720p" | "1080p" | "1440p";
 
 export type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken?: string; expiresAt?: string };
 export type Destination =
@@ -95,7 +95,7 @@ function sink(v: unknown): SegmentsSink | FramesSink {
       throw new Error("keyPrefix may not be empty, start with '/' or contain '..'");
     }
     if (v.segmentSeconds !== undefined && !int(v.segmentSeconds, 1, 30)) throw new Error("segmentSeconds must be 1–30");
-    if (v.maxResolution !== undefined && v.maxResolution !== "720p" && v.maxResolution !== "1080p") throw new Error("maxResolution must be 720p or 1080p");
+    if (v.maxResolution !== undefined && v.maxResolution !== "720p" && v.maxResolution !== "1080p" && v.maxResolution !== "1440p") throw new Error("maxResolution must be 720p, 1080p or 1440p");
     if (v.audio !== undefined && typeof v.audio !== "boolean") throw new Error("audio must be a boolean");
     const md = metadata(v.metadata, "segments");
     return {

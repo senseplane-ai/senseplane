@@ -162,7 +162,7 @@
         "at": {"type": "string", "format": "date-time"},
         "width": {"type": "integer"},
         "height": {"type": "integer"},
-        "max_resolution": {"enum": ["720p", "1080p"]},
+        "max_resolution": {"enum": ["720p", "1080p", "1440p"]},
         "producer_id": {"type": "string"},
         "identity": {"type": "string"}
       }
@@ -287,7 +287,7 @@
       "properties": {
         "token": {"type": "string", "description": "A join token for the bearer's room (aliases accepted by media planes: joinToken, join_token)"},
         "mediaUrl": {"type": "string", "description": "Signalling url to join with; default the media plane's own (alias media_url)"},
-        "max_resolution": {"enum": ["720p", "1080p"], "description": "Informational (alias maxResolution)"}
+        "max_resolution": {"enum": ["720p", "1080p", "1440p"], "description": "Informational (alias maxResolution)"}
       }
     }
   }

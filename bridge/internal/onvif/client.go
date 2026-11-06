@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/senseplane-ai/senseplane/bridge/internal/resolution"
 )
 
 var (
@@ -127,7 +129,7 @@ func (c *Client) StreamURI(ctx context.Context, token string) (string, error) {
 	return uri, nil
 }
 
-// Stream picks the profile that fits maxResolution (720p or 1080p) and returns
+// Stream picks the profile that fits maxResolution (720p, 1080p or 1440p) and returns
 // it with its RTSP URL, credentials included, ready for the relay.
 func (c *Client) Stream(ctx context.Context, maxResolution string) (Profile, string, error) {
 	profiles, err := c.Profiles(ctx)
@@ -145,17 +147,11 @@ func (c *Client) Stream(ctx context.Context, maxResolution string) (Profile, str
 	return p, WithCredentials(uri, c.Username, c.Password), nil
 }
 
-var limits = map[string][2]int{"720p": {1280, 720}, "1080p": {1920, 1080}}
-
 // Pick chooses the largest H.264 profile within maxResolution, as the media
 // plane checks it (long side and short side): usually the main stream on a
 // 1080p plan and the substream on a 720p one. Nothing is ever transcoded, so
 // a camera whose H.264 streams are all larger can't be added as it is.
 func Pick(profiles []Profile, maxResolution string) (Profile, error) {
-	lim, ok := limits[maxResolution]
-	if !ok {
-		lim = limits["720p"]
-	}
 	var best *Profile
 	h264 := false
 	for i := range profiles {
@@ -164,8 +160,7 @@ func Pick(profiles []Profile, maxResolution string) (Profile, error) {
 			continue
 		}
 		h264 = true
-		long, short := max(p.Width, p.Height), min(p.Width, p.Height)
-		if long > lim[0] || short > lim[1] {
+		if !resolution.Fits(p.Width, p.Height, maxResolution) {
 			continue
 		}
 		if best == nil || p.Width*p.Height > best.Width*best.Height {

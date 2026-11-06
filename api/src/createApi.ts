@@ -188,7 +188,7 @@ export function defaultQuota(env: NodeJS.ProcessEnv = process.env): Quota {
     maxActiveSources: num(env.QUOTA_MAX_ACTIVE_SOURCES),
     usageLimits: aiChecks ? [{ meter: "ai_checks", period: "day", limit: aiChecks, enforcement: "hard" }] : undefined,
     maxRetentionDays: num(env.RAW_RETENTION_MAX_DAYS),
-    maxResolution: env.QUOTA_MAX_RESOLUTION === "1080p" ? "1080p" : "720p",
+    maxResolution: env.QUOTA_MAX_RESOLUTION === "1080p" || env.QUOTA_MAX_RESOLUTION === "1440p" ? env.QUOTA_MAX_RESOLUTION : "720p",
     // Live view is on and unlimited unless a deployment says otherwise (ADR 0042).
     liveView: env.QUOTA_LIVE_VIEW !== "0",
     maxLiveViewers: num(env.QUOTA_MAX_LIVE_VIEWERS),

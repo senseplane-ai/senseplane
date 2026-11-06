@@ -16,6 +16,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/AlexxIT/go2rtc/pkg/h264"
+
+	"github.com/senseplane-ai/senseplane/bridge/internal/resolution"
 )
 
 // AccessUnit is one H.264 access unit in Annex B form, with its exact duration
@@ -73,6 +77,22 @@ type Options struct {
 	StallTimeout time.Duration
 	// DialTimeout bounds WHIP negotiation (20 s).
 	DialTimeout time.Duration
+	// MaxResolution, when set, gives the server's recording limit ("720p",
+	// "1080p", "1440p"). A camera whose first keyframe is larger is not sent at
+	// all: the media plane would refuse it (ADR 0022), so the relay says why and
+	// tries again after TooLargeRetry (60 s) instead of reconnecting in a loop.
+	MaxResolution func() string
+	TooLargeRetry time.Duration
+}
+
+// TooLargeError ends an attempt whose camera sends more than the server records.
+type TooLargeError struct {
+	Width, Height int
+	Max           string
+}
+
+func (e *TooLargeError) Error() string {
+	return fmt.Sprintf("this camera sends %d×%d, and this server records up to %s. Choose a lower-resolution stream in the camera's app or RTSP address, or raise the server's limit (MAX_RESOLUTION)", e.Width, e.Height, resolution.Name(e.Max))
 }
 
 func (o *Options) defaults() {
@@ -90,6 +110,9 @@ func (o *Options) defaults() {
 	}
 	if o.DialTimeout == 0 {
 		o.DialTimeout = 20 * time.Second
+	}
+	if o.TooLargeRetry == 0 {
+		o.TooLargeRetry = time.Minute
 	}
 	if o.OnState == nil {
 		o.OnState = func(State, string) {}
@@ -122,6 +145,10 @@ func Run(ctx context.Context, cam Camera, o Options) {
 		o.OnState(Reconnecting, Redact(err.Error()))
 		// Full jitter on the upper half, so many cameras behind one bridge don't retry in step.
 		wait := backoff/2 + time.Duration(rand.Int64N(int64(backoff/2)+1))
+		var big *TooLargeError
+		if errors.As(err, &big) {
+			wait = o.TooLargeRetry // retrying sooner can't help until the camera or the limit changes
+		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(wait):
@@ -160,6 +187,12 @@ func attempt(ctx context.Context, cam Camera, o Options) error {
 		if pub == nil {
 			if !au.Keyframe {
 				return nil // start the recording on a keyframe
+			}
+			if o.MaxResolution != nil {
+				max := o.MaxResolution()
+				if w, h, ok := Size(au.Data); ok && !resolution.Fits(w, h, max) {
+					return &TooLargeError{Width: w, Height: h, Max: max}
+				}
 			}
 			dctx, dcancel := context.WithTimeout(actx, o.DialTimeout)
 			dialing.Store(true)
@@ -208,4 +241,60 @@ func attempt(ctx context.Context, cam Camera, o Options) error {
 			}
 		}
 	}
+}
+
+// Size reads the picture size from the SPS in an Annex B access unit; ok is
+// false when the unit carries none.
+func Size(au []byte) (width, height int, ok bool) {
+	for _, nal := range nals(au) {
+		if len(nal) == 0 || nal[0]&0x1F != h264.NALUTypeSPS {
+			continue
+		}
+		if sps := h264.DecodeSPS(unescape(nal)); sps != nil && sps.Width() > 0 && sps.Height() > 0 {
+			return int(sps.Width()), int(sps.Height()), true
+		}
+	}
+	return 0, 0, false
+}
+
+// nals splits Annex B data on its 3- and 4-byte start codes.
+func nals(b []byte) [][]byte {
+	var out [][]byte
+	start := -1
+	for i := 0; i+2 < len(b); i++ {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 1 {
+			if start >= 0 {
+				end := i
+				if end > start && b[end-1] == 0 {
+					end--
+				}
+				out = append(out, b[start:end])
+			}
+			start = i + 3
+			i += 2
+		}
+	}
+	if start >= 0 && start < len(b) {
+		out = append(out, b[start:])
+	}
+	return out
+}
+
+// unescape removes H.264's emulation prevention bytes (00 00 03 → 00 00).
+func unescape(nal []byte) []byte {
+	out := make([]byte, 0, len(nal))
+	zeros := 0
+	for _, c := range nal {
+		if zeros >= 2 && c == 3 {
+			zeros = 0
+			continue
+		}
+		if c == 0 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+		out = append(out, c)
+	}
+	return out
 }

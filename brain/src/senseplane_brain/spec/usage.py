@@ -74,7 +74,7 @@ class Usage(BaseModel):
     camera_minutes_by_resolution: Annotated[
         dict[str, float],
         Field(
-            description='Camera-minutes per recorded resolution: `720p` (up to 1280×720), `1080p` (up to 1920×1080), `other`'
+            description='Camera-minutes per recorded resolution: `720p` (up to 1280×720), `1080p` (up to 1920×1080), `1440p` (up to 2560×1440), `other`'
         ),
     ]
     camera_minutes_by_source: dict[str, float] | None = None

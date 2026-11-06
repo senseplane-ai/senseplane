@@ -5,8 +5,11 @@ package relay
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -201,5 +204,96 @@ func TestWaitsForAKeyframeAndReportsMediaErrors(t *testing.T) {
 	defer rec.mu.Unlock()
 	if rec.detail[1] != "media connect: whip: 409: source_limit_reached" {
 		t.Fatalf("detail %q", rec.detail[1])
+	}
+}
+
+// SPS NAL units from libx264, 4:2:0 as cameras send (Annex B, with emulation prevention bytes).
+var sps = map[string]string{
+	"2304x1296": "0000000167640032acd9402400a3b011000003000100000300020f183196",
+	"1920x1080": "0000000167640028acd940780227e5c044000003000400000300083c60c658",
+	"1280x720":  "000000016764001facd9405005bb011000000300100000030020f1831960",
+}
+
+func keyframe(t *testing.T, size string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(sps[size])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(b, 0, 0, 0, 1, 0x65, 0x88)
+}
+
+func TestSizeReadsTheSPS(t *testing.T) {
+	for size, want := range map[string][2]int{"2304x1296": {2304, 1296}, "1920x1080": {1920, 1080}, "1280x720": {1280, 720}} {
+		w, h, ok := Size(keyframe(t, size))
+		if !ok || w != want[0] || h != want[1] {
+			t.Errorf("%s: got %d×%d ok=%v", size, w, h, ok)
+		}
+	}
+	if _, _, ok := Size([]byte{0, 0, 0, 1, 0x65, 0x88}); ok {
+		t.Error("a keyframe without an SPS has no size")
+	}
+}
+
+func TestACameraAboveTheLimitIsNeverSentAndRetriedSlowly(t *testing.T) {
+	var pulls, dials atomic.Int32
+	pull := func(ctx context.Context, _ string, onAU func(AccessUnit) error) error {
+		pulls.Add(1)
+		for ctx.Err() == nil {
+			if err := onAU(AccessUnit{Data: keyframe(t, "2304x1296"), Duration: time.Millisecond, Keyframe: true}); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
+	}
+	dial := func(context.Context, string, string) (Publisher, error) {
+		dials.Add(1)
+		return &fakePub{done: make(chan error)}, nil
+	}
+	rec := &recorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	o := fast(Options{Pull: pull, Dial: dial, OnState: rec.on, MaxResolution: func() string { return "720p" }})
+	o.TooLargeRetry = 300 * time.Millisecond
+	go Run(ctx, Camera{SourceID: "s"}, o)
+	rec.waitFor(t, Reconnecting, 1)
+	time.Sleep(150 * time.Millisecond)
+	if n := pulls.Load(); n != 1 {
+		t.Fatalf("retried after %d pulls within the wait, want 1 (no fast loop)", n)
+	}
+	if dials.Load() != 0 {
+		t.Fatal("dialled the media plane with a stream it would refuse")
+	}
+	rec.mu.Lock()
+	d := rec.detail[1]
+	rec.mu.Unlock()
+	if !strings.Contains(d, "2304×1296") || !strings.Contains(d, "up to 720p") {
+		t.Fatalf("detail %q", d)
+	}
+	rec.waitFor(t, Reconnecting, 2) // and tries again, in case the camera or the limit changed
+}
+
+func TestACameraWithinTheLimitIsSent(t *testing.T) {
+	var dials atomic.Int32
+	pull := func(ctx context.Context, _ string, onAU func(AccessUnit) error) error {
+		for ctx.Err() == nil {
+			if err := onAU(AccessUnit{Data: keyframe(t, "2304x1296"), Duration: time.Millisecond, Keyframe: true}); err != nil {
+				return err
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return ctx.Err()
+	}
+	dial := func(context.Context, string, string) (Publisher, error) {
+		dials.Add(1)
+		return &fakePub{done: make(chan error)}, nil
+	}
+	rec := &recorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Run(ctx, Camera{SourceID: "s"}, fast(Options{Pull: pull, Dial: dial, OnState: rec.on, MaxResolution: func() string { return "1440p" }}))
+	rec.waitFor(t, Online, 1)
+	if dials.Load() != 1 {
+		t.Fatalf("dials %d", dials.Load())
 	}
 }

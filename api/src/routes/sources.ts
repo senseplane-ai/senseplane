@@ -29,7 +29,7 @@ export interface SourcesDeps {
   /** True when the account is over an ingest or storage usage limit (ADR 0025). */
   ingestBlocked?(accountId: string): Promise<boolean>;
   /** The account's maximum recording resolution (ADR 0022). */
-  maxResolution?(accountId: string): Promise<"720p" | "1080p">;
+  maxResolution?(accountId: string): Promise<"720p" | "1080p" | "1440p">;
   maxRetentionDays(accountId: string): Promise<number | null>;
   /** Shares zones and masks with the brain (Valkey), when it is configured. */
   publishConfig?(accountId: string, source: Source): Promise<void>;
@@ -65,7 +65,7 @@ export function grantedView<T extends { id: string; senses: string[] }>(req: Fas
 export const canTalkLive = (row: Pick<Source, "type" | "speaker" | "talk" | "bridge_id">) =>
   !!row.speaker && (row.type === "browser" || (row.type === "rtsp" && !!row.bridge_id && !!row.talk));
 
-export function toSource(row: Source, maxResolution?: "720p" | "1080p") {
+export function toSource(row: Source, maxResolution?: "720p" | "1080p" | "1440p") {
   const thresholds = row.sensor_thresholds ?? null;
   return {
     id: row.id,

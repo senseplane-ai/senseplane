@@ -37,8 +37,8 @@ export interface Quota {
   maxRetentionDays: number | null;
   /** Storage cap in bytes for fill-mode retention when the account sets none (ADR 0032); null or unset: no cap. */
   storageCapBytes?: number | null;
-  /** Highest recording resolution (ADR 0022); 720p unless the quota says 1080p. */
-  maxResolution?: "720p" | "1080p";
+  /** Highest recording resolution (ADR 0022); 720p unless the quota says 1080p or 1440p. */
+  maxResolution?: "720p" | "1080p" | "1440p";
   /**
    * Live view (ADR 0042). Unset means enabled; false answers `POST /v1/sources/{id}/live`
    * with 403 `feature_not_available`. Viewing time is the `live_view_minutes` meter, so

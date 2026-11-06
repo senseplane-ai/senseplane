@@ -412,6 +412,9 @@ func (b *Bridge) start(ctx context.Context, cam relay.Camera, tb talkBack) *work
 	o := b.o.Relay
 	o.Token, o.Pull, o.Dial = b.o.Client.Token, b.o.Pull, b.o.Dial
 	o.OnState = func(s relay.State, detail string) { b.setState(cam.SourceID, s, detail) }
+	if o.MaxResolution == nil {
+		o.MaxResolution = b.MaxResolution // refuse an over-limit camera here, before the media plane does
+	}
 	b.o.Log.Info("relaying camera", "source", cam.SourceID, "rtsp", relay.Redact(cam.RTSPURL))
 	go func() {
 		defer close(w.done)

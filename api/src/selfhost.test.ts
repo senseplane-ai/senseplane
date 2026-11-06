@@ -137,7 +137,8 @@ describe("self-host init", () => {
     const dir = tmp();
     await init(dir, { SENSEPLANE_DOMAIN: "localhost", MAX_RESOLUTION: "1080P" }, () => {});
     expect(readEnv(join(dir, "api.env")).QUOTA_MAX_RESOLUTION).toBe("1080p");
-    expect(() => settingsFromEnv({ SENSEPLANE_DOMAIN: "localhost", MAX_RESOLUTION: "4k" })).toThrow(/720p or 1080p/);
+    expect(() => settingsFromEnv({ SENSEPLANE_DOMAIN: "localhost", MAX_RESOLUTION: "4k" })).toThrow(/720p, 1080p or 1440p/);
+    expect(settingsFromEnv({ SENSEPLANE_DOMAIN: "localhost", MAX_RESOLUTION: "1440p" }).maxResolution).toBe("1440p");
   });
 
   it("validates the domain setting", () => {

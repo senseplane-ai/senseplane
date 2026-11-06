@@ -210,7 +210,7 @@ class Source(BaseModel):
     """
     Per number sense (temperature, humidity, power, ...): sensor.threshold fires when a reading crosses one of these.
     """
-    max_resolution: Literal['720p', '1080p'] | None = None
+    max_resolution: Literal['720p', '1080p', '1440p'] | None = None
     """
     Highest recording resolution allowed for the account (720p by default; set by the quota provider). Enforced at the source: the capture page requests it, and the media plane refuses a stream above it (error resolution_not_in_plan) instead of transcoding. ADR 0022.
     """
@@ -1299,7 +1299,7 @@ class Usage(BaseModel):
     """
     camera_minutes_by_resolution: dict[str, float]
     """
-    Camera-minutes per recorded resolution: `720p` (up to 1280×720), `1080p` (up to 1920×1080), `other`
+    Camera-minutes per recorded resolution: `720p` (up to 1280×720), `1080p` (up to 1920×1080), `1440p` (up to 2560×1440), `other`
     """
     camera_minutes_by_source: dict[str, float] | None = None
     storage_gb_hours: float
@@ -1904,7 +1904,7 @@ class BridgeConfig(BaseModel):
     """
     The Home Assistant entity ids a person chose (ADR 0061); the bridge sends readings of these only
     """
-    max_resolution: Literal['720p', '1080p'] | None = None
+    max_resolution: Literal['720p', '1080p', '1440p'] | None = None
     """
     The plan's largest stream: a camera added from the list gets the profile that fits it
     """
@@ -3685,7 +3685,7 @@ class CaptureJoinPostResponse(BaseModel):
     WebSocket signalling URL
     """
     expires_at: AwareDatetime
-    max_resolution: Literal['720p', '1080p'] | None = None
+    max_resolution: Literal['720p', '1080p', '1440p'] | None = None
     """
     The account's maximum recording resolution: request this size from the camera (ADR 0022)
     """

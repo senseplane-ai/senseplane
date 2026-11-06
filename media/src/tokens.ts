@@ -26,7 +26,7 @@ export interface Grants {
   subscribeExempt?: boolean;
   maxSubscriptions?: number;
   subscribeKinds?: ("audio" | "video")[];
-  maxResolution?: "720p" | "1080p";
+  maxResolution?: "720p" | "1080p" | "1440p";
   idleTimeoutSeconds?: number;
   maxLiveViewers?: number;
   maxActiveSources?: number;
@@ -117,7 +117,7 @@ function validGrants(g: unknown): g is Grants {
     const k = g.subscribeKinds;
     if (!Array.isArray(k) || k.length < 1 || k.length > 2 || !k.every((x) => enumOf(x, ["audio", "video"]))) return false;
   }
-  if (g.maxResolution !== undefined && !enumOf(g.maxResolution, ["720p", "1080p"])) return false;
+  if (g.maxResolution !== undefined && !enumOf(g.maxResolution, ["720p", "1080p", "1440p"])) return false;
   if (g.idleTimeoutSeconds !== undefined && !isInt(g.idleTimeoutSeconds, 1, 86_400)) return false;
   if (g.maxLiveViewers !== undefined && !isInt(g.maxLiveViewers, 1, 100_000)) return false;
   if (g.maxActiveSources !== undefined && !isInt(g.maxActiveSources, 1, 100_000)) return false;

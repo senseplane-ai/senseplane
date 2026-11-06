@@ -19,7 +19,7 @@ import type { Stored, Uploader } from "./uploader.js";
 import type { MaxResolution } from "./validate.js";
 
 const exec = promisify(execFile);
-const LIMITS = { "720p": [1280, 720], "1080p": [1920, 1080] } as const;
+const LIMITS = { "720p": [1280, 720], "1080p": [1920, 1080], "1440p": [2560, 1440] } as const;
 const UPLOAD_ATTEMPTS = 5;
 
 /** True if a frame size fits a maximum resolution; portrait counts the same as landscape. */

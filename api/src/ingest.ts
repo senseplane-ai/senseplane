@@ -55,7 +55,7 @@ export interface IngestSigner {
   verifyTicket(token: string): Promise<CaptureTicket>;
   /** A publisher's join token (capture page or WHIP). */
   signJoin(
-    t: CaptureTicket & { name?: string; maxResolution?: "720p" | "1080p"; maxActiveSources?: number; via?: Via },
+    t: CaptureTicket & { name?: string; maxResolution?: "720p" | "1080p" | "1440p"; maxActiveSources?: number; via?: Via },
     ttlSeconds: number,
   ): Promise<{ token: string; expiresAt: Date }>;
   /**

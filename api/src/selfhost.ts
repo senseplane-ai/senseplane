@@ -125,8 +125,8 @@ export interface Settings {
   aiModelVision: string;
   aiModelText: string;
   retentionDays: string;
-  /** The largest video this server records (720p or 1080p); bigger streams are refused. */
-  maxResolution: "720p" | "1080p";
+  /** The largest video this server records (720p, 1080p or 1440p); bigger streams are refused. */
+  maxResolution: "720p" | "1080p" | "1440p";
   /** Overrides the address resolved from the domain (MEDIA_ANNOUNCED_ADDRESS). */
   announcedAddress: string;
   /** "Sign in with GitHub / Google" OAuth apps (optional; both halves or nothing). */
@@ -176,9 +176,9 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): Settings 
   };
 }
 
-function maxResolution(v: string | undefined): "720p" | "1080p" {
+function maxResolution(v: string | undefined): "720p" | "1080p" | "1440p" {
   const r = (v ?? "").trim().toLowerCase() || "720p";
-  if (r !== "720p" && r !== "1080p") throw new Error(`MAX_RESOLUTION "${v}" must be 720p or 1080p`);
+  if (r !== "720p" && r !== "1080p" && r !== "1440p") throw new Error(`MAX_RESOLUTION "${v}" must be 720p, 1080p or 1440p`);
   return r;
 }
 

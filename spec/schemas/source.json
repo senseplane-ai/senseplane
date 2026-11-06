@@ -234,7 +234,8 @@
       "type": "string",
       "enum": [
         "720p",
-        "1080p"
+        "1080p",
+        "1440p"
       ],
       "readOnly": true,
       "description": "Highest recording resolution allowed for the account (720p by default; set by the quota provider). Enforced at the source: the capture page requests it, and the media plane refuses a stream above it (error resolution_not_in_plan) instead of transcoding. ADR 0022."

@@ -50,8 +50,12 @@ export async function signalling(c: Config, s: Signer, browser: Headless) {
       return st.events.some((e) => e.event === "producerAppeared" && e.kind === "video") ? st : undefined;
     }, 8000, 200);
     r.check("replace: viewers hear producerAppeared for the new video only", !!appeared && !appeared.events.some((e) => e.event === "producerAppeared" && e.kind === "audio"), appeared?.events);
-    const st = await videoOnly.run<State>("state", {});
-    r.check("replace: viewers consume the new producer", st.tracks.video >= 2, st.tracks);
+    // producerAppeared comes before the viewer has consumed it: wait for the track.
+    const consumed = await until(async () => {
+      const st = await videoOnly.run<State>("state", {});
+      return st.tracks.video >= 2 ? st : undefined;
+    }, 8000, 200);
+    r.check("replace: viewers consume the new producer", !!consumed, consumed?.tracks ?? (await videoOnly.run<State>("state", {})).tracks);
     await pub2.run("stop", {});
     await pub2.close();
     await withAudio.close();
